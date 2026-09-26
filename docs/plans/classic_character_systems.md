@@ -121,7 +121,17 @@ converted game's rules are on. Two such changes are needed:
   still rises from its own skill experience, and its level-up screen and perk
   point still arrive, so the player would level twice. In data that means
   overriding `fXPLevelUpBase` and `fXPLevelUpMult`; the runtime instead
-  withholds Skyrim's level-up and perk point while the rules are on.
+  withholds Skyrim's level-up and perk point while the rules are on. One gate
+  covers both ([checked](#level-up-in-the-exe)): the runtime keeps the level-up
+  threshold stored in the player's skill data out of reach, and SKSE's
+  `SetGameSettingFloat` raises `fXPLevelUpBase` in memory for the "Level up
+  available" message, which works from the settings instead.
+- **Raising the player's level.** Skyrim's level is what leveled lists and
+  encounter zones scale by, so when the source game's rules grant a level,
+  Skyrim's must follow. The engine's own set-level routine does exactly that,
+  with no level-up screen, no perk point and no Health, Magicka or Stamina
+  bonus; Papyrus has no way to call it, so the runtime exposes it as a native
+  the rules quest calls.
 
 Mechanics Skyrim has no counterpart for follow the same rule: Fallout's perk
 entry points that Skyrim lacks (action points, VATS, gun spread, damage
@@ -248,7 +258,7 @@ art source per game read from that game's install.
 | # | Piece | Where | Depends on |
 |---|---|---|---|
 | A | Character data, all four games, with engine defaults merged under each plugin's GMSTs | `tes5_import/` new module | nothing |
-| I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, and Skyrim's level-up and perk point withheld | `tes_runtime/common/`, called by each game's runtime | A |
+| I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, Skyrim's level-up and perk point withheld, and a native that sets the player's level | `tes_runtime/common/`, called by each game's runtime | A |
 | D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs | rules plugin, `script_convert/` | A, I |
 | E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
 | B | Shared stat store for per-actor stats; Morrowind switched over with identical behavior | `tes_runtime/common/` | A |
@@ -535,8 +545,37 @@ levels every 0.1 s, a player alias logging equips and casts, and a quest on the
   `incpcs sneak` in one sitting arrived as one event (Sneak 15 to 17) when it
   closed; each later one arrived on its own.
 
-Still to check, in the executable: which code grants Skyrim's level-up and
-perk point, so piece I can withhold them, read from the 1.6.1170 build.
+<a id="level-up-in-the-exe"></a>**Checked in the executable**, the unpacked
+1.6.1170 build. Every Address Library id below resolves on all 14 shipped
+versionlibs, 1.6.317 to 1.7.104 (`tools/validate/stable_id_check.py`):
+
+| Id | 1.6.1170 RVA | What it does |
+|---|---|---|
+| 41561 | `0x77ae60` | Skill advance: adds skill experience, raises the skill while it passes the skill's threshold, sends the skill-increase event, and adds `level × fXPPerSkillRank` to the player's experience |
+| 41565 | `0x77b400` | "Can level up": the player's experience (skill data `+0`) against the **stored** threshold (`+4`) |
+| 41566 | `0x77b420` | Advance level: level plus one, the level-increase event |
+| 41567 | `0x77b4d0` | Level-up bookkeeping: subtracts the threshold (or resets experience), stores the next threshold from `fXPLevelUpBase` + level × `fXPLevelUpMult`, restores Health, Magicka and Stamina |
+| 51917 | `0x934700` | Level-up screen confirm: the chosen value plus `iAVDhmsLevelUp`, Carry Weight plus `fLevelUpCarryWeightMod` for Stamina, then the bookkeeping |
+| 52538 | `0x9674c0` | Adds to the perk count (player `+0xb09`, a byte), or to the werewolf and Vampire Lord point global in those trees |
+| 41563 | `0x77b350` | Set level (console `SetLevel` on the player): the new level, then the bookkeeping with experience reset; no screen, no perk point |
+| 41560 | `0x77ae10` | Experience and a threshold computed from the settings, read by the "Level up available" message (`0x921207`) |
+| 52510 | `0x95f710` | The Skills menu's message handler, holding the level-up branch |
+| 403521 | `0x31874f8` | The player singleton, as the runtime already uses it |
+| 374908, 374911 | `0x20058e0`, `0x20058f8` | The `fXPLevelUpBase` and `fXPLevelUpMult` values |
+
+The whole natural level-up happens in the Skills menu (`0x9606b7` to
+`0x96072f`): only when "can level up" is true does it advance the level, open
+the level-up screen and add one perk point. The perk count is written in only
+four places: reset to 0, that add, a Legendary skill's refund, and
+`Game.AddPerkPoints`. So keeping the stored threshold out of reach withholds
+the level, the screen and the perk point together, and the settings keep the
+message quiet. SKSE's `SetPlayerExperience(0)` alone would leave a gap:
+experience gained inside a menu, as from skill books, is only seen when the
+menu closes, and going straight to the Skills menu would level up first. The
+ids hold on every build; the field offsets (skill data at player `+0x9b8`,
+the perk count at `+0xb09`, experience and threshold at `+0` and `+4`) are
+read from 1.6.1170 only and need checking in another build's executable
+before the runtime relies on them there.
 
 ## <a id="open-questions"></a>Open questions for the maintainer
 
