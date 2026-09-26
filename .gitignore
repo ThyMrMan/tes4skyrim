@@ -28,6 +28,46 @@ external/lodgen/*.txt
 # Non-redistributable external tool — user supplies this (see README)
 external/xwmaencode/xWMAEncode.exe
 
+# Bethesda game data: plugins and archives are the user's own copies and are
+# never redistributed.
+*.esm
+*.esp
+*.esl
+*.bsa
+*.ba2
+# ...but not folders named after a plugin (tests/navmesh_fixed/Oblivion.esm/).
+!*.esm/
+!*.esp/
+!*.esl/
+
+# Assets extracted or converted from game data, wherever they land outside
+# export/ and output/. None of these types is part of the source tree.
+*.nif
+*.dds
+*.tga
+*.kf
+*.hkx
+*.xwm
+*.fuz
+*.lip
+*.wav
+*.mp3
+*.ogg
+*.bik
+*.pex
+
+# Save games from any of the source games or Skyrim, and script-extender co-saves.
+*.ess
+*.fos
+*.skse
+*.obse
+*.fose
+*.nvse
+
+# Per-machine Claude Code settings and notes.
+.claude/settings.local.json
+CLAUDE.local.md
+
 # Native navmesh extension: the built .pyd in native/dist/ IS committed (the
 # pipeline requires it and most machines have no compiler), but the link-time
 # artifacts and object files are not — nothing links against the extension.
