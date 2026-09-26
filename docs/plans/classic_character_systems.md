@@ -127,6 +127,42 @@ Mechanics Skyrim has no counterpart for follow the same rule: Fallout's perk
 entry points that Skyrim lacks (action points, VATS, gun spread, damage
 threshold) belong to `FalloutRuntime`.
 
+### <a id="profiles"></a>Per-world and all-worlds profiles
+
+Players set up converted worlds in one of two ways, or both, and every piece
+works in either (the GUI overhaul plan, PR #65, offers both as MO2 profiles):
+
+- **A per-world profile** loads `Skyrim.esm`, one world's plugins and the
+  runtime DLLs. Only that world's rules plugin is present.
+- **An all-worlds profile** loads every converted world, and one character can
+  travel between them. Every world's rules plugin is present at once.
+
+So the rules follow the **character**, not the load order or the current
+worldspace. A character plays by the rules of the world it started in:
+TESGameSelect already records that choice in the save, as
+`TESGameSelectQuest.ChosenGame`. A character who starts in Cyrodiil keeps
+Oblivion's rules after crossing into Skyrim, and one who starts in Skyrim
+keeps Skyrim's own rules in Cyrodiil. What that means for each part:
+
+- **Rules quests and Story Manager nodes** carry a condition on the
+  character's game, so another world's rules never start for this character
+  and cost nothing in an all-worlds profile.
+- **The runtime** (piece I) changes Skyrim's skill rates and leveling only for
+  a character whose game has rules, and only that game's.
+- **Menus** are chosen by the character's game, not by the world the player
+  is standing in.
+- **A character with no recorded game** (a save from before TESGameSelect, or
+  one made with it absent) keeps today's behavior, as with any plugin that is
+  switched off.
+
+What stays with the profile choice rather than the plan: a per-world profile
+is still the only way to get world-specific visual mods, a smaller memory
+footprint and separate save folders, and an all-worlds profile the only way
+to travel between worlds with one character. Choosing the world on Skyrim's
+main menu, recorded by `TESRuntime.dll`, would remove TESGameSelect's
+override of `MQ101` in both profile types; it is its own proposal, and this
+plan works with either way of recording the choice.
+
 ### Runtime: one stat store, for what Papyrus cannot hold
 
 Per-actor stats Skyrim lacks (an NPC's Strength, Morrowind's scripts reading
@@ -237,6 +273,9 @@ art source per game read from that game's install.
 - **No base-game overrides.** No `Skyrim.esm` record or setting is
   overridden; a change to how Skyrim behaves lives in the runtime, only while
   a converted game's rules are on ([why](#no-base-overrides)).
+- **Both profile types.** Every piece works in a per-world profile and in an
+  all-worlds profile, keyed on the character's starting world; a piece that
+  behaves differently in the two says how ([profiles](#profiles)).
 - **One PR per piece**, each useful alone; no output without a reader.
 - **Generic.** Every rule comes from the plugin's own records and GMSTs, never
   from a table naming one plugin.
@@ -472,3 +511,7 @@ perk point, so piece I can withhold them, read from the 1.6.1170 build.
    rules are on, since otherwise the player levels twice. Should all of it be
    withheld, or should Skyrim's perk points stay available as an option beside
    the source game's rules?
+6. In an all-worlds profile the rules follow the character's starting world,
+   read from `TESGameSelectQuest.ChosenGame`, and do not change when the
+   character crosses into another world. Is that the behavior you want, or
+   should crossing switch rules?
