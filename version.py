@@ -89,9 +89,11 @@ DEV_VERSION = "0.0-dev"
 # Where releases are published.  A source drop has no git remote to derive this
 # from, so it is a constant.
 REPO = "bryantmh/tes4skyrim"
-REPO_URL = f"https://github.com/{REPO}"
+#: This fork's own repo: About link, downloads page and update check. REPO stays upstream for the step checklists.
+RELEASE_REPO = "ThyMrMan/tes4skyrim"
+REPO_URL = f"https://github.com/{RELEASE_REPO}"
 RELEASES_URL = f"{REPO_URL}/releases"
-_TAGS_API = f"https://api.github.com/repos/{REPO}/tags?per_page=100"
+_TAGS_API = f"https://api.github.com/repos/{RELEASE_REPO}/tags?per_page=100"
 
 # Every release, WITH ITS BODY, in ONE anonymous request.  The body is the
 # annotated tag's message (the release job passes it through verbatim), so it
@@ -909,7 +911,7 @@ def describe_plan(plan: dict) -> str:
 # ---------------------------------------------------------------------------
 
 def latest_release(timeout: int = 8) -> str | None:
-    """Newest release tag on the remote, or None if it cannot be determined.
+    """Newest release tag on the remote; `""` when it has none; None if unreadable.
 
     NETWORK CALL -- never invoke this on the UI thread.
     """
@@ -934,7 +936,7 @@ def latest_release(timeout: int = 8) -> str | None:
         key = version_key(name)
         if key and (best_key is None or key > best_key):
             best, best_key = name, key
-    return best
+    return best or ""
 
 
 def check_for_update(timeout: int = 8) -> dict:
@@ -942,15 +944,16 @@ def check_for_update(timeout: int = 8) -> dict:
 
     NETWORK CALL -- run on a worker thread.  Returns:
       current   -- this tree's version
-      latest    -- newest release tag, or None if the check failed
+      latest    -- newest release tag, or None if the check failed or the
+                   remote has published no release yet
       available -- True when `latest` is strictly newer than `current`
       reachable -- False when the remote could not be queried
     """
     current = current_version()
     latest = latest_release(timeout=timeout)
-    if latest is None:
+    if not latest:
         return {"current": current, "latest": None,
-                "available": False, "reachable": False}
+                "available": False, "reachable": latest is not None}
 
     here, there = version_key(current), version_key(latest)
     # A dev tree sitting on the newest tag with local commits ('0.58+') is not

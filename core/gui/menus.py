@@ -393,6 +393,12 @@ def _show_update_result(app, result: dict) -> None:
                  "Check your connection, or see:\n"
                  f"{version_info.RELEASES_URL}")
         return
+    if result["latest"] is None:
+        app.info("No Releases Yet",
+                 f"You are running {result['current']}. No release has been "
+                 f"published at\n{version_info.RELEASES_URL}\nyet, so there "
+                 f"is nothing newer to download.")
+        return
     if not result["available"]:
         app.info("Up to Date",
                  f"You are running {result['current']}, which is the newest "

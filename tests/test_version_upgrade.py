@@ -169,6 +169,31 @@ def test_update_check_ignores_non_release_tags(monkeypatch):
     assert got["reachable"] is False and got["available"] is False
 
 
+def _serve_tags(monkeypatch, names):
+    """Answer the tags API with `names`, as GitHub lists them."""
+    import contextlib
+    import io
+    body = json.dumps([{"name": n} for n in names]).encode()
+    monkeypatch.setattr(v.urllib.request, "urlopen",
+                        lambda req, timeout=8: contextlib.closing(io.BytesIO(body)))
+
+
+@pytest.mark.parametrize("names", [[], ["navmesh-cache-0.661+"]])
+def test_a_repo_with_no_release_is_reachable_not_offline(monkeypatch, names):
+    """A fork that has published nothing yet answers "none", not "unreachable"."""
+    _serve_tags(monkeypatch, names)
+    monkeypatch.setattr(v, "current_version", lambda: "0.665")
+    assert v.latest_release() == ""
+    got = v.check_for_update()
+    assert got == {"current": "0.665", "latest": None,
+                   "available": False, "reachable": True}
+
+
+def test_newest_release_tag_wins_over_cache_tags(monkeypatch):
+    _serve_tags(monkeypatch, ["navmesh-cache-0.661+", "0.664", "0.665"])
+    assert v.latest_release() == "0.665"
+
+
 def test_update_available_only_when_strictly_newer(monkeypatch):
     monkeypatch.setattr(v, "current_version", lambda: "0.58")
     for latest, expect in (("0.59", True), ("0.58", False), ("0.57", False)):
