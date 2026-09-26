@@ -116,6 +116,7 @@ Designed, NOT yet built. Opens with `Status: PLAN`. Becomes commentary when buil
 
 | Doc | Covers |
 |---|---|
+| [classic_character_systems.md](plans/classic_character_systems.md) | Classic character systems for every source game: attributes, skills, leveling, perks, item condition |
 | [horse_rideability.md](plans/horse_rideability.md) | Rideable Horse Conversion: Oblivion CREA → Skyrim Mountable Actor |
 | [morrowind_object_scripts.md](plans/morrowind_object_scripts.md) | Move TES3 object scripts off the lossy Papyrus path onto the vendored interpreter |
 | [in_app_update.md](plans/in_app_update.md) | In-app update: download only what changed — design plan |
