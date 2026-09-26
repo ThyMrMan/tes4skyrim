@@ -152,9 +152,12 @@ one, as the vanilla creature swap plan does
 ([vanilla_creature_swap.md](vanilla_creature_swap.md)):
 
 - mastery bonuses, birthsign and racial abilities as abilities or perks;
-- FO3/FNV `PERK` records converted to Skyrim perks. The two share their
-  structure ([checked](#checked)), so this is close to direct; the entry-point
-  numbering still needs a mapping table;
+- FO3/FNV `PERK` records converted to Skyrim perks. The record structure is
+  shared, but most entry points are not ([checked](#checked)): quest-stage and
+  ability entries convert directly, entry points with a Skyrim counterpart
+  convert through a name-keyed table, and the Fallout-only ones (action
+  points, VATS, karma, radiation, hacking) need their own handling or are
+  reported as unconverted;
 - NV recipes (`RCPE`) as Skyrim constructible objects;
 - the rules quest, its Story Manager event nodes, and the player-stat GLOBs;
 - overrides of Skyrim's skill `AVIF` records, carrying the source game's XP
@@ -194,8 +197,9 @@ art source per game read from that game's install.
 1. **A with D, for Oblivion**: the character data and the player's leveling,
    with no DLL work, so it needs no sign-off beyond the feature itself. It
    lets attribute gates be real without locking anyone out.
-2. **E**: Fallout's XP and perks the same way; the perk records map closely
-   onto Skyrim's.
+2. **E**: Fallout's XP and perks the same way. Most perk entries convert
+   directly (84% for Fallout 3, 62% for New Vegas, counted); the rest are
+   Fallout-only mechanics.
 3. **B and C** where per-actor stats matter: Morrowind first, proven by
    behaving exactly as before, then NPC stat reads for the other games.
 4. **F, G, H** on top.
@@ -227,9 +231,9 @@ was a timer that re-ran the tick back to back after about 156 hours of uptime
 ([whole milliseconds](../commentary/morrowind_runtime.md#the-tick-sleeps-whole-milliseconds)),
 not the tick's own work.
 
-Papyrus is the bigger risk: the script conversion census counts 1,335
-`GameMode` blocks across 2,393 TES4 scripts, each already an `OnUpdate` poll
-([scope](../commentary/script_convert.md#scope)). The systems layer
+Papyrus is the bigger risk: `Oblivion.esm`'s scripts carry 1,327 `GameMode`
+blocks (Fallout 3 524, New Vegas 663, [counted](#checked)), each converted
+into an `OnUpdate` poll ([scope](../commentary/script_convert.md#scope)). The systems layer
 therefore never polls from Papyrus: its Papyrus runs only when a Story Manager
 event fires, and anything that needs more lives in C++. Either way it:
 
@@ -256,9 +260,9 @@ Read from the installed Skyrim SE, Oblivion and New Vegas files:
   `Quest.psc` declares the matching events, `OnStoryIncreaseSkill(string
   asSkill)` among them.
 - **Skyrim's per-skill XP rates are records.** 20 of `Skyrim.esm`'s 149 `AVIF`
-  records carry a 16-byte `AVSK` (four floats: the skill's use and improve
-  multipliers and offsets; confirm the field order against xEdit), one per
-  skill plus two regeneration modifiers; for
+  records carry a 16-byte `AVSK`, in xEdit's order Skill Use Mult, Skill
+  Offset Mult, Skill Improve Mult, Skill Improve Offset, one per skill plus two
+  regeneration modifiers; for
   example One-Handed is 6.3 / 0 / 2 / 0 and Smithing 160 / 0 / 0.25 / 300. An
   override plugin can set them. Skyrim's Illusion skill is the record named
   `AVMysticism`.
@@ -270,29 +274,88 @@ Read from the installed Skyrim SE, Oblivion and New Vegas files:
   skill-use curve, `fSkillUseExp` 1.5 and `fSkillUseFactor` 0.35, and its 21
   `SKIL` records each give a governing attribute, a specialization and two use
   values (Athletics 0.03 / 0.04, Speechcraft 2.4 / 1).
-- **Fallout perks share Skyrim's structure.** `FalloutNV.esm` has 176 `PERK`
-  records, `Skyrim.esm` 375. Both use `DATA`, `PRKE`, `PRKC`, `CTDA`, `EPFT`,
-  `EPFD`, `PRKF`, `EPF2` and `EPF3`, with the same three entry kinds (quest
-  stage, ability, entry point). New Vegas adds icons (169) and inline scripts
-  on 5 perks; Skyrim adds `VMAD`, `NNAM` and `CIS2`.
+- **Morrowind's leveling matches Oblivion's.** Unlike Oblivion, `Morrowind.esm`
+  stores its leveling GMSTs: `iLevelupTotal` 10 and `iLevelUp01Mult` to
+  `iLevelUp10Mult` 2, 2, 2, 2, 3, 3, 3, 4, 4, 5, the same table as Oblivion's
+  engine defaults, plus skill XP modifiers by category (`fMajorSkillBonus`
+  0.75, `fMinorSkillBonus` 1.0, `fMiscSkillBonus` 1.25, `fSpecialSkillBonus`
+  0.8) and `fLevelUpHealthEndMult` 0.1. OpenMW's
+  `apps/openmw/mwmechanics/npcstats.cpp` reads exactly these. One skill-use
+  rule set with per-game settings covers both games.
+- **Fallout perks share Skyrim's record structure, not its entry points.**
+  `Fallout3.esm` has 87 `PERK` records, `FalloutNV.esm` 176, `Skyrim.esm` 375.
+  All use `DATA`, `PRKE`, `PRKC`, `CTDA`, `EPFT`, `EPFD`, `PRKF`, `EPF2` and
+  `EPF3`, with the same three entry kinds (quest stage, ability, entry point);
+  New Vegas adds icons (169) and inline scripts on 5 perks, Skyrim adds
+  `VMAD`, `NNAM` and `CIS2`. The entry points differ (xEdit's lists): Fallout
+  3 has 37, New Vegas 74 (Fallout 3's list is its first 37), Skyrim 92. Only
+  12 of New Vegas's exist in Skyrim by name, 3 at the same index. Counted over
+  the actual perk entries, at least 99 of Fallout 3's 118 (84%) and 131 of New
+  Vegas's 212 (62%) convert without new work: every quest-stage and ability
+  entry, plus the entry points Skyrim has by name. The rest are Fallout-only:
+  most-used are action point cost, VATS to-hit chance, gun spread and damage
+  threshold.
 - **New Vegas's XP rules are GMSTs.** `iLevelUpSkillPointsBase` 11,
   `iLevelUpSkillPointsInterval` 1, `fAVDTagSkillBonus` 15, `fBookPerkBonus` 3,
   `iTraitMenuMaxNumTraits` 2, and XP rewards per difficulty for kills,
   picked locks, hacked terminals, speech challenges and map markers
   (`iXPRewardKillOpponent*`, `iXPRewardPickLock*`, `iXPRewardHackComputer*`,
-  `iXPLevelKill*`, `iXPRewardDiscoverMapMarker` 10). `iLevelsPerPerk` exists
-  in `FalloutNV.exe` but not in the master; its default was not read.
+  `iXPLevelKill*`, `iXPRewardDiscoverMapMarker` 10). `Fallout3.esm` carries
+  the same skill-point settings (11, 1).
+- **Fallout's engine defaults, read from each game's GECK** (the editor shares
+  the engine's setting table without the game exe's DRM; the method was
+  checked against Oblivion.exe's known values first). New Vegas:
+  `iLevelsPerPerk` 2, a perk every second level. Fallout 3 has no
+  `iLevelsPerPerk` at all, so its one-perk-per-level schedule is fixed in
+  code. Both: `iLevelUpSkillPointsBase` 7 and `iLevelUpSkillPointsInterval` 2,
+  which both masters override to 11 and 1 (a plugin's GMST beats the engine
+  default, as the data file assumes), and `iXPBase` 200.
+
+How much converted content depends on these systems, counted over the
+exports' scripts (`SCPT` text plus dialogue and quest-stage result scripts)
+and their conditions:
+
+| | Oblivion | Fallout 3 | New Vegas |
+|---|---|---|---|
+| Script bodies / `GameMode` blocks | 9,992 / 1,327 | 3,474 / 524 | 6,140 / 663 |
+| Attribute or S.P.E.C.I.A.L. reads and writes in scripts | 54 in 14 scripts | 32 in 18 | 66 in 19 |
+| Fame, infamy, karma in scripts | 244 in 212 (fame, infamy) | 67 in 43 (karma) | 43 in 42 (karma) |
+| `RewardXP` | none | 60 in 58 scripts | 265 in 262 |
+| Perks added, tested or removed in scripts | none | 44 in 16 | 256 in 107 |
+| Reputation commands | none | none | 510 in 249 |
+| Pip-Boy notes | none | 249 in 33 | 128 in 75 |
+| Actor-value conditions (all values) | 120 | 869 | 1,481 |
+| Biggest condition dependencies | class tests 114, `GetActorValue` on Illusion, fame and infamy | karma 277, `HasPerk` 115 | Speech 540, Barter 209, `GetReputationThreshold` 1,581, `HasPerk` 124 |
+
+So for Oblivion, fame and infamy matter more than attributes; for Fallout,
+dialogue skill checks, karma, reputation and perks dominate.
+
+**Fallout actor-value conditions are translated with Oblivion's table.**
+`fallout_function` remaps a FO3/FNV condition's function, but its actor-value
+parameter then goes through `_TES4_AV_TO_TES5` in `_convert_params`
+(`tes5_import/base/conditions.py`), and Fallout numbers its actor values
+differently. Run through `convert_ctda` on the exports' real conditions:
+
+| Condition tests | New Vegas | Fallout 3 | Converts to |
+|---|---|---|---|
+| Karma | 42 | 275 | the player's Illusion skill |
+| Charisma | 27 | 37 | Health |
+| Intelligence | 42 | 38 | Magicka |
+| Repair | 14 | 3 | Infamy |
+| Speech | 540 | none | dropped (the check always passes) |
+| Medicine, Science, Strength | 137 | 75 | dropped |
+| Barter | 209 | 26 | Speech (correct by coincidence) |
+
+The fix is independent of this plan and comes first: a Fallout actor-value
+table in `conditions_falloutnv.py`, applied to 28-byte conditions, mapping the
+values Skyrim has (Speech and Barter to Speech, Lockpick to Lockpicking, Sneak,
+Repair to Smithing, Health, Carry Weight) and dropping the rest until pieces
+D and E give them a GLOB to read.
 
 Still to check:
 
-- The mapping from FO3/FNV perk entry-point numbers to Skyrim's (needs the
-  xEdit definitions).
-- `iLevelsPerPerk`'s default, and Fallout 3 in general (not installed where
-  this was checked; most Fallout notes so far are New Vegas).
-- Morrowind's leveling settings (not installed where this was checked;
-  OpenMW's source documents them).
-- How Nehrim, which changes Oblivion's leveling, expresses that in its records
-  and scripts (not installed where this was checked).
+- Whether converted Fallout scripts map actor values by name correctly (the
+  condition path above maps by index).
 - Whether a skill increase can be told apart by source skill in every folded
   case (Blade or Blunt, Mercantile or Speechcraft) from what Papyrus can see
   at the moment the event fires.
