@@ -184,8 +184,11 @@ any actor's stats) do need the DLL. The Morrowind store moves into
 
 - **skill-use** (Morrowind, Oblivion): skill increases count toward the next
   level, and each increase credits its governing attribute's level-up bonus.
-  Skills Skyrim has advance through Skyrim's own skill use; the rules only
-  count the increases (`OnStoryIncreaseSkill`). Where several source skills
+  Skills Skyrim has advance through Skyrim's own skill use; the rules credit
+  the levels gained, not the events: on each `OnStoryIncreaseSkill`, each
+  menu close and each game load they compare every skill with their last
+  snapshot, because one event can carry several levels and increases inside
+  a menu share one event ([checked in game](#in-game-results)). Where several source skills
   fold into one Skyrim skill (Blade and Blunt into One-Handed and Two-Handed;
   Mysticism's spells into Alteration; Mercantile and Speechcraft into Speech),
   the increase is credited by context: the weapon or spell last used, whether
@@ -481,13 +484,56 @@ from vanilla events that fire only when the player acts:
   Blunt book read with a sword equipped would be misread. Both records name
   their Oblivion skill (`BOOK` `DATA.Teaches`, read in `equipment.py`;
   trainers' `Teaches`, read in `actor_common.py`), so piece A records it and
-  the rules credit it directly: `OnRead` for books, the training menu's
-  snapshot for trainers.
+  the rules credit it directly: for books, the equip event Skyrim sends when a
+  book is read ([checked](#in-game-results)); for trainers, the training
+  menu's snapshot.
 
-Still to check, in game: that a story event arriving a moment after the
-action still finds the same weapon or spell recorded, and how the Story
-Manager handles several skill increases in quick succession while the rules
-quest is still running.
+<a id="in-game-results"></a>**Checked in game** with a probe plugin in a
+near-vanilla profile: vanilla Papyrus only, a monitor polling the 18 skill
+levels every 0.1 s, a player alias logging equips and casts, and a quest on the
+`SKIL` event node logging what it sees at each event.
+
+- **Outside menus the event is prompt.** Each of the 8 increases earned in
+  game mode logged its event within 0.26 s of the level change, 6 of them
+  before the poll noticed it. The quickest swap afterward took 0.9 s for a
+  spell and 2.9 s for a weapon, and every event still saw the Iron Sword or
+  Flames that earned it. Crediting by the last weapon or spell recorded holds.
+- **One event can carry several levels.** Six events each covered a jump
+  (One-Handed 1 to 3 and 3 to 5, Destruction 15 to 20, 20 to 23 and 23 to 26,
+  Sneak 15 to 20), with the event already seeing the final level.
+- **Increases inside a menu share one event, sent after the menu closes.**
+  Reading five skill books (three One-Handed, one Sneak, one Destruction)
+  raised three skills by five levels and produced one event, for Destruction,
+  when the menu closed; One-Handed and Sneak got none. Selling to a merchant
+  raised Speech from 1 to 17 and produced one event, also after the menu
+  closed. Counting events would lose most of these, which is why the rules
+  compare snapshots instead.
+- **An increase that arrives while the event quest is still running gets no
+  event.** Casting Flames on enemies from Destruction 1 raised it to 9 and
+  produced 7 events: the one for level 3 is missing. It came within 0.3 s
+  of level 2, while the quest was still logging level 2, and the next event
+  jumped from 2 to 4. So the Story Manager skips an increase while its quest
+  is running rather than queueing it, which the snapshot also covers.
+- **Reading a book sends the equip event**, inside the menu and as it happens,
+  with the book as the object, so a skill book is credited from its authored
+  skill with a vanilla event. Alias events run inside menus in real time;
+  only the story event waits.
+- **Console `SetAV` changes a skill without an event**, in either direction,
+  so the snapshot takes a decrease as a new starting point, never as credit.
+- **The player's limb conditions start at 100**, current and base, all seven,
+  so converted Fallout scripts that pass the limb names through read healthy
+  limbs, and a crippled check (`<= 0`) does not fire.
+- **`OnInit` ran twice** on the monitor quest's first start, so the rules
+  quest's setup must be safe to repeat, as TESGameSelect's already is.
+
+- **`OnSpellCast` fires once when a cast begins**, including for a
+  concentration spell: three Flames casts were logged while Destruction rose
+  eight levels, one per press of the button, not per second held. So the last
+  spell cast is the one being channeled, which is what the Mysticism crediting
+  needs.
+- **The console's `IncPCS` sends the event.** The console is a menu, so two
+  `incpcs sneak` in one sitting arrived as one event (Sneak 15 to 17) when it
+  closed; each later one arrived on its own.
 
 Still to check, in the executable: which code grants Skyrim's level-up and
 perk point, so piece I can withhold them, read from the 1.6.1170 build.
