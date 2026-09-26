@@ -1,3 +1,28 @@
+> [!NOTE]
+> **This is a fork.** [ThyMrMan/tes4skyrim](https://github.com/ThyMrMan/tes4skyrim)
+> is a personal fork of [bryantmh/tes4skyrim](https://github.com/bryantmh/tes4skyrim),
+> the original TES Auto-Convert. All the conversion work is upstream's. Everything
+> below this note is upstream's README, plus this fork's changes to it.
+>
+> **What this fork is for:**
+> - Making the converter easier to set up and run: a launch fix, a portable
+>   package with its own Python, and clearer requirements.
+> - Building toward playing each converted game on its own: one Mod Organizer 2
+>   profile per world, and Oblivion's own systems (attributes, classes,
+>   birthsigns, leveling, menus) generated from your Oblivion files. See the
+>   [GUI overhaul plan](docs/plans/gui_overhaul.md). This is planned or in
+>   progress; most of it isn't built yet.
+>
+> **How it relates to upstream:**
+> - The `standalone` branch (the default) is this fork's version: upstream, plus
+>   this fork's changes. `master` is an unchanged copy of upstream.
+> - Upstream is merged in regularly. General fixes and improvements go back
+>   upstream as [pull requests](https://github.com/bryantmh/tes4skyrim/pulls?q=author%3AThyMrMan);
+>   work that only suits this fork stays here.
+> - For official releases, support and bug reports about the converter itself,
+>   use [upstream](https://github.com/bryantmh/tes4skyrim). This fork has no
+>   releases yet.
+
 <p align="center">
   <img src="docs/assets/banner.svg" alt="TES Auto-Convert — Gamebryo to Skyrim Conversion" width="720">
 </p>
