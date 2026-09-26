@@ -82,9 +82,10 @@ def fallout_actor_value(av: int) -> 'int | None':
     """The Skyrim actor value a Fallout condition's actor-value parameter names.
 
     None drops the condition, failing open as TES4's attributes do: the
-    S.P.E.C.I.A.L. stats, karma, the skills Skyrim lacks and the limb
-    conditions have no Skyrim value. Fallout numbers its actor values its own
-    way, so TES4's table must never be applied to them.
+    S.P.E.C.I.A.L. stats, karma and the skills Skyrim lacks have no Skyrim
+    value, and the limb conditions and the values on another scale are left
+    out. Fallout numbers its actor values its own way, so TES4's table must
+    never be applied to them.
     See: docs/commentary/tes5_import_conditions.md#fallout-actor-values
     """
     return _FALLOUT_AV_TO_TES5.get(av)
