@@ -90,7 +90,7 @@ Sources: Morrowind and Oblivion from SKIL, CLAS, BSGN, RACE and GMST; Fallout
 from AVIF, PERK, CLAS, RACE, REPU and GMST. Everything is data, so a plugin
 that changes classes or birthsigns carries through with no code change.
 
-### The player's side needs no DLL
+### The player's rules need no DLL
 
 Skyrim's Story Manager already raises an event for each of the things the
 rules react to, and a quest's Papyrus script receives them
@@ -101,6 +101,31 @@ rules react to, and a quest's Papyrus script receives them
 GLOBs, which dialogue and quest conditions read directly, advanced by a rules
 quest that wakes only on those events: no polling, and no new DLL code. Effects
 land through vanilla Papyrus (`ModActorValue` on the player).
+
+### <a id="no-base-overrides"></a>No base-game overrides
+
+Nothing in the plan overrides a `Skyrim.esm` record or setting. The maintainer
+split out `FalloutRuntime.dll` so that new Fallout systems need not overwrite
+base game data, and the plan applies the same rule to every game: a change to
+how Skyrim itself behaves happens in the runtime, in memory, and only while a
+converted game's rules are on. Two such changes are needed:
+
+- **Skill XP rates.** Skyrim keeps them in its 18 skill `AVIF` records
+  ([checked](#checked)). Overriding those would collide with any mod that
+  changes skill rates, the last one loaded winning, and would change Skyrim's
+  own skills whenever the plugin is loaded. The runtime instead writes the
+  source game's rates, from the character data file, into the loaded skill
+  records at load: Oblivion's and Morrowind's from their skill records, and
+  zero for Fallout, whose skills rise only by points.
+- **Skyrim's own leveling.** With a game's rules on, Skyrim's character level
+  still rises from its own skill experience, and its level-up screen and perk
+  point still arrive, so the player would level twice. In data that means
+  overriding `fXPLevelUpBase` and `fXPLevelUpMult`; the runtime instead
+  withholds Skyrim's level-up and perk point while the rules are on.
+
+Mechanics Skyrim has no counterpart for follow the same rule: Fallout's perk
+entry points that Skyrim lacks (action points, VATS, gun spread, damage
+threshold) belong to `FalloutRuntime`.
 
 ### Runtime: one stat store, for what Papyrus cannot hold
 
@@ -125,11 +150,12 @@ any actor's stats) do need the DLL. The Morrowind store moves into
   level, and each increase credits its governing attribute's level-up bonus.
   Skills Skyrim has advance through Skyrim's own skill use; the rules only
   count the increases (`OnStoryIncreaseSkill`). Where several source skills
-  fold into one Skyrim skill (Blade and Blunt into One-Handed; Mercantile and
-  Speechcraft into Speech), the increase is credited by context: the equipped
-  weapon's type, whether the player is trading. Skyrim's own per-skill XP
-  rates can be set from the source game's skill records, since both live in
-  records ([checked](#checked)).
+  fold into one Skyrim skill (Blade and Blunt into One-Handed and Two-Handed;
+  Mysticism's spells into Alteration; Mercantile and Speechcraft into Speech),
+  the increase is credited by context: the weapon or spell last used, whether
+  the player is trading ([checked](#skill-source)). Skyrim's own per-skill XP
+  rates are set to the source game's, in memory by the runtime
+  ([no base-game overrides](#no-base-overrides)).
 - **xp** (Fallout): XP from quests (`RewardXP`), kills (`OnStoryKillActor`),
   and lock (`OnStoryPickLock`), hack and speech successes, with the amounts
   read from the game's own `iXPReward*` / `iXPLevelKill*` GMSTs; skill points
@@ -156,19 +182,18 @@ one, as the vanilla creature swap plan does
   shared, but most entry points are not ([checked](#checked)): quest-stage and
   ability entries convert directly, entry points with a Skyrim counterpart
   convert through a name-keyed table, and the Fallout-only ones (action
-  points, VATS, karma, radiation, hacking) need their own handling or are
+  points, VATS, karma, radiation, hacking) are handled by `FalloutRuntime` or
   reported as unconverted;
 - NV recipes (`RCPE`) as Skyrim constructible objects;
-- the rules quest, its Story Manager event nodes, and the player-stat GLOBs;
-- overrides of Skyrim's skill `AVIF` records, carrying the source game's XP
-  rates.
+- the rules quest, its Story Manager nodes (new nodes attached to Skyrim's
+  event nodes, which stay unedited), and the player-stat GLOBs.
 
 A separate plugin keeps the feature off unless it is enabled, and its FormIDs
 come from `derive_formid` with new sites in its own file, so no converted
-plugin's FormIDs move. The `AVIF` overrides are the one place it deliberately
-edits Skyrim.esm records; `tools/validate/plugin_load_audit.py` flags vanilla
-overrides in converted output, so the rules plugin needs its own whitelist
-there.
+plugin's FormIDs move. It only adds records: it overrides nothing in
+`Skyrim.esm` ([no base-game overrides](#no-base-overrides)), so
+`tools/validate/plugin_load_audit.py`'s check for vanilla overrides applies to
+it unchanged.
 
 ### Menus
 
@@ -184,8 +209,9 @@ art source per game read from that game's install.
 | # | Piece | Where | Depends on |
 |---|---|---|---|
 | A | Character data, all four games, with engine defaults merged under each plugin's GMSTs | `tes5_import/` new module | nothing |
-| D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs. No DLL | rules plugin, `script_convert/` | A |
-| E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation. No DLL | `tes5_import/*_falloutnv.py`, rules plugin | A |
+| I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, and Skyrim's level-up and perk point withheld | `tes_runtime/common/`, called by each game's runtime | A |
+| D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs | rules plugin, `script_convert/` | A, I |
+| E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
 | B | Shared stat store for per-actor stats; Morrowind switched over with identical behavior | `tes_runtime/common/` | A |
 | C | Papyrus natives over B for NPC stats; the polyfill and FNV stubs call through | `tes_runtime/tes/`, `script_convert/` | B |
 | F | Skills Skyrim lacks: Athletics, Acrobatics, Hand to Hand, Mysticism, Mercantile, and Fallout's unmapped skills | rules plugin, `tes_runtime/` if an event is missing | D or E |
@@ -194,12 +220,13 @@ art source per game read from that game's install.
 
 ## <a id="order"></a>Suggested order
 
-1. **A with D, for Oblivion**: the character data and the player's leveling,
-   with no DLL work, so it needs no sign-off beyond the feature itself. It
+1. **A, I and D, for Oblivion**: the character data, the runtime's two
+   changes to Skyrim's own leveling, and the player's leveling. The rules
+   themselves are Papyrus and new records; I is the only runtime work. It
    lets attribute gates be real without locking anyone out.
 2. **E**: Fallout's XP and perks the same way. Most perk entries convert
-   directly (84% for Fallout 3, 62% for New Vegas, counted); the rest are
-   Fallout-only mechanics.
+   directly (84% for Fallout 3, 62% for New Vegas, counted); the
+   Fallout-only mechanics go to `FalloutRuntime`.
 3. **B and C** where per-actor stats matter: Morrowind first, proven by
    behaving exactly as before, then NPC stat reads for the other games.
 4. **F, G, H** on top.
@@ -207,6 +234,9 @@ art source per game read from that game's install.
 ## <a id="constraints"></a>Constraints every piece follows
 
 - **Off by default.** Nothing changes for a player who has not enabled it.
+- **No base-game overrides.** No `Skyrim.esm` record or setting is
+  overridden; a change to how Skyrim behaves lives in the runtime, only while
+  a converted game's rules are on ([why](#no-base-overrides)).
 - **One PR per piece**, each useful alone; no output without a reader.
 - **Generic.** Every rule comes from the plugin's own records and GMSTs, never
   from a table naming one plugin.
@@ -264,7 +294,8 @@ Read from the installed Skyrim SE, Oblivion and New Vegas files:
   Offset Mult, Skill Improve Mult, Skill Improve Offset, one per skill plus two
   regeneration modifiers; for
   example One-Handed is 6.3 / 0 / 2 / 0 and Smithing 160 / 0 / 0.25 / 300. An
-  override plugin can set them. Skyrim's Illusion skill is the record named
+  override plugin could set them; the plan sets them in memory instead
+  ([why](#no-base-overrides)). Skyrim's Illusion skill is the record named
   `AVMysticism`.
 - **Oblivion's leveling table is engine defaults.** `Oblivion.esm` stores no
   leveling GMSTs; `Oblivion.exe` registers them with these defaults, read from
@@ -346,30 +377,98 @@ differently. Run through `convert_ctda` on the exports' real conditions:
 | Medicine, Science, Strength | 137 | 75 | dropped |
 | Barter | 209 | 26 | Speech (correct by coincidence) |
 
-The fix is independent of this plan and comes first: a Fallout actor-value
-table in `conditions_falloutnv.py`, applied to 28-byte conditions, mapping the
-values Skyrim has (Speech and Barter to Speech, Lockpick to Lockpicking, Sneak,
-Repair to Smithing, Health, Carry Weight) and dropping the rest until pieces
-D and E give them a GLOB to read.
+The fix is independent of this plan and is written, on its own branch
+(`fix/fallout-av-conditions`): a Fallout actor-value table in
+`conditions_falloutnv.py` maps the 25 values Skyrim has with the same meaning
+(Speech and Barter to Speech, Lockpick to Lockpicking, Repair to Smithing,
+Sneak, Health, Carry Weight, the resistances and others) and drops the rest
+until pieces D and E give them a GLOB to read. It also pads Fallout's older
+20- and 24-byte conditions to 28 bytes, so they are read with Fallout's
+function numbering instead of Oblivion's.
 
-Still to check:
+**Converted Fallout scripts pass most Fallout-only actor values through as
+names Skyrim does not know.** Scripts translate by name, not index
+(`script_convert/commands.py` `actor_value`), through Oblivion's
+`ACTOR_VALUE_MAP`; a name missing from it is emitted unchanged. Skyrim's
+actor-value names, read from `CreationKit.exe`'s name table, do not include
+most of Fallout's, and an unknown name reads 0 and rejects writes
+([script_convert.md](../commentary/script_convert.md#skyrim-has-no-attributes)).
+Counted over the exports' `SCPT` text and the result
+scripts in `INFO`, `QUST`, `PACK`, `TERM`, `PERK` and `NOTE`:
 
-- Whether converted Fallout scripts map actor values by name correctly (the
-  condition path above maps by index).
-- Whether a skill increase can be told apart by source skill in every folded
-  case (Blade or Blunt, Mercantile or Speechcraft) from what Papyrus can see
-  at the moment the event fires.
+| | Fallout 3 | New Vegas |
+|---|---|---|
+| Actor-value calls | 1,008 | 1,062 |
+| Naming a value Skyrim does not know | 144 | 227 |
+| Repair | 48 | 49 |
+| Medicine, Science, Explosives | 32 | 97 |
+| Karma | 32 | 4 |
+| Perception, Charisma | 9 | 27 |
+| Speech, Barter, Lockpick | 7 | 13 |
+| Weapon skills, Survival, RadiationRads, ActionPoints, XP, BloodyMess | 16 | 37 |
+
+Repair, Speech, Barter and Lockpick have a Skyrim value and should map the way
+the condition fix maps them. Perception and Charisma also read 0, while
+Strength, Endurance, Intelligence, Agility and Luck read 100, because
+`TES4_ATTRIBUTES` lists Oblivion's attributes and five of them share a
+name with S.P.E.C.I.A.L. stats: the same kind of gate falls open for one stat
+and shut for another. The script-side fix is on the same branch: the four
+renames, Perception and Charisma read as the other five stats do, and the
+values Skyrim lacks become inert reads, which drop out of a comparison rather
+than deciding it.
+
+<a id="skill-source"></a>**A folded skill increase can be credited to its source
+skill from authored data**, without a DLL. `OnStoryIncreaseSkill` names only
+the Skyrim skill, so the rules keep the context themselves, on a player alias,
+from vanilla events that fire only when the player acts:
+
+- **Blade or Blunt** (One-Handed, Two-Handed): `OnObjectEquipped` records the
+  weapon in hand. Import already knows each weapon's Oblivion type, so piece A
+  writes Blade and Blunt weapons into two form lists and the rules test
+  membership. This follows the authored skill rather than the Skyrim weapon
+  type the conversion chose, so an Oblivion axe stays Blunt.
+- **Mysticism** (Alteration): converted Mysticism effects are Alteration, or
+  Conjuration for a few (`tes5_import/record_types/magic.py`
+  `SCHOOL_TO_AV`), while scripts and conditions read Mysticism as Illusion.
+  `OnSpellCast` records the last spell cast; a form list of converted
+  Mysticism spells credits the increase. The rules' own Mysticism GLOB then
+  replaces both of today's stand-ins.
+- **Mercantile or Speechcraft** (Speech): Speech gained while the barter menu
+  is open is Mercantile. The rules take a Speech snapshot when the menu opens
+  and credit the difference when it closes (SKSE's `RegisterForMenu`, which
+  converted scripts already use), so the result does not depend on whether
+  the story event arrives before or after the menu closes.
+- **Skill books and trainers** raise a skill with no use to observe, and a
+  Blunt book read with a sword equipped would be misread. Both records name
+  their Oblivion skill (`BOOK` `DATA.Teaches`, read in `equipment.py`;
+  trainers' `Teaches`, read in `actor_common.py`), so piece A records it and
+  the rules credit it directly: `OnRead` for books, the training menu's
+  snapshot for trainers.
+
+Still to check, in game: that a story event arriving a moment after the
+action still finds the same weapon or spell recorded, and how the Story
+Manager handles several skill increases in quick succession while the rules
+quest is still running.
+
+Still to check, in the executable: which code grants Skyrim's level-up and
+perk point, so piece I can withhold them, read from the 1.6.1170 build.
 
 ## <a id="open-questions"></a>Open questions for the maintainer
 
-1. The player's side (pieces A, D, E) needs no DLL. Is new `tes_runtime`
-   functionality for the rest (per-actor stats, menus, item condition) wanted
-   at all, given DLLs are a last resort?
+1. `FalloutRuntime.dll` was split out so new Fallout systems need not
+   overwrite base game data. The plan applies that to all four games: the
+   player's rules are Papyrus and new records, and the runtime takes what
+   would otherwise override `Skyrim.esm` (piece I), Fallout's perk entry
+   points, per-actor stats, menus and item condition. Does that hold for
+   Oblivion and Morrowind too, with `TESRuntime` and `MorrowindRuntime`
+   carrying their parts as `FalloutRuntime` carries Fallout's?
 2. Is moving the Morrowind stat store into `tes_runtime/common` acceptable, and
    in what shape?
 3. The repo has no `LICENSE` file, while the About box says MIT and
    `external/openmw` is GPL-3.0. Where should the boundary sit for shared
    runtime code?
 4. Separate rules plugin, or records inside the converted plugin behind a flag?
-5. Should Skyrim's own perk points and leveling be switched off when a game's
-   rules are on, or run alongside?
+5. Piece I withholds Skyrim's own level-up and perk point while a game's
+   rules are on, since otherwise the player levels twice. Should all of it be
+   withheld, or should Skyrim's perk points stay available as an option beside
+   the source game's rules?
