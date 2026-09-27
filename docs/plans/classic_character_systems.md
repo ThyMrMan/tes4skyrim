@@ -6,7 +6,11 @@ own branch (`feat/character-data`, `feat/character-runtime`,
 choice, rates following the class, a level-up at rest setting the player's
 level. Piece A's Fallout half is written (`feat/fallout-character-data`):
 the `AVIF`, `PERK`, `REPU` and Fallout `CLAS` export and Fallout's character
-data file. The rest of piece E and every other piece is unimplemented. Every
+data file. Piece E's XP leveling is written (`feat/fallout-xp-rules`), built
+for New Vegas and not yet played: experience from quest rewards, kills and
+picked locks by the formulas read from `Fallout3.exe`, and the level-up with
+skill points. Perks, karma, reputation and every other piece are
+unimplemented. Every
 piece is meant to land as its own small PR, and every piece is off by
 default.
 
@@ -273,7 +277,7 @@ art source per game read from that game's install.
 | A | Character data, all four games, with engine defaults merged under each plugin's GMSTs. Written for Oblivion (`tes5_import/character_data.py`, with the engine's setting defaults read from `Oblivion.exe` and a fix to the `SKIL` export, which read every field one slot early); Fallout written too (`tes5_import/character_data_falloutnv.py`, `rules: xp`): the exporter now decodes `AVIF`, `PERK`, `REPU` and Fallout's `CLAS` (`tes4_export/record_types/character_falloutnv.py`), the engine defaults come from each game's GECK (`--settings-json`), and an actor value's index follows from its `AVIF` FormID block; the skills' governing stats are a table, traced in no exe. Morrowind follows with its rules | `tes5_import/` new module | nothing |
 | I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, Skyrim's level-up and perk point withheld, and a mod event that sets the player's level. Written in TESRuntime, which serves every converted game (`tes_runtime/tes/character_rules.cpp`) | `tes_runtime/tes/` | A |
 | D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs. Written: `tools/release/make_character_rules_esp.py` builds `<game> Character Rules.esp` from the character data, with generic Papyrus in `character_rules/`; the player's attributes live in TESGameSelect.esp, the one plugin every world shares | rules plugin, `script_convert/` | A, I |
-| E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
+| E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points. XP leveling written (`tools/release/character_rules_falloutnv.py`, `character_rules/scripts/source/FalloutRules_*.psc`): the kill, lock and XP-curve formulas read from `Fallout3.exe`, which is not encrypted, as is the skills' governing table; converted `RewardXP` sends the XP; TESRuntime zeroes skill use under XP rules | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
 | B | Shared stat store for per-actor stats; Morrowind switched over with identical behavior | `tes_runtime/common/` | A |
 | C | Papyrus natives over B for NPC stats; the polyfill and FNV stubs call through | `tes_runtime/tes/`, `script_convert/` | B |
 | F | Skills Skyrim lacks: Athletics, Acrobatics, Hand to Hand, Mysticism, Mercantile, and Fallout's unmapped skills | rules plugin, `tes_runtime/` if an event is missing | D or E |
