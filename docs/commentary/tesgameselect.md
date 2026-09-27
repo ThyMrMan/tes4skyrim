@@ -19,7 +19,8 @@ never moves an existing one:
 | `0x80F` | FLST of the new-game prompt variants |
 | `0x810`… | MESG: 2^(gated games) prompt variants — the block GROWS with each game |
 | `0xA00`–`0xA02` | QUST selector, QUST travel, BOOK scroll |
-| `0xAF0`–`0xAF7` | GLOB: the player's TES4 attributes, Strength to Luck, which the [character rules](character_rules.md#attributes) write and `TES4Polyfill` reads |
+| `0xAF0`–`0xAF7` | GLOB: the player's TES4 attributes, Strength to Luck, which the [character rules](character_rules.md#attributes) write and `TES4Polyfill` reads; Fallout's S.P.E.C.I.A.L. shares the five of the same name |
+| `0xAF8`–`0xAF9` | GLOB: the player's Perception and Charisma, the S.P.E.C.I.A.L. stats with no TES4 attribute ([Fallout's rules](character_rules.md#fallout)) |
 | `0xAFF` | FLST of the travel-menu variants |
 | `0xB00`… | MESG: 2^(games) travel variants — also grows |
 

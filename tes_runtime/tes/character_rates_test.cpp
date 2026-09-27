@@ -70,7 +70,10 @@ void TestReader() {
     Check(rules.classes.at("Thief").major.count("Mercantile") == 1,
           "a later file's class replaces an earlier one");
     CharacterRules other;
-    Check(!other.Load(Json::Parse(R"({"rules": "xp"})")), "a non-skill-use file is refused");
+    Check(!other.Load(Json::Parse(R"({"rules": "points"})")), "a file of neither kind is refused");
+    CharacterRules fallout;
+    Check(fallout.Load(Json::Parse(R"({"rules": "xp"})")) && fallout.xp, "an XP file is taken as XP");
+    Check(!Rules().xp, "a skill-use file is not XP");
     CharacterRules mixed = Rules();
     mixed.AddClasses(Json::Parse(
         R"({"rules": "xp", "classes": [{"id": "Knight", "tags": ["Guns"]}]})"));
@@ -114,6 +117,9 @@ void TestSourceRates() {
     const SkillRates offset = SourceRates({1.0f, 0.0f, 0.25f, 300.0f}, 1.95f, 1.5f, 1.0f);
     Check(Near(Threshold(offset, 1.5f, kAnchorLevel), 0.25f * std::pow(25.0f, 1.95f) + 300.0f),
           "Smithing's improve offset folds into the anchor");
+    const SkillRates xp = XpRates(oneHanded);
+    Check(xp.useMult == 0.0f && xp.useOffset == 0.0f, "an XP game's skills gain nothing by use");
+    Check(xp.improveMult == 2.0f && xp.improveOffset == 0.0f, "an XP game keeps Skyrim's curve");
 }
 
 }  // namespace

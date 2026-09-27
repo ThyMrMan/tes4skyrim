@@ -121,13 +121,28 @@ def test_a_dependent_names_skills_through_its_master():
     assert 'skills' not in doc and 'attributes' not in doc and 'standings' not in doc
 
 
-def test_fallout3_throwing_has_no_governing_stat(tmp_path):
-    """Fallout 3's cut Throwing skill is governed by nothing; the header version names the game."""
+def test_fallout3_hides_its_cut_throwing(tmp_path):
+    """Fallout 3's cut Throwing keeps Fallout3.exe's Intelligence but is not shown; the header names the game."""
     (tmp_path / '_HEADER.txt').write_text('HEDR.Version=0.9399999976158142\n', encoding='utf-8')
     assert game_of(str(tmp_path)) == 'fallout3'
     doc = character_data({'AVIF': AVIFS}, [], 'Fallout3.esm', 'fallout3')
-    assert [s['attribute'] for s in doc['skills'] if s['id'] == 'AVThrowing'] == [None]
+    throwing, = [s for s in doc['skills'] if s['id'] == 'AVThrowing']
+    assert throwing['attribute'] == 'Intelligence' and not throwing['playable']
     assert 'iLevelsPerPerk' not in doc['settings']
+
+
+def test_new_vegas_hides_big_guns_and_keeps_the_players_class():
+    """Big Guns stays in New Vegas's data but is not shown; the player record names the starting class,
+    and the skill bases and lock tiers are kept for the rules."""
+    by_type = {'AVIF': AVIFS + [_avif(0x4B1, 'AVBigGuns', 'Big Guns - OBSOLETE')],
+               'NPC_': [{'FormID': '00000007', 'EditorID': 'Player', 'CNAM.Class': '00057E6A'},
+                        {'FormID': '00000900', 'EditorID': 'Other', 'CNAM.Class': '00000901'}]}
+    doc = character_data(by_type, [], 'FalloutNV.esm', 'falloutnv')
+    assert {s['id']: s['playable'] for s in doc['skills']} == {
+        'AVBarter': True, 'AVBigGuns': False, 'AVSmallGuns': True, 'AVThrowing': True}
+    assert doc['player'] == {'class': ['FalloutNV.esm', 0x57E6A]}
+    settings = doc['settings']
+    assert settings['fAVDSkillBarterBase'] == 3.0 and settings['iXPLevelPickLockHard'] == 3
 
 
 def test_perk_rows_keep_requirements_effects_and_tabs():

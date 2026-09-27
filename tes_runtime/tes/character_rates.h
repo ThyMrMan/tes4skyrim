@@ -48,8 +48,10 @@ struct CharacterRules {
     std::map<std::string, float> settings;
     std::array<std::vector<SourceSkill>, kSkillCount> sources;
     std::map<std::string, CharacterClass> classes;
+    // An XP game (Fallout): its skills rise only by points, never by use.
+    bool xp = false;
 
-    // Reads a file's settings and skills; false unless it is a skill-use file.
+    // Reads a file's settings and skills; false unless it is a skill-use or XP file.
     bool Load(const Json& doc);
     // Adds a file's classes, by EditorID; a later file replaces an earlier one.
     void AddClasses(const Json& doc);
@@ -73,5 +75,8 @@ float Threshold(const SkillRates& rates, float curve, float level);
 // use rates, Skyrim's per-action currency, are kept.
 SkillRates SourceRates(const SkillRates& vanilla, float vanillaCurve,
                        float sourceCurve, float multiplier);
+
+// `vanilla` with no skill XP per use, for an XP game: the level curve is kept.
+SkillRates XpRates(const SkillRates& vanilla);
 
 }  // namespace tesruntime

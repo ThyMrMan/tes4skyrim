@@ -16,7 +16,10 @@ With a converted game's rules on, three things about Skyrim itself change, all
 in memory:
 
 - each skill's rates follow the source game's curve and the player's class
-  ([skill rates](#skill-rates));
+  ([skill rates](#skill-rates)); under an XP game's rules (`rules: xp`,
+  Fallout) each skill gains nothing by use instead, its use rates set to 0,
+  since those skills rise only by the points the rules hand out
+  ([Fallout's rules](character_rules.md#fallout));
 - Skyrim's own level-up, with its screen and perk point, is withheld, and the
   "Level up available" message stays quiet;
 - the rules set the player's level, which leveled lists and encounter zones
@@ -32,7 +35,7 @@ with mod events, the channel converted scripts already use for `TES4Spin`:
 
 | Event | `strArg` | `numArg` | Does |
 |---|---|---|---|
-| `TESCharacterRules` | the plugin, e.g. `Oblivion.esm` | 1 | on, with that plugin's `character.json` and every `skill-use` file's classes (an XP game's, such as New Vegas's `Farmer`, never replaces Oblivion's of the same EditorID) |
+| `TESCharacterRules` | the plugin, e.g. `Oblivion.esm` or `FalloutNV.esm` | 1 | on, with that plugin's `character.json` (`skill-use` or `xp`) and every `skill-use` file's classes (an XP game's, such as New Vegas's `Farmer`, never replaces Oblivion's of the same EditorID) |
 | `TESCharacterRules` | | 0 | off |
 | `TESCharacterClass` | the class's EditorID | | the class the rates follow |
 | `TESCharacterLevel` | | the level | sets the player's level |

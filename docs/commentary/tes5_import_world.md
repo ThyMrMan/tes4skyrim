@@ -13,6 +13,7 @@ owns it, and what it is linked to. Region decoration (REGN, LSCR, WATR) lives in
 - [Exclusive LCEC cell ownership](#exclusive-lcec-cell-ownership)
 - [Teleport doors bucketed by worldspace](#teleport-doors-by-worldspace)
 - [TES3 exit-only door locks](#tes3-exit-only-door-locks)
+- [Fallout lock levels: 255 needs the key](#fallout-lock-levels)
 - [TES3 refs ship Don't Havok Settle](#tes3-dont-havok-settle)
 - [Nested interiors inherit a location](#nested-interiors-inherit-location)
 - [LAND DATA flags pass through VERBATIM](#land-data-flags-verbatim)
@@ -130,6 +131,19 @@ census-office pair (`0181D2D9` / `0181BCE5`) carries no lock at all, and it
 re-authored locks throughout — 232 locked pairs against Morrowind's 108, with
 the interior/exterior balance inverted. There is no algorithm in its data to
 copy.
+
+## <a id="fallout-lock-levels"></a>Fallout lock levels: 255 needs the key
+
+**Code:** `map_lock_level` in `tes5_import/base/constants.py`,
+`requires_key_level` in `tes5_import/record_types/world_falloutnv.py`.
+
+TES4 marks a lock that needs its key with level 100, so `map_lock_level` turned
+every 100 into Skyrim's Requires Key (255). FO3/FNV do what Skyrim does: 100 is
+a pickable Very Hard lock and 255 needs the key. `FalloutNV.esm`'s exported
+locks are 121 at 50, 103 at 255, 73 at 25, 58 at 75, 39 at 0 and 32 at 100, so
+those 32 Very Hard locks converted as unpickable. The source's key level is now
+a parameter: 100 for TES4, 255 for a Fallout source, whose 100 becomes a Master
+lock.
 
 ## <a id="tes3-dont-havok-settle"></a>TES3 refs ship Don't Havok Settle
 
