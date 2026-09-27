@@ -16,12 +16,12 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.release.make_game_select_esp import (
     ALCA_IN_INVENTORY, ALIAS_PLAYER, ALIAS_QUEST_OBJECT, ALIAS_SCROLL, BUTTONS,
-    FID_ELDER_SCROLL, FID_FLST_MENUS, FID_FLST_TRAVEL, FID_GAMEHOUR,
+    FID_ELDER_SCROLL, FID_FLST_MENUS, FID_GLOB_PLAYER_ATTRIBUTES, FID_FLST_TRAVEL, FID_GAMEHOUR,
     FID_GLOB_CURRENT, FID_HOLDING_CELL_MARKER, FID_MESG, FID_MESG_TRAVEL,
     FID_MQ101, FID_PLAYER_REF, FID_QUST, FID_SCROLL, FID_STASH_CHEST,
     FID_TRAVEL_QUST, FUNC_GET_GLOBAL_VALUE, GLOBALS, MAX_MESG_BUTTONS,
     MESG_VARIANTS, MQ101_RETARGETS, MQ101_SCRIPT_NAME, MQ101_TAKEOVER_STAGE,
-    MQ101_VANILLA_FRAGMENT_SCRIPT, MQ101_VANILLA_STAGE0_ENTRIES, OP_NOT_EQUAL,
+    MQ101_VANILLA_FRAGMENT_SCRIPT, MQ101_VANILLA_STAGE0_ENTRIES, OP_NOT_EQUAL, PLAYER_ATTRIBUTE_GLOBALS,
     PLAYER_SCRIPT_NAME, QUEST_TYPE_NONE, SCRIPT_NAME, SCROLL_SCRIPT_NAME,
     SGE_FLAGS, TRAVEL_SCRIPT_NAME, TRAVEL_STAY, TRAVEL_VARIANTS,
     _skip_script_entry, build_plugin, prologue_for, travel_label, travel_props,
@@ -189,7 +189,7 @@ def test_hedr_count_matches_contents(built):
     _data, count, recs = built
     hedr = dict(recs[('TES4', 0)])['HEDR']
     assert struct.unpack('<I', hedr[4:8])[0] == count
-    assert count == (len(GLOBALS) + 1 + 1 + 2 + MESG_VARIANTS
+    assert count == (len(GLOBALS) + len(PLAYER_ATTRIBUTE_GLOBALS) + 1 + 1 + 2 + MESG_VARIANTS
                      + TRAVEL_VARIANTS + 3 + 5)
 
 
@@ -484,3 +484,15 @@ def test_no_two_records_share_a_formid(built):
     others = [fid for sig, fid in built[2] if sig != 'MESG' and fid >> 24 == 1]
     for block in blocks:
         assert not [f for f in others if f in block]
+
+
+def test_player_attribute_globals_sit_where_the_scripts_read_them(built):
+    """TES4Polyfill and the character rules read the player's attributes at 0xAF0 on, Strength to Luck."""
+    _data, _count, recs = built
+    names = ['Strength', 'Intelligence', 'Willpower', 'Agility',
+             'Speed', 'Endurance', 'Personality', 'Luck']
+    assert FID_GLOB_PLAYER_ATTRIBUTES & 0xFFFFFF == 0xAF0
+    assert len(PLAYER_ATTRIBUTE_GLOBALS) == len(names)
+    for i, name in enumerate(names):
+        subs = dict(recs[('GLOB', FID_GLOB_PLAYER_ATTRIBUTES + i)])
+        assert subs['EDID'].rstrip(b'\0').decode() == f'TESGS_Player{name}'

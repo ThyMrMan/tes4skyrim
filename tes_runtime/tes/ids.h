@@ -275,4 +275,43 @@ constexpr std::uint64_t kRefGetItemCount = 56173;
 // ActorValue 16 is Alchemy (Health is 24, engine.h kActorValueHealth).
 constexpr int kActorValueAlchemy = 16;
 
+// ---------------------------------------------------------------------------
+// Character rules: Skyrim's skill rates and leveling while a converted game's
+// rules are on. Read off 1.6.1170.
+// See: docs/commentary/tes_runtime_character.md#the-engine-side
+// ---------------------------------------------------------------------------
+
+// "Can level up" (0x77b400): the skill data's experience (+0) against its
+// stored threshold (+4), the data a pointer at the first field. Five direct
+// callers: the Skills menu's level-up branch (0x9606b7), a menu-free level-up
+// loop (0x356c0a, 0x356c28), and two that announce a waiting level-up: a
+// player notice (0x72ea57) and a menu flag (0x971372).
+constexpr std::uint64_t kCanLevelUp = 41565;
+
+// Set level (0x77b350): (skill data, level). Sets the player's level through
+// the actor base data (0x1d7d70), then runs the level-up bookkeeping with the
+// experience reset: no level-up screen, no perk point.
+constexpr std::uint64_t kSetPlayerLevel = 41563;
+
+// The player's skill data POINTER at PlayerCharacter+0x9b8, which the two
+// functions above take. A 1.6.x offset: read it through PlayerField (0x9c0 on
+// 1.7.104).
+constexpr std::size_t kOffPlayerSkills = 0x9b8;
+
+// GetSkillUsage(actor value, &useMult, &useOffset, &improveMult,
+// &improveOffset) (0x43e060): false for a value with no skill data. It reads
+// the ActorValueList singleton POINTER (0x20f6310): ActorValueInfo* entries
+// from +8, 8 bytes each, each holding its AVSK floats behind the pointer at
+// +0x108.
+constexpr std::uint64_t kGetSkillUsage = 27244;
+constexpr std::uint64_t kActorValueList = 400267;
+constexpr std::size_t kOffActorValueEntries = 0x8;
+constexpr std::size_t kOffActorValueSkill = 0x108;
+
+// Setting VALUES, read where each setting keeps it: fSkillUseCurve (0x20058c8),
+// the exponent of every skill's threshold in the skill advance (0x77ae60), and
+// fXPLevelUpBase (0x20058e0), which the "Level up available" message reads.
+constexpr std::uint64_t kSkillUseCurve = 374905;
+constexpr std::uint64_t kXPLevelUpBase = 374908;
+
 }  // namespace tesruntime::ids

@@ -269,7 +269,7 @@ def run_finalize_phases(st, export_dir: str, phase_done,
     file_size = os.path.getsize(st.output_path)
     print(f"Wrote {st.output_path} ({file_size:,} bytes)")
 
-    _write_seq_file(st.output_path, st.sge_quest_fids | _own_sge_quests(st.writer))
+    write_seq_file(st.output_path, st.sge_quest_fids | _own_sge_quests(st.writer))
     stale = sweep_stale_sidecars(st.output_path)
     if stale:
         print(f"  Removed {stale} stale runtime sidecar file(s)")
@@ -346,7 +346,7 @@ def _own_sge_quests(writer) -> set:
     return out
 
 
-def _write_seq_file(output_path: str, sge_quest_fids: set):
+def write_seq_file(output_path: str, sge_quest_fids: set):
     """Write a .seq file listing all StartGameEnabled quest FormIDs.
 
     The Skyrim engine reads this file on game start to initialize SGE quests.

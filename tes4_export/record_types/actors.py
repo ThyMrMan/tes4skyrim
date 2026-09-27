@@ -505,16 +505,21 @@ def export_BSGN(rec: Record) -> list:
 
 
 def export_SKIL(rec: Record) -> list:
-    """Skill."""
+    """Skill: INDX is the skill's actor value; DATA is action, attribute,
+    specialization and two use values (xEdit `wbDefinitionsTES4` SKIL)."""
     lines = []
     emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
+    index = get_subrecord(rec, "INDX")
+    if index and len(index.data) >= 4:
+        lines.append(f"INDX.Skill={struct.unpack_from('<i', index.data)[0]}")
     data = get_subrecord(rec, "DATA")
-    if data and len(data.data) >= 16:
-        d = data.data
-        lines.append(f"DATA.Attribute={struct.unpack_from('<i', d, 0)[0]}")
-        lines.append(f"DATA.Specialization={struct.unpack_from('<I', d, 4)[0]}")
-        lines.append(f"DATA.UseValue1={struct.unpack_from('<f', d, 8)[0]}")
-        lines.append(f"DATA.UseValue2={struct.unpack_from('<f', d, 12)[0]}")
+    if data and len(data.data) >= 20:
+        action, attribute, spec, use1, use2 = struct.unpack_from('<iII2f', data.data)
+        lines.append(f"DATA.Action={action}")
+        lines.append(f"DATA.Attribute={attribute}")
+        lines.append(f"DATA.Specialization={spec}")
+        lines.append(f"DATA.UseValue1={use1}")
+        lines.append(f"DATA.UseValue2={use2}")
     emit_string(lines, "DESC", get_subrecord(rec, "DESC"))
     return lines
 

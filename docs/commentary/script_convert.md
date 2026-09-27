@@ -1360,7 +1360,7 @@ The rule now, on **both** sides:
 
 | TES4 AV | Conversion |
 |---|---|
-| The 8 attributes | **DROPPED** (CTDA) / stubbed to `100.0` (script read), writes discarded |
+| The 8 attributes | **DROPPED** (CTDA); in scripts, read and written through `TES4Polyfill`, which keeps the player's for a game's [character rules](character_rules.md#attributes) and otherwise reads `100.0` and discards writes |
 | Skills | Translated to the TES5 skill index / name |
 | Shared derived + AI + magic values | Translated to the matching TES5 index |
 | Everything else (Magicka Multiplier, Attack Bonus, Silence, Telekinesis, …) | Dropped — no TES5 equivalent |
@@ -1373,9 +1373,9 @@ no way to raise an attribute, so enforcing it would lock the content away
 Three places must agree, and a change to one needs the same change in the others:
 `tes5_import/base/conditions.py` (`_TES4_AV_ATTRIBUTES` / `_TES4_AV_TO_TES5`,
 applied in `convert_ctda` for functions 14 `GetActorValue` and 277
-`GetBaseActorValue`), `script_convert/constants.py` (`TES4_ATTRIBUTES`,
-`ATTRIBUTE_STUB_VALUE`, `ACTOR_VALUE_MAP`), and
-`script_convert/static_scripts/TES4Polyfill.psc` (`IsTES4Attribute`).
+`GetBaseActorValue`), `script_convert/constants.py` (`TES4_ATTRIBUTES`, `ACTOR_VALUE_MAP`), and
+`script_convert/static_scripts/TES4Polyfill.psc` (`IsTES4Attribute`,
+`TES4AttributeStub`).
 
 Two AV names the map used to emit — `LuckModifier` and `MuteModifier` — are **not
 names the engine knows** (verified against `SkyrimSE.exe`'s AV name table, which
@@ -1383,6 +1383,15 @@ runs `…Blindness, WeaponSpeedMult…` with no silence entry), so every read
 returned 0 and every write was rejected. Skyrim's internal names for two skills
 are also *not* the UI names: use `Speechcraft` (not Speech) and `Marksman` (not
 Archery) in Papyrus strings; the CTDA side uses the numeric indices 17 and 8.
+
+<a id="encumbrance-is-two-values"></a>**Encumbrance is two values in Skyrim.**
+Oblivion keeps the carried weight and its cap in one actor value, as its
+modified and base value; Skyrim splits them into `InventoryWeight` and
+`CarryWeight`. So a read of Encumbrance becomes `InventoryWeight` and a base
+read stays the cap, and the over-encumbered idiom `player.getav encumbrance >
+player.getbaseav encumbrance` (MQ01's stage 75 and 78 tutorial) still compares
+the weight with the cap. Mapping both to `CarryWeight` compared the cap with
+itself, so neither tutorial stage could fire.
 
 ### Aggression/Confidence are ENUMS in TES5, not 0-100 (2026-07-28)
 <a id="aggression-confidence-are-enums"></a>

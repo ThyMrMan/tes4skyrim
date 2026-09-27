@@ -21,11 +21,14 @@ What it recovers
                grouped by the DIAL DATA.Type category they belong to.
 `--functions`  the condition/script functions with their opcodes, parameter
                counts and parameter types.
-`--json`       write the tables for the emulator to load.
+`--settings`   every game setting the engine registers, with its default
+               (a plugin's GMST overrides it; the master stores only changes).
+`--json`       write the tables for the emulator and the importer to load.
 
 Usage:
     python tools/disasm/oblivion_engine_extract.py --types
     python tools/disasm/oblivion_engine_extract.py --functions GetStage
+    python tools/disasm/oblivion_engine_extract.py --settings LevelUp
     python tools/disasm/oblivion_engine_extract.py --json tes4_export/oblivion_engine_tables.json
 """
 
@@ -33,6 +36,7 @@ import argparse
 import collections
 import json
 import math
+import re
 import struct
 import sys
 
@@ -91,11 +95,20 @@ class Exe:
                        s.VirtualAddress + max(s.Misc_VirtualSize,
                                               s.SizeOfRawData),
                        s.PointerToRawData) for s in pe.sections]
+        self._raw = [(s.PointerToRawData, s.SizeOfRawData, s.VirtualAddress)
+                     for s in pe.sections]
 
     def rva_to_off(self, rva):
         for va, vend, praw in self._secs:
             if va <= rva < vend:
                 return praw + (rva - va)
+        return None
+
+    def off_to_rva(self, off):
+        """The RVA a file offset loads at, or None outside every section."""
+        for praw, size, va in self._raw:
+            if praw <= off < praw + size:
+                return va + (off - praw)
         return None
 
     def cstring(self, va):
@@ -176,6 +189,71 @@ def read_functions(exe):
     return out
 
 
+def _setting_value(exe, name, before):
+    """The default a registration pushes ahead of the setting's name, from the
+    bytes `before` that push (a `mov ecx, <setting>` between is skipped)."""
+    if before[-5] == 0xB9:
+        before = before[:-5]
+    if name[0] == 'f':
+        if before[-4:] != b'\x51\xd9\x1c\x24':
+            return None
+        head = before[:-4]
+        constants = {b'\xd9\xe8': 1.0, b'\xd9\xee': 0.0}
+        if head[-2:] in constants:
+            return constants[head[-2:]]
+        if head[-6:-4] == b'\xd9\x05':
+            addr, = struct.unpack('<I', head[-4:])
+            return round(struct.unpack('<f', exe.entry(addr - exe.base, 4))[0], 6)
+        return None
+    if before[-2] == 0x6A:
+        return struct.unpack('<b', before[-1:])[0]
+    if before[-5] != 0x68:
+        return None
+    value, = struct.unpack('<i', before[-4:])
+    return exe.cstring(value) if name[0] == 's' else value
+
+
+def read_settings(exe):
+    """Every game setting the engine registers with its default: the value
+    pushed before `push <name>`, each name's first registration winning."""
+    out = {}
+    for match in re.finditer(rb'[fisb][A-Z][A-Za-z0-9_]{2,60}\0', exe.data):
+        name = match.group()[:-1].decode()
+        rva = exe.off_to_rva(match.start())
+        if name in out or rva is None:
+            continue
+        push = b'\x68' + struct.pack('<I', exe.base + rva)
+        for ref in re.finditer(re.escape(push), exe.data):
+            value = _setting_value(exe, name, exe.data[max(0, ref.start() - 16):ref.start()])
+            if value is not None:
+                out[name] = value
+                break
+    return dict(sorted(out.items()))
+
+
+def _print_functions(funcs, needle):
+    """List the functions whose name contains `needle`, with their parameters."""
+    shown = [f for f in funcs if needle in f['name'].lower()]
+    print(f'{len(shown)} of {len(funcs)} functions:')
+    for f in shown:
+        ref = ' [reference]' if f['takes_reference'] else ''
+        idx = ('CTDA %d' % f['ctda_index']
+               if f['ctda_index'] is not None else 'script-only')
+        print(f'  0x{f["opcode"]:04X}  {idx:<14} {f["name"]}{ref}')
+        for k, prm in enumerate(f['params']):
+            print(f'        param{k}: {prm["name"]} '
+                  f'(type 0x{prm["type"]:02X})')
+    print()
+
+
+def _print_settings(settings, needle):
+    """List the settings whose name contains `needle`, with their defaults."""
+    for name, value in settings.items():
+        if needle in name.lower():
+            print(f'  {name:<40} {value!r}')
+    print()
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -184,6 +262,8 @@ def main():
     ap.add_argument('--types', action='store_true')
     ap.add_argument('--functions', metavar='NAME', nargs='?', const='',
                     help='list condition functions, optionally filtered')
+    ap.add_argument('--settings', metavar='NAME', nargs='?', const='',
+                    help='list setting defaults, optionally filtered')
     ap.add_argument('--json', help='write all tables to this JSON path')
     args = ap.parse_args()
 
@@ -197,7 +277,9 @@ def main():
 
     types = read_types(exe)
     funcs = read_functions(exe)
-    show_default = not (args.types or args.functions is not None or args.json)
+    settings = read_settings(exe)
+    show_default = not (args.types or args.functions is not None
+                        or args.settings is not None or args.json)
 
     if args.types or show_default:
         print(f'{len(types)} dialogue type names, in engine order:')
@@ -206,25 +288,16 @@ def main():
         print()
 
     if args.functions is not None:
-        needle = args.functions.lower()
-        shown = [f for f in funcs if needle in f['name'].lower()]
-        print(f'{len(shown)} of {len(funcs)} functions:')
-        for f in shown:
-            ref = ' [reference]' if f['takes_reference'] else ''
-            idx = ('CTDA %d' % f['ctda_index']
-                   if f['ctda_index'] is not None else 'script-only')
-            print(f'  0x{f["opcode"]:04X}  {idx:<14} {f["name"]}{ref}')
-            for k, prm in enumerate(f['params']):
-                print(f'        param{k}: {prm["name"]} '
-                      f'(type 0x{prm["type"]:02X})')
-        print()
-
+        _print_functions(funcs, args.functions.lower())
+    if args.settings is not None:
+        _print_settings(settings, args.settings.lower())
     if args.json:
         with open(args.json, 'w', encoding='utf-8') as f:
             json.dump({'source': exe.path, 'categories': CATEGORY_NAMES,
-                       'types': types, 'functions': funcs}, f, indent=2)
+                       'types': types, 'functions': funcs,
+                       'settings': settings}, f, indent=2)
         print(f'wrote {args.json}: {len(types)} type names, '
-              f'{len(funcs)} functions')
+              f'{len(funcs)} functions, {len(settings)} settings')
 
 
 if __name__ == '__main__':

@@ -81,13 +81,23 @@ save; you just lose these behaviors.
   CraftingMenu swap and exports `TESRuntime_OpenBench` / `TESRuntime_BenchReady`,
   which MorrowindRuntime's enchanting service calls.
   [tes_runtime_alchemy.md](../../docs/commentary/tes_runtime_alchemy.md#crafting-bench)
+- **Character rules** (`character_rules.cpp`, `character_rates.cpp`): off
+  until a rules quest sends `TESCharacterRules`, and off again at every load.
+  While on, each skill's rates follow the source game's curve and class, every
+  call to the level-up check answers no, and `TESCharacterLevel` sets the
+  player's level; all in memory. Reads the `<plugin>.character.json` sidecars
+  `tes5_import/character_data.py` writes.
+  [tes_runtime_character.md](../../docs/commentary/tes_runtime_character.md)
 
-Reads `Data\SKSE\Plugins\TESRuntime\*.crime.json` and `*.apparatus.json`.
+Reads `Data\SKSE\Plugins\TESRuntime\*.crime.json`, `*.apparatus.json` and
+`*.character.json`.
 Co-save: owner `'TES4'`, record `'JRNL'`. Log: `TESRuntime.log`.
 
 Licensing: `alchemy.cpp` ports OpenMW's `applyTools` line for line, so the
 binary is **GPL-3.0**; the rest of this folder is MIT.
 
-`build.bat` → `..\dist\TESRuntime.dll` and two headless tests, each printing
-`OK`: `journal_log_test.exe` (the journal record store and the journal's row
-rules) and `alchemy_test.exe` (the apparatus ratio and the sidecar reader).
+`build.bat` → `..\dist\TESRuntime.dll` and three headless tests:
+`journal_log_test.exe` (the journal record store and the journal's row rules)
+and `alchemy_test.exe` (the apparatus ratio and the sidecar reader), each
+printing `OK`, and `character_rates_test.exe` (the character data reader and
+the skill rate math), printing `passed`.

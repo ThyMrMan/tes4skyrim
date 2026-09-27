@@ -11,7 +11,11 @@
 //     docs/commentary/tes_runtime_alchemy.md#alchemy-apparatus);
 //   * turns and moves what a converted TES4 GameMode block steps every frame,
 //     at a steady 30 Hz (spin.cpp,
-//     docs/commentary/morrowind_runtime.md#move-and-rotate-are-rates).
+//     docs/commentary/morrowind_runtime.md#move-and-rotate-are-rates);
+//   * while a converted game's character rules are on, sets Skyrim's skill
+//     rates from them, withholds Skyrim's own level-up and sets the level
+//     they grant (character_rules.cpp,
+//     docs/commentary/tes_runtime_character.md).
 
 #include <windows.h>
 
@@ -19,6 +23,7 @@
 
 #include "addresses.h"
 #include "alchemy.h"
+#include "character_rules.h"
 #include "crafting.h"
 #include "crime.h"
 #include "engine.h"
@@ -32,12 +37,13 @@ using namespace tesruntime;
 
 namespace {
 
-constexpr UInt32 kPluginVersion = 6;
+constexpr UInt32 kPluginVersion = 7;
 constexpr UInt32 kSerializationId = 'TES4';
 
 bool g_engineResolved = false;
 bool g_crimeInstalled = false;
 bool g_journalInstalled = false;
+bool g_characterInstalled = false;
 SKSEMessagingInterface* g_messaging = nullptr;
 
 bool CaptureVm(void* vm) {
@@ -48,6 +54,10 @@ bool CaptureVm(void* vm) {
 
 void OnMessage(SKSEMessagingInterface::Message* msg) {
     if (!msg) return;
+    if (msg->type == SKSEMessagingInterface::kMessage_NewGame ||
+        msg->type == SKSEMessagingInterface::kMessage_PreLoadGame) {
+        CharacterRulesOff();
+    }
     if (msg->type == SKSEMessagingInterface::kMessage_NewGame) {
         JournalRevert(nullptr);
     } else if (msg->type == SKSEMessagingInterface::kMessage_DataLoaded) {
@@ -56,6 +66,7 @@ void OnMessage(SKSEMessagingInterface::Message* msg) {
             StartCrimeTick();
         }
         if (g_journalInstalled) StartJournalTick();
+        if (g_characterInstalled) CheckCharacterLayout();
         if (g_engineResolved) {
             // The bench opener first: the apparatus hooks refuse to go in
             // without it.
@@ -136,10 +147,12 @@ __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* skse) {
     g_crimeInstalled = g_engineResolved && LoadCrimeSidecars();
     g_journalInstalled = InstallJournal();
     const bool spin = g_engineResolved && InstallSpin(g_messaging);
-    Log("hooks: jails %s, journal stage text %s, GameMode spin %s",
+    g_characterInstalled = g_engineResolved && InstallCharacterRules(g_messaging);
+    Log("hooks: jails %s, journal stage text %s, GameMode spin %s, character rules %s",
         g_crimeInstalled ? "installed" : "NOT installed",
         g_journalInstalled ? "installed" : "NOT installed",
-        spin ? "installed" : "NOT installed");
+        spin ? "installed" : "NOT installed",
+        g_characterInstalled ? "installed" : "NOT installed");
     return true;
 }
 

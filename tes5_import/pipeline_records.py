@@ -38,12 +38,14 @@ import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 
-from .registry import IMPORT_DISPATCH, TYPE_MAP
+from .registry import IMPORT_DISPATCH
 from .overrides.nested import (build_nested_overrides)
+from .character_data import write_character_sidecar
 from .dialogue.quest import compute_quest_priorities, convert_QUST
 from .dialogue.morrowind_sidecar import write_morrowind_sidecar
 from .record_types.bodypart_falloutnv import write_falloutnv_sidecars
 from .record_types.sound import convert_SOUN
+from .record_types.weather import record_sunless_climate, reset_sunless_climates
 from .base.owned_records import (
     WELL_KNOWN_PROPERTIES,
 )
@@ -98,37 +100,25 @@ def _emit_override(st, ov, rec: dict) -> None:
         st.writer.adoption.queue_copy(copy)
 
 
-def _phase1_simple_records(st, export_dir: str, phase_done, skip_types) -> None:
-    """Phase 1: convert every flat top-level record type.
+#: Record types a later phase converts, never phase 1.
+_SEPARATE_PHASE_TYPES = frozenset({'CELL', 'WRLD', 'DIAL', 'INFO', 'REFR', 'ACHR',
+                                   'ACRE', 'LAND', 'LTEX', 'SOUN', 'PGRD', 'QUST'})
 
-    Serial on purpose, and an override reuses the master's bytes.
-    See: docs/commentary/tes5_import_pipeline.md#phase-1-is-serial-on-purpose"""
-    print("\nConverting records...")
-    st.t2 = time.time()
+#: Phase 1 converters that take the writer, to mint companion records.
+_WRITER_TYPES = frozenset({'ARMO', 'CLOT', 'WEAP', 'AMMO', 'NPC_', 'CREA', 'BOOK',
+                           'ENCH', 'SPEL', 'SGST', 'ALCH', 'INGR', 'HAIR', 'PROJ',
+                           'IPCT', 'IPDS', 'EXPL', 'ADDN', 'MUSC'})
 
-    simple_types = set()
-    for sig in sorted(st.by_type.keys()):
-        if sig in st.all_skip:
-            continue
-        if sig in ('CELL', 'WRLD', 'DIAL', 'INFO', 'REFR', 'ACHR', 'ACRE', 'LAND',
-                    'LTEX', 'SOUN', 'PGRD', 'QUST'):
-            continue  # Handled separately
-        if sig not in IMPORT_DISPATCH:
-            continue
-        simple_types.add(sig)
 
-    _WRITER_TYPES = {'ARMO', 'CLOT', 'WEAP', 'AMMO', 'NPC_', 'CREA', 'BOOK',
-                     'ENCH', 'SPEL', 'SGST', 'ALCH', 'INGR', 'HAIR', 'PROJ', 'IPCT', 'IPDS',
-                     'EXPL', 'ADDN', 'MUSC'}
+def _simple_types(st) -> list:
+    """The record types phase 1 converts, sorted."""
+    return sorted(sig for sig in st.by_type
+                  if sig not in st.all_skip and sig not in _SEPARATE_PHASE_TYPES
+                  and sig in IMPORT_DISPATCH)
 
-    st.converted = 0
-    st.errors = 0
 
-    work_items = [(sig, TYPE_MAP.get(sig, sig), rec)
-                  for sig in sorted(simple_types)
-                  for rec in st.by_type[sig]]
-
-    from .record_types.weather import record_sunless_climate, reset_sunless_climates
+def _record_sunless_climates(st) -> None:
+    """Note every sunless climate, the masters' and this plugin's, before weathers convert."""
     reset_sunless_climates()
     if st.ctx and getattr(st.ctx, 'master_export', None):
         for mrec in st.ctx.master_export.values():
@@ -137,37 +127,57 @@ def _phase1_simple_records(st, export_dir: str, phase_done, skip_types) -> None:
     for rec in st.by_type.get('CLMT', []):
         record_sunless_climate(rec)
 
-    for sig, target_sig, rec in work_items:
+
+def _convert_simple_record(st, sig: str, rec: dict) -> None:
+    """Convert one phase 1 record, or emit its override; an error is counted, not raised."""
+    try:
+        ov = st.ctx.build(rec, sig) if st.ctx else None
+        if ov is not None and ov.status != 'reconvert':
+            _emit_override(st, ov, rec)
+            return
         converter = IMPORT_DISPATCH[sig]
-        try:
-            src_fid = (rec.get('FormID') or '').upper()
-
-            ov = st.ctx.build(rec, sig) if st.ctx else None
-            if ov is not None and ov.status != 'reconvert':
-                _emit_override(st, ov, rec)
-                continue
-
-            with st.writer.converting(src_fid, get_formid(rec, 'FormID')):
-                if sig in _WRITER_TYPES:
-                    record_bytes = converter(rec, writer=st.writer)
-                else:
-                    record_bytes = converter(rec)
-            if not record_bytes:
-                continue
+        src_fid = (rec.get('FormID') or '').upper()
+        with st.writer.converting(src_fid, get_formid(rec, 'FormID')):
+            if sig in _WRITER_TYPES:
+                record_bytes = converter(rec, writer=st.writer)
+            else:
+                record_bytes = converter(rec)
+        if record_bytes:
             st.writer.add_record(record_bytes[:4].decode('ascii', 'replace'),
-                              record_bytes)
+                                 record_bytes)
             st.converted += 1
-        except Exception as e:
-            edid = get_str(rec, 'EditorID', '?')
-            print(f"  ERROR converting {sig} '{edid}': {e}")
-            st.errors += 1
+    except Exception as e:
+        print(f"  ERROR converting {sig} '{get_str(rec, 'EditorID', '?')}': {e}")
+        st.errors += 1
+
+
+def _write_runtime_sidecars(st, export_dir: str) -> None:
+    """Write the plugin's runtime sidecars: Fallout's, Morrowind's and TESRuntime's."""
     write_falloutnv_sidecars(st.by_type, st.writer, st.output_path)
     staged = write_morrowind_sidecar(
         export_dir, st.output_path, os.path.basename(st.output_path),
         writer=st.writer,
         master_index=getattr(st.ctx, 'master_index', None) if st.ctx else None)
+    staged += write_character_sidecar(st.by_type, export_dir, st.output_path,
+                                      getattr(st.ctx, 'master_export', None))
     if staged:
         print(f'  Staged {staged} runtime sidecar file(s)')
+
+
+def _phase1_simple_records(st, export_dir: str, phase_done, skip_types) -> None:
+    """Phase 1: convert every flat top-level record type.
+
+    Serial on purpose, and an override reuses the master's bytes.
+    See: docs/commentary/tes5_import_pipeline.md#phase-1-is-serial-on-purpose"""
+    print("\nConverting records...")
+    st.t2 = time.time()
+    st.converted = 0
+    st.errors = 0
+    work_items = [(sig, rec) for sig in _simple_types(st) for rec in st.by_type[sig]]
+    _record_sunless_climates(st)
+    for sig, rec in work_items:
+        _convert_simple_record(st, sig, rec)
+    _write_runtime_sidecars(st, export_dir)
     phase_done(f'simple records ({len(work_items)})')
 
 

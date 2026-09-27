@@ -74,6 +74,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [asset_convert_terrain.md](commentary/asset_convert_terrain.md) | asset_convert/lod/terrain_lod.py — terrain, LOD and grass |
 | [asset_convert_texture.md](commentary/asset_convert_texture.md) | asset_convert/texture/parallax.py — textures, shaders and parallax |
 | [asset_convert_ui.md](commentary/asset_convert_ui.md) | asset_convert/ui/ui_menus.py - Oblivion UI in Skyrim |
+| [character_rules.md](commentary/character_rules.md) | character_rules/, tools/release/make_character_rules_esp.py - a converted game's leveling for the player |
 | [ck_exe_disassembly.md](commentary/ck_exe_disassembly.md) | tools/disasm/ - CreationKit.exe as a source |
 | [ck_navmesh_generation.md](commentary/ck_navmesh_generation.md) | tools/navmesh/ - how the CK generates navmesh |
 | [ck_reference_init_hang.md](commentary/ck_reference_init_hang.md) | tes5_import/base/writer.py - the CK reference-init hang |
@@ -87,6 +88,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [script_convert_morrowind.md](commentary/script_convert_morrowind.md) | script_convert/ - what TES3 scripts do differently |
 | [tes4_export_falloutnv.md](commentary/tes4_export_falloutnv.md) | tes4_export/record_types/falloutnv.py - FO3/FNV export deltas |
 | [tes4_export_morrowind.md](commentary/tes4_export_morrowind.md) | tes4_export/tes3_reader.py, export_morrowind.py - TES3 export and Morroblivion compatibility |
+| [tes5_import_character_data.md](commentary/tes5_import_character_data.md) | tes5_import/character_data.py - the character data file |
 | [tes5_import_conditions.md](commentary/tes5_import_conditions.md) | tes5_import/base/conditions.py - CTDA translation |
 | [tes5_import_dialogue.md](commentary/tes5_import_dialogue.md) | tes5_import/dialogue/converter.py - dialogue and voice |
 | [tes5_import_actors.md](commentary/tes5_import_actors.md) | tes5_import/record_types/actor_common.py, npc.py, creature.py - actor conversion |
@@ -104,6 +106,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [tes5_import_weather.md](commentary/tes5_import_weather.md) | tes5_import/record_types/world.py - weather and climate |
 | [tesgameselect.md](commentary/tesgameselect.md) | tools/release/make_game_select_esp.py, TESGameSelect/ - the new-game menu, held openings, starting gear and the Elder Scroll travel item |
 | [tes_runtime_alchemy.md](commentary/tes_runtime_alchemy.md) | tes_runtime/tes/alchemy*.cpp, tes_runtime/tes/crafting.cpp, tes5_import/record_types/apparatus.py - alchemy apparatus open Skyrim's menu and scale the potion; the shared crafting bench |
+| [tes_runtime_character.md](commentary/tes_runtime_character.md) | tes_runtime/tes/character_*.cpp - Skyrim's skill rates and leveling under a converted game's rules |
 | [tes_runtime_crime.md](commentary/tes_runtime_crime.md) | tes_runtime/tes/crime.cpp, tes5_import/record_types/crime.py - bounty realms, jails and the arrest |
 | [tes_runtime_guns.md](commentary/tes_runtime_guns.md) | tes_runtime/fallout/fire.cpp - the gun shot, reload key and ammo restriction in FalloutRuntime |
 | [tes_runtime_journal.md](commentary/tes_runtime_journal.md) | tes_runtime/tes/journal_objectives.cpp, asset_convert/ui/journal_patch.py - a clicked quest objective shows its stage's text |
