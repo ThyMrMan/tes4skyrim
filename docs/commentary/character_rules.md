@@ -7,9 +7,12 @@
 `script_convert/commands.py` (`actor_value`), and the player attribute globals
 in `tools/release/make_game_select_esp.py`.
 
-**Not yet played in game.** It builds on TESRuntime's character rules
+It builds on TESRuntime's character rules
 ([tes_runtime_character.md](tes_runtime_character.md)), which change
-Skyrim's own skill rates and leveling while these rules are on.
+Skyrim's own skill rates and leveling while these rules are on. Played in game
+with `Oblivion.esm` under MO2: rules on at the Cyrodiil choice, the class taken
+at the tutorial's class menu, and a level-up at rest that set the player's
+level.
 
 ## <a id="what-it-does"></a>What it does
 
@@ -58,10 +61,48 @@ with its scripts rebuilt, since attribute reads now go through the polyfill.
 The rules follow the character, not the load order: they run only for a
 character whose TESGameSelect choice (`TESGameSelectQuest.ChosenGame`) is this
 game, so in a profile with every world loaded each game's rules stay off for
-the others' characters. Until the choice is made (a new game, before the menu)
-the quest waits on message-box closes; once the save's game is known and is
-another one, it stops listening for good. With no TESGameSelect there is no
-recorded game, and Skyrim's own rules stay.
+the others' characters. The game is read again at every load, because
+TESGameSelect keeps it with the save and TESRuntime starts every load with the
+rules off.
+
+Both choices are made in message boxes whose answer is written after the box
+closes, so the rules look every two seconds (`RegisterForSingleUpdate`) until
+they know both, rather than waking on a menu event:
+
+1. **The game.** `ChosenGame` reads Skyrim (0) while TESGameSelect's menu is
+   open, so the rules take it only once `HasRun` is set, `Selecting` is off
+   (the chosen game has started, after any fall-back to Skyrim) and the save's
+   ids are current (`IdVersion`, renumbered by `MigrateIds`); TESGameSelect's
+   travel quest takes the same answer. `ChosenGame` stays the game the
+   character began in when the travel scroll moves them to another world, so
+   the rules follow the starting world. Once the game is this one, Skyrim's
+   leveling is handed to TESRuntime straight away, with no class multiplier,
+   so the tutorial before the class menu is not leveled by Skyrim's rules.
+2. **The class.** Then the rules begin ([character creation](#character-creation))
+   and TESRuntime is told the class.
+
+Another game's character settles on Skyrim's rules for the session. So does a
+loaded save whose TESGameSelect menu never ran (begun before it was installed);
+a new game waits, because the menu runs after this quest starts. With no
+TESGameSelect there is no recorded game, and Skyrim's own rules stay.
+
+The rules quest's start fires `OnInit` twice in a new game, as Start Game
+Enabled quests do; both runs are harmless. Each decision is traced to the
+Papyrus log under `[TES4Rules]`, and TESRuntime logs every `TESCharacter*` event
+it receives.
+
+### <a id="papyrus-names-ignore-case"></a>🛑 Papyrus names ignore case
+
+The first build never turned the rules on, in four playtests, because a local
+`selector` shared its name with the property `SELECTOR` (`"TESGameSelect.esp"`).
+To the compiler they are one name: the call read the unset local, looking up a
+file called None (`GetModByName` answered 255, `GetFormFromFile` "File "None"
+does not exist"), and the assignment compiled to a property write, logged as
+`Property setter for property SELECTOR not found`. Every run read "no
+TESGameSelect" and settled on Skyrim's rules. The compiled `.pex` showed it
+(`cast ::temp3 selector`, `propset selector self`). No local or parameter in the
+rules scripts may share a script-level name in any case;
+`tests/test_character_rules_esp.py` checks it.
 
 ## <a id="character-creation"></a>Character creation
 

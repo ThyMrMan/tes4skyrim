@@ -209,6 +209,9 @@ int RulesSink::ReceiveEvent(const ModEvent* event, void*) {
     const std::string arg = event->strArg ? event->strArg : "";
     const float value = event->numArg;
     std::function<void()> fn;
+    if (_strnicmp(event->eventName, "TESCharacter", 12) == 0) {
+        Log("character: event %s '%s' %g", event->eventName, arg.c_str(), value);
+    }
     if (_stricmp(event->eventName, kRulesEvent) == 0) {
         fn = value != 0.0f ? std::function<void()>([arg] { RulesOn(arg); })
                            : std::function<void()>(CharacterRulesOff);

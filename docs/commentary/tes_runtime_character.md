@@ -3,9 +3,12 @@
 **Code:** `tes_runtime/tes/character_rules.cpp`, `tes_runtime/tes/character_rates.cpp`,
 `tes_runtime/tes/character_rates_test.cpp`, `tes_runtime/tes/ids.h` (Character rules).
 
-**Not yet played in game.** Nothing turns it on until the rules quest of the
-classic character systems work exists; until then it loads the character
-data files, hooks the level-up check and waits.
+Played in game with `Oblivion.esm`'s [rules plugin](character_rules.md): the
+layout verified on 1.6.1170, the rules turned on with the curve at 1.5, the
+class rates followed Battlemage, and a level-up set the player's level to 2.
+Without a rules plugin it loads the character data files, hooks the level-up
+check and waits. Every `TESCharacter*` event it receives is logged as
+`character: event <name> '<strArg>' <numArg>`.
 
 ## <a id="what-it-changes"></a>What it changes, and when
 

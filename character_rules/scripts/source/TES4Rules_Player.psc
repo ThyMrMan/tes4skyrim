@@ -6,7 +6,7 @@ belongs to. See docs/commentary/character_rules.md}
 TES4Rules_Main Property Rules Auto
 
 Event OnPlayerLoadGame()
-	Rules.CheckCharacter()
+	Rules.Loaded()
 EndEvent
 
 Event OnObjectEquipped(Form akBaseObject, ObjectReference akReference)

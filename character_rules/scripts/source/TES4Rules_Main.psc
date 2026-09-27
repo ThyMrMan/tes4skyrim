@@ -55,6 +55,7 @@ Int Property LUCK = 7 AutoReadOnly
 Int Property PICKS = 3 AutoReadOnly
 Float Property ATTRIBUTE_CAP = 100.0 AutoReadOnly
 Float Property HEALTH_PER_LEVEL = 0.1 AutoReadOnly    ; of Endurance, at each level-up
+Float Property POLL_SECONDS = 2.0 AutoReadOnly       ; while the game or class is still being chosen
 Int Property SELECTOR_QUEST = 0xA00 AutoReadOnly       ; TESGameSelectQuest in TESGameSelect.esp
 Int Property PLAYER_ATTRIBUTES = 0xAF0 AutoReadOnly    ; TESGS_PlayerStrength, then the other seven
 String Property SELECTOR = "TESGameSelect.esp" AutoReadOnly
@@ -64,7 +65,9 @@ String Property SELECTOR = "TESGameSelect.esp" AutoReadOnly
 ; ---------------------------------------------------------------------------
 
 Bool started = False
-Bool settled = False        ; this save's game is decided and it is not ours
+Bool settled = False        ; this session: the game is decided and it is not ours
+Bool on = False             ; this session: TESRuntime has these rules on
+String lastSeen = ""        ; the last TESGameSelect state traced
 Int classIndex = -1
 Int[] sourceLevels
 Int[] attributeIncreases
@@ -83,56 +86,102 @@ Bool announced = False
 ; ---------------------------------------------------------------------------
 
 Event OnInit()
+	Debug.Trace("[TES4Rules] " + Plugin + ": rules quest started")
 	CheckCharacter()
 EndEvent
 
-; On every load (the player alias), and at each message box close until the
-; rules have begun: the game and the class are both chosen in message boxes.
-Function CheckCharacter()
+; Every load starts over: TESRuntime has the rules off, and the game is read
+; again from TESGameSelect, which keeps it with the save.
+Function Loaded()
+	Debug.Trace("[TES4Rules] " + Plugin + ": game loaded")
+	settled = False
+	on = False
+	CheckCharacter(True)
+EndFunction
+
+; Whether this character plays by these rules. Skyrim's own leveling is handed
+; over as soon as the game is chosen; the rules begin once the class is too.
+; Until both are known this looks again every few seconds: an update survives
+; the start of a new game, where a menu registration made in OnInit may not.
+Function CheckCharacter(Bool fromLoad = False)
 	If settled
 		Return
 	EndIf
-	Int game = ChosenGame()
+	Int game = ChosenGame(fromLoad)
 	If game == -1
-		RegisterForMenu("MessageBoxMenu")
+		RegisterForSingleUpdate(POLL_SECONDS)
 		Return
 	ElseIf game != GameId
-		settled = True
-		Active.SetValue(0)
-		UnregisterForAllMenus()
+		Settle(game)
 		Return
 	EndIf
+	If !on
+		TurnOn()
+	EndIf
 	If !started
-		Int choice = ClassChoice.GetValue() as Int
-		If choice < 1 || choice > ClassIds.Length
-			RegisterForMenu("MessageBoxMenu")
+		If !Begin()
+			RegisterForSingleUpdate(POLL_SECONDS)
 			Return
 		EndIf
-		Begin()
+		SendClass()
 	EndIf
-	Resume()
+	Recount()
 EndFunction
 
-; The game this character chose in TESGameSelect, or -1 while undecided. With no
-; TESGameSelect there is no recorded game, which keeps Skyrim's own rules.
-Int Function ChosenGame()
-	If Game.GetModByName(SELECTOR) == 255
+Event OnUpdate()
+	CheckCharacter()
+EndEvent
+
+; The game this character began in (TESGameSelect's ChosenGame), or -1 until it
+; is final: its menu still to show, open (Selecting), or the game not yet
+; started, or an older save's ids not yet renumbered (MigrateIds). TESGameSelect's
+; travel quest takes the same answer. -2 means Skyrim's own rules: no
+; TESGameSelect, or a loaded save whose menu never ran (begun before it was
+; installed). A new game's menu runs after this quest starts, so it waits.
+Int Function ChosenGame(Bool fromLoad)
+	TESGameSelectQuest gameSelect = Game.GetFormFromFile(SELECTOR_QUEST, SELECTOR) as TESGameSelectQuest
+	If !gameSelect
+		Debug.Trace("[TES4Rules] " + Plugin + ": no TESGameSelect quest")
 		Return -2
 	EndIf
-	TESGameSelectQuest selector = Game.GetFormFromFile(SELECTOR_QUEST, SELECTOR) as TESGameSelectQuest
-	If !selector || !selector.HasRun
-		Return -1
+	String seen = "TESGameSelect HasRun " + gameSelect.HasRun + ", Selecting " + gameSelect.Selecting + ", ChosenGame " + gameSelect.ChosenGame + ", ids " + gameSelect.IdVersion + ", from load " + fromLoad + ", class choice " + ClassChoice.GetValue()
+	If seen != lastSeen
+		lastSeen = seen
+		Debug.Trace("[TES4Rules] " + Plugin + ": " + seen)
 	EndIf
-	Return selector.ChosenGame
+	If gameSelect.HasRun && !gameSelect.Selecting && gameSelect.IdVersion == gameSelect.ID_VERSION
+		Return gameSelect.ChosenGame
+	ElseIf fromLoad && !gameSelect.HasRun
+		Return -2
+	EndIf
+	Return -1
+EndFunction
+
+; Not this game's character: Skyrim's own rules, and nothing more to listen for.
+Function Settle(Int game)
+	Debug.Trace("[TES4Rules] " + Plugin + ": game " + game + " chosen, not this one; Skyrim's rules")
+	settled = True
+	If on
+		SendModEvent("TESCharacterRules", "", 0.0)
+		on = False
+	EndIf
+	Active.SetValue(0)
+	UnregisterForAllMenus()
+	UnregisterForSleep()
 EndFunction
 
 ; ---------------------------------------------------------------------------
 ; Character creation: the class, race and sign are chosen
 ; ---------------------------------------------------------------------------
 
-Function Begin()
+; False while no class is chosen yet.
+Bool Function Begin()
+	Int choice = ClassChoice.GetValue() as Int
+	If choice < 1 || choice > ClassIds.Length
+		Return False
+	EndIf
 	Actor player = Game.GetPlayer()
-	classIndex = (ClassChoice.GetValue() as Int) - 1
+	classIndex = choice - 1
 	Int race = Races.Find(player.GetRace())
 	Bool female = player.GetActorBase().GetSex() == 1
 	Int a = 0
@@ -156,7 +205,8 @@ Function Begin()
 	attributeIncreases = Utility.CreateIntArray(ATTRIBUTES)
 	majorIncreases = 0
 	started = True
-	UnregisterForMenu("MessageBoxMenu")
+	Debug.Trace("[TES4Rules] " + Plugin + ": class " + ClassIds[classIndex] + ", race " + race + "; the rules begin")
+	Return True
 EndFunction
 
 ; Each source skill at its starting level, and each Skyrim skill raised to the
@@ -223,7 +273,9 @@ EndFunction
 ; Every load: hand Skyrim's own leveling to TESRuntime and listen again
 ; ---------------------------------------------------------------------------
 
-Function Resume()
+Function TurnOn()
+	Debug.Trace("[TES4Rules] " + Plugin + ": this game's character; Skyrim's leveling handed to TESRuntime")
+	on = True
 	Active.SetValue(1)
 	RegisterForMenu("BarterMenu")
 	RegisterForMenu("Book Menu")
@@ -232,8 +284,14 @@ Function Resume()
 	RegisterForMenu("Lockpicking Menu")
 	RegisterForSleep()
 	SendModEvent("TESCharacterRules", Plugin, 1.0)
-	SendModEvent("TESCharacterClass", ClassIds[classIndex], 0.0)
-	Recount()
+	SendClass()
+EndFunction
+
+; Until a class is named, TESRuntime's skill rates use no class multiplier.
+Function SendClass()
+	If started
+		SendModEvent("TESCharacterClass", ClassIds[classIndex], 0.0)
+	EndIf
 EndFunction
 
 ; ---------------------------------------------------------------------------
@@ -364,10 +422,6 @@ Event OnMenuOpen(String menuName)
 EndEvent
 
 Event OnMenuClose(String menuName)
-	If menuName == "MessageBoxMenu" && !started
-		CheckCharacter()
-		Return
-	EndIf
 	Recount()
 	If menuName == "BarterMenu"
 		bartering = False
@@ -409,6 +463,7 @@ Function LevelUp()
 	majorIncreases -= SkillsPerLevel
 	attributeIncreases = Utility.CreateIntArray(ATTRIBUTES)
 	announced = majorIncreases >= SkillsPerLevel
+	Debug.Trace("[TES4Rules] " + Plugin + ": level " + level)
 	SendModEvent("TESCharacterLevel", "", level as Float)
 EndFunction
 

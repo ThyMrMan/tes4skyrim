@@ -6,15 +6,21 @@ reads, decoded back out of the VMAD.
 
 See: docs/commentary/character_rules.md#the-rules-plugin
 """
+import re
 import struct
+from pathlib import Path
 
 from tes5_import.base.tes5_reader import records
-from tools.release.make_character_rules_esp import (FUNC_GET_GLOBAL_VALUE, SHARES_EVENT,
+from tools.release.make_character_rules_esp import (FUNC_GET_GLOBAL_VALUE, GAME_IDS, SHARES_EVENT,
                                                     SKILL_EVENT_LAST_CHILD, SKILL_EVENT_NODE,
                                                     build_plugin)
 
 MASTERS = ['Skyrim.esm', 'Oblivion.esm']
 CLASS_CHOICE = 0x01000A41
+ROOT = Path(__file__).resolve().parent.parent
+RULES_SOURCE = ROOT / 'character_rules' / 'scripts' / 'source'
+#: Words that can open a Papyrus line as `<word> <name>` without declaring anything.
+STATEMENT_WORDS = {'if', 'elseif', 'while', 'return', 'else', 'not'}
 
 
 def _skill(name, attribute, spec, skyrim):
@@ -173,3 +179,53 @@ def test_the_level_up_menu_hides_a_picked_attribute():
     buttons = [data.rstrip(b'\0').decode() for sig, data in menu if sig == 'ITXT']
     assert buttons[0] == 'Might' and len(buttons) == 8
     assert sum(1 for sig, _d in menu if sig == 'CTDA') == 8
+
+
+def _script_names(text):
+    """(script-level names, local and parameter names) of a .psc, lowercased, as Papyrus compares them."""
+    top = {m.group(1).lower() for m in re.finditer(r'^\w+(?:\[\])?[ \t]+Property[ \t]+(\w+)', text, re.M)}
+    top |= {m.group(1).lower() for m in re.finditer(r'^(?:\w+(?:\[\])?[ \t]+)?(?:Function|Event)[ \t]+(\w+)',
+                                                     text, re.M)}
+    top |= {m.group(2).lower() for m in re.finditer(r'^(\w+(?:\[\])?)[ \t]+(\w+)[ \t]*(?:=|$)', text, re.M)
+            if m.group(1).lower() not in STATEMENT_WORDS}
+    local = {m.group(2).lower() for m in re.finditer(r'^[ \t]+(\w+(?:\[\])?)[ \t]+(\w+)[ \t]*(?:=|$)', text,
+                                                     re.M)
+             if m.group(1).lower() not in STATEMENT_WORDS}
+    for params in re.findall(r'(?:Function|Event)\s+\w+\(([^)]*)\)', text):
+        local |= {m.group(1).lower() for m in re.finditer(r'\w+(?:\[\])?\s+(\w+)', params)}
+    return top, local
+
+
+def test_no_local_shares_a_script_name_in_any_case():
+    """A local named like a property is that property to the compiler: `selector` read and wrote SELECTOR.
+
+    See: docs/commentary/character_rules.md#papyrus-names-ignore-case
+    """
+    for path in sorted(RULES_SOURCE.glob('*.psc')):
+        top, local = _script_names(path.read_text(encoding='utf-8'))
+        assert not top & local, f'{path.name}: {sorted(top & local)}'
+
+
+def _selector_source():
+    """TESGameSelectQuest.psc, whose choice and game ids the rules read."""
+    return (ROOT / 'TESGameSelect' / 'scripts' / 'source' / 'TESGameSelectQuest.psc').read_text(encoding='utf-8')
+
+
+def test_the_rules_wait_until_the_game_choice_is_final():
+    """ChosenGame reads Skyrim (0) while the menu is open: the rules take it only once Selecting is off.
+
+    See: docs/commentary/character_rules.md#whose-rules
+    """
+    source = _selector_source()
+    for flag in ('Bool Property Selecting', 'Int Property IdVersion', 'Int Property ID_VERSION'):
+        assert re.search('^' + flag, source, re.M), flag
+    rules = (RULES_SOURCE / 'TES4Rules_Main.psc').read_text(encoding='utf-8')
+    assert '!gameSelect.Selecting && gameSelect.IdVersion == gameSelect.ID_VERSION' in rules
+
+
+def test_game_ids_match_the_selector():
+    """The builder's GameId per plugin is TESGameSelectQuest's GAME_* id, which renumbering can move."""
+    ids = {m.group(1).lower(): int(m.group(2))
+           for m in re.finditer(r'^Int Property GAME_(\w+)\s*=\s*(\d+) AutoReadOnly', _selector_source(), re.M)}
+    assert GAME_IDS == {'oblivion.esm': ids['oblivion'], 'morrowind_ob.esm': ids['morroblivion'],
+                        'nehrim.esm': ids['nehrim']}
