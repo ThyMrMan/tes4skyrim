@@ -132,7 +132,8 @@ const CharacterClass* PlayerClass() {
     return it == g_rules.classes.end() ? nullptr : &it->second;
 }
 
-// Writes the source game's rates over the captured vanilla ones.
+// Writes the source game's rates over the captured vanilla ones: an XP game's
+// skills gain nothing by use.
 void ApplyRates() {
     if (!g_ratesReady) return;
     const float curve = g_rules.Setting("fSkillUseExp", g_vanillaCurve);
@@ -140,10 +141,15 @@ void ApplyRates() {
     for (int i = 0; i < kSkillCount; ++i) {
         SkillRates* live = LiveRates(i);
         if (!live) continue;
-        *live = SourceRates(g_vanilla[i], g_vanillaCurve, curve,
-                            ClassMultiplier(g_rules, cls, i));
+        *live = g_rules.xp ? XpRates(g_vanilla[i])
+                           : SourceRates(g_vanilla[i], g_vanillaCurve, curve,
+                                         ClassMultiplier(g_rules, cls, i));
     }
     *g_skillUseCurve = curve;
+    if (g_rules.xp) {
+        Log("character: skills rise only by points (XP rules)");
+        return;
+    }
     Log("character: skill rates follow curve %g, class '%s'%s", curve,
         g_class.c_str(), cls ? "" : " (no class: every multiplier 1)");
 }
@@ -173,7 +179,7 @@ bool LoadRules(const std::string& plugin) {
 
 void RulesOn(const std::string& plugin) {
     if (!LoadRules(plugin)) {
-        Log("character: no skill-use character data for '%s' -- rules stay off",
+        Log("character: no skill-use or XP character data for '%s' -- rules stay off",
             plugin.c_str());
         return;
     }

@@ -1,44 +1,39 @@
-"""Build a converted TES4 game's character rules plugin, `<stem> Character Rules.esp`.
+"""Build a converted game's character rules plugin, `<stem> Character Rules.esp`.
 
 Reads the game's character data from its export (tes5_import.character_data)
-and its converted plugin, and writes a Data folder: the plugin, its .seq, and
-the rules scripts from `character_rules/scripts/source`, compiled.
+and writes a Data folder: the plugin, its .seq, and the rules scripts from
+`character_rules/scripts/source`, compiled. A TES4 game gets the skill-use
+rules below; a Fallout game the XP rules of character_rules_falloutnv.py.
 
 Usage:
   python tools/release/make_character_rules_esp.py --plugin Oblivion.esm
+  python tools/release/make_character_rules_esp.py --plugin FalloutNV.esm
   python tools/release/make_character_rules_esp.py --plugin Oblivion.esm --outdir some/dir --no-compile
 
 See: docs/commentary/character_rules.md#the-rules-plugin
 """
 import argparse
 import os
-import shutil
-import struct
-import subprocess
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
-from convert import load_config
 from core.plugin_masters import masters_from_export_header
-from core.subprocess_flags import windows_cmd
 from output_layout import plugin_esm, record_dir
-from papyrus_compile import find_skse_source_scripts, find_skyrim_source_scripts
 from script_convert.message_menus import CHARGEN_CLASS_GLOBAL, chargen_class_names
-from tes5_import.base.conditions import build_ctda
 from tes5_import.base.constants import RACE_MAP, TES4_ATTRIBUTE_NAMES, TES5_SKILL_ORDER
 from tes5_import.base.text_reader import group_records_by_type, parse_export_directory
 from tes5_import.base.writer import (count_records_and_groups, pack_formid_subrecord,
-                                     pack_record, pack_string_subrecord, pack_subrecord,
-                                     pack_tes4_header, pack_top_group,
-                                     pack_uint32_subrecord)
+                                     pack_record, pack_string_subrecord, pack_tes4_header,
+                                     pack_top_group, pack_uint32_subrecord)
 from tes5_import.character_data import SPECIALIZATIONS, character_data
 from tes5_import.overrides.master_index import MasterIndex
-from tes5_import.pipeline_finalize import write_seq_file
+from tools.release.character_rules_falloutnv import build_fallout, is_fallout_export
+from tools.release.character_rules_records import (ROOT, Forms, Obj, build_event_quest,
+                                                   build_flst, build_glob, build_main_quest,
+                                                   build_node, global_is, pack_script,
+                                                   write_data_folder)
 
-ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-SOURCE_DIR = os.path.join(ROOT, 'character_rules', 'scripts', 'source')
-SELECTOR_SOURCE_DIR = os.path.join(ROOT, 'TESGameSelect', 'scripts', 'source')
 SCRIPTS = ('TES4Rules_Main', 'TES4Rules_Player', 'TES4Rules_SkillEvent')
 
 #: The records character_data reads from the export.
@@ -59,107 +54,8 @@ RACE_BONUS_SLOTS = 7
 #: The Skyrim.esm Story Manager node every skill increase passes (SMEN, ENAM SKIL), and its last child.
 SKILL_EVENT_NODE, SKILL_EVENT_LAST_CHILD = 0x0002D386, 0x000F6F1C
 
-#: SMQN DNAM: Shares event, so the vanilla skill-increase quests still run.
-SHARES_EVENT = 0x00020000
-
-#: QUST DNAM flags: Start Game Enabled and Starts Enabled; the player alias's FNAM.
-SGE_FLAGS, PLAYER_ALIAS_FLAGS, PLAYER_REF = 0x0011, 0x00000292, 0x00000014
-
-#: CTDA function 74, GetGlobalValue.
-FUNC_GET_GLOBAL_VALUE = 74
-
-#: This plugin's own local ids, from here up.
-OWN_BASE = 0x800
-
-#: VMAD property type by Python value kind; arrays are the scalar type + 10.
-_OBJECT, _STRING, _INT, _FLOAT = 1, 2, 3, 4
-_ARRAY = 10
-
 #: The level-up menu's prompt; each attribute's line takes its bonus as %.0f.
 LEVEL_UP_PROMPT = 'Choose three attributes to improve.'
-
-
-# ---------------------------------------------------------------------------
-# FormIDs
-# ---------------------------------------------------------------------------
-
-class Forms:
-    """Local ids for this plugin's records, and form conversion into its master space."""
-
-    def __init__(self, masters: list):
-        """Records numbered from OWN_BASE, in the index after the masters."""
-        self.masters = [name.lower() for name in masters]
-        self.index = len(masters) << 24
-        self.next = OWN_BASE
-
-    def new(self) -> int:
-        """The next unused own FormID."""
-        fid = self.index | self.next
-        self.next += 1
-        return fid
-
-    def of(self, form: list) -> int:
-        """An `[owning plugin, local id]` form as a FormID in this plugin."""
-        return (self.masters.index(form[0].lower()) << 24) | form[1]
-
-
-# ---------------------------------------------------------------------------
-# VMAD
-# ---------------------------------------------------------------------------
-
-def _wstring(text: str) -> bytes:
-    """A u16-length string, as VMAD stores names and string values."""
-    data = text.encode('utf-8')
-    return struct.pack('<H', len(data)) + data
-
-
-def _scalar(kind: int, value) -> bytes:
-    """One VMAD value of `kind`: an object is (unused, alias -1, FormID)."""
-    if kind == _OBJECT:
-        return struct.pack('<HhI', 0, -1, value)
-    if kind == _STRING:
-        return _wstring(value)
-    return struct.pack('<i' if kind == _INT else '<f', value)
-
-
-def _kind(value) -> int:
-    """The VMAD type for a property value: Obj(fid) is an object, a list an array."""
-    sample = value[0] if isinstance(value, list) and value else value
-    if isinstance(sample, Obj):
-        kind = _OBJECT
-    elif isinstance(sample, str):
-        kind = _STRING
-    else:
-        kind = _FLOAT if isinstance(sample, float) else _INT
-    return kind + _ARRAY if isinstance(value, list) else kind
-
-
-class Obj(int):
-    """A FormID a VMAD property binds as an object."""
-
-
-def pack_script(name: str, props: dict) -> bytes:
-    """One VMAD script entry with typed properties (objects, strings, ints, floats, arrays)."""
-    out = _wstring(name) + struct.pack('<BH', 0, len(props))
-    for pname, value in props.items():
-        kind = _kind(value)
-        out += _wstring(pname) + struct.pack('<BB', kind, 1)
-        if kind > _ARRAY:
-            out += struct.pack('<I', len(value))
-            out += b''.join(_scalar(kind - _ARRAY, item) for item in value)
-        else:
-            out += _scalar(kind, value)
-    return out
-
-
-def pack_quest_vmad(script: bytes, quest_fid: int, alias_scripts: tuple = ()) -> bytes:
-    """A QUST VMAD: one script, no fragments, and scripts on alias 0."""
-    out = struct.pack('<HHH', 5, 2, 1) + script + struct.pack('<bH', 2, 0) + _wstring('')
-    out += struct.pack('<h', 1 if alias_scripts else 0)
-    if alias_scripts:
-        out += struct.pack('<HhI', 0, 0, quest_fid) + struct.pack('<hhh', 5, 2, len(alias_scripts))
-        out += b''.join(alias_scripts)
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -244,21 +140,8 @@ def skill_table(doc: dict) -> dict:
 
 
 # ---------------------------------------------------------------------------
-# Records
+# The plugin
 # ---------------------------------------------------------------------------
-
-def build_glob(fid: int, edid: str) -> bytes:
-    """A short global, 0."""
-    subs = pack_string_subrecord('EDID', edid) + pack_subrecord('FNAM', b's')
-    return pack_record('GLOB', fid, 0, subs + pack_subrecord('FLTV', struct.pack('<f', 0.0)))
-
-
-def build_flst(fid: int, edid: str, entries: list) -> bytes:
-    """A form list of `entries`."""
-    subs = pack_string_subrecord('EDID', edid)
-    subs += b''.join(pack_formid_subrecord('LNAM', entry) for entry in entries)
-    return pack_record('FLST', fid, 0, subs)
-
 
 def build_level_up_menu(fid: int, prefix: str, names: list, picked: list) -> bytes:
     """The attribute menu: a button per attribute, hidden once picked this level-up."""
@@ -267,52 +150,9 @@ def build_level_up_menu(fid: int, prefix: str, names: list, picked: list) -> byt
     subs += pack_string_subrecord('DESC', '\n'.join(lines))
     subs += pack_formid_subrecord('INAM', 0) + pack_uint32_subrecord('DNAM', 1)
     for name, glob in zip(names, picked):
-        subs += pack_string_subrecord('ITXT', name)
-        subs += pack_subrecord('CTDA', build_ctda(FUNC_GET_GLOBAL_VALUE, param1=glob,
-                                                  comp_value=0.0, operator=0x00))
+        subs += pack_string_subrecord('ITXT', name) + global_is(glob, 0.0)
     return pack_record('MESG', fid, 0, subs)
 
-
-def build_main_quest(fid: int, prefix: str, props: dict) -> bytes:
-    """The rules quest: Start Game Enabled, the rules script, and the player alias."""
-    player = pack_script('TES4Rules_Player', {'Rules': Obj(fid)})
-    subs = pack_string_subrecord('EDID', f'{prefix}CharacterRules')
-    subs += pack_subrecord('VMAD', pack_quest_vmad(pack_script('TES4Rules_Main', props),
-                                                   fid, (player,)))
-    subs += pack_subrecord('DNAM', struct.pack('<HBBII', SGE_FLAGS, 0, 0, 0, 0))
-    subs += pack_subrecord('NEXT', b'') + pack_uint32_subrecord('ANAM', 1)
-    subs += pack_uint32_subrecord('ALST', 0) + pack_string_subrecord('ALID', 'Player')
-    subs += pack_uint32_subrecord('FNAM', PLAYER_ALIAS_FLAGS)
-    subs += pack_formid_subrecord('ALFR', PLAYER_REF) + pack_formid_subrecord('VTCK', 0)
-    return pack_record('QUST', fid, 0, subs + pack_subrecord('ALED', b''))
-
-
-def build_event_quest(fid: int, prefix: str, main_fid: int) -> bytes:
-    """The quest the Story Manager starts on each skill increase."""
-    script = pack_script('TES4Rules_SkillEvent', {'Rules': Obj(main_fid)})
-    subs = pack_string_subrecord('EDID', f'{prefix}SkillIncrease')
-    subs += pack_subrecord('VMAD', pack_quest_vmad(script, fid))
-    subs += pack_subrecord('DNAM', struct.pack('<HBBII', 0, 0, 0, 0, 0))
-    subs += pack_subrecord('ENAM', b'SKIL') + pack_subrecord('NEXT', b'')
-    return pack_record('QUST', fid, 0, subs + pack_uint32_subrecord('ANAM', 0))
-
-
-def build_node(fid: int, prefix: str, quest_fid: int, active_fid: int) -> bytes:
-    """The Story Manager quest node on Skyrim's skill-increase event, while the rules are on."""
-    subs = pack_string_subrecord('EDID', f'{prefix}SkillIncreaseNode')
-    subs += pack_formid_subrecord('PNAM', SKILL_EVENT_NODE)
-    subs += pack_formid_subrecord('SNAM', SKILL_EVENT_LAST_CHILD)
-    subs += pack_uint32_subrecord('CITC', 1)
-    subs += pack_subrecord('CTDA', build_ctda(FUNC_GET_GLOBAL_VALUE, param1=active_fid,
-                                              comp_value=1.0, operator=0x00))
-    subs += pack_uint32_subrecord('DNAM', SHARES_EVENT) + pack_uint32_subrecord('XNAM', 0)
-    subs += pack_uint32_subrecord('QNAM', 1)
-    return pack_record('SMQN', fid, 0, subs + pack_formid_subrecord('NNAM', quest_fid))
-
-
-# ---------------------------------------------------------------------------
-# The plugin
-# ---------------------------------------------------------------------------
 
 def _lists(doc: dict, forms: Forms, prefix: str, races: list) -> tuple:
     """(FLST records, their FormIDs by role): folded skills, races and skill books."""
@@ -332,7 +172,7 @@ def _lists(doc: dict, forms: Forms, prefix: str, races: list) -> tuple:
 
 
 def build_plugin(doc: dict, masters: list, class_choice: int, game_id: int, prefix: str) -> tuple:
-    """The plugin's bytes and record count, for `doc` from the masterless plugin masters[-1]."""
+    """The plugin's bytes, record count and rules quest, for `doc` from the masterless plugin masters[-1]."""
     forms = Forms(masters)
     active, main, event, node, menu = (forms.new() for _ in range(5))
     picked = [forms.new() for _ in TES4_ATTRIBUTE_NAMES]
@@ -348,12 +188,14 @@ def build_plugin(doc: dict, masters: list, class_choice: int, game_id: int, pref
              **settings_table(doc['settings'])}
     globs = [build_glob(active, f'{prefix}RulesActive')] + [
         build_glob(fid, f'{prefix}Picked{a}') for fid, a in zip(picked, TES4_ATTRIBUTE_NAMES)]
+    quests = (build_main_quest(main, f'{prefix}CharacterRules', pack_script(SCRIPTS[0], props), SCRIPTS[1])
+              + build_event_quest(event, f'{prefix}SkillIncrease', b'SKIL', SCRIPTS[2], main))
     groups = [pack_top_group('GLOB', b''.join(globs)),
               pack_top_group('FLST', b''.join(lists)),
               pack_top_group('MESG', build_level_up_menu(menu, prefix, names, picked)),
-              pack_top_group('QUST', build_main_quest(main, prefix, props)
-                             + build_event_quest(event, prefix, main)),
-              pack_top_group('SMQN', build_node(node, prefix, event, active))]
+              pack_top_group('QUST', quests),
+              pack_top_group('SMQN', build_node(node, f'{prefix}SkillIncreaseNode',
+                                                (SKILL_EVENT_NODE, SKILL_EVENT_LAST_CHILD), [event], active))]
     count = sum(count_records_and_groups(group) for group in groups)
     header = pack_tes4_header(masters, num_records=count, next_object_id=forms.next,
                               author='TESConversion',
@@ -362,7 +204,7 @@ def build_plugin(doc: dict, masters: list, class_choice: int, game_id: int, pref
 
 
 # ---------------------------------------------------------------------------
-# Inputs, compile and the Data folder
+# Inputs and the Data folder
 # ---------------------------------------------------------------------------
 
 def load_inputs(plugin: str, export_root: str, output_root: str) -> tuple:
@@ -381,51 +223,19 @@ def load_inputs(plugin: str, export_root: str, output_root: str) -> tuple:
     return doc, index.masters, choice
 
 
-def compile_scripts(outdir: str) -> bool:
-    """Compile the rules scripts against Skyrim's, SKSE's and TESGameSelect's headers."""
-    try:
-        cfg = load_config()
-    except (FileNotFoundError, OSError):
-        cfg = {}
-    headers = [find_skyrim_source_scripts(cfg), find_skse_source_scripts(cfg),
-               SELECTOR_SOURCE_DIR, SOURCE_DIR]
-    compiler = os.path.join(ROOT, 'external', 'papyrus-compiler', 'papyrus.exe')
-    out_dir = os.path.join(outdir, 'scripts')
-    ok = True
-    for name in SCRIPTS:
-        cmd = [compiler, 'compile', '-nocache', '-i', os.path.join(SOURCE_DIR, name + '.psc'),
-               '-o', out_dir]
-        for header in filter(None, headers):
-            cmd += ['-h', header]
-        run = subprocess.run(windows_cmd(cmd), capture_output=True, text=True, timeout=90, cwd=ROOT)
-        built = os.path.isfile(os.path.join(out_dir, name + '.pex'))
-        print(f'  {"compiled" if run.returncode == 0 and built else "COMPILE FAILED"} {name}')
-        if run.returncode != 0 or not built:
-            print('   ', ((run.stdout or '') + (run.stderr or '')).strip().replace('\n', '\n    '))
-            ok = False
-    return ok
-
-
 def build(plugin: str, outdir: str, export_root: str, output_root: str,
           compile_psc: bool = True) -> bool:
     """Build the Data folder into `outdir`; True when it is shippable."""
+    if is_fallout_export(str(record_dir(export_root, plugin))):
+        return build_fallout(plugin, outdir, export_root, compile_psc)
     doc, masters, class_choice = load_inputs(plugin, export_root, output_root)
     game_id = GAME_IDS.get(plugin.lower())
     if game_id is None:
         raise SystemExit(f'{plugin} is not a game TESGameSelect starts')
     stem = os.path.splitext(plugin)[0]
-    prefix = f'TES4Rules{stem.replace(" ", "")}'
-    data, count, main = build_plugin(doc, [*masters, plugin], class_choice, game_id, prefix)
-    esp = os.path.join(outdir, f'{stem} Character Rules.esp')
-    os.makedirs(os.path.join(outdir, 'scripts', 'source'), exist_ok=True)
-    with open(esp, 'wb') as handle:
-        handle.write(data)
-    print(f'Wrote {esp} ({len(data)} bytes, {count} records and groups)')
-    write_seq_file(esp, {main})
-    for name in SCRIPTS:
-        shutil.copyfile(os.path.join(SOURCE_DIR, name + '.psc'),
-                        os.path.join(outdir, 'scripts', 'source', name + '.psc'))
-    return compile_scripts(outdir) if compile_psc else True
+    built = build_plugin(doc, [*masters, plugin], class_choice, game_id,
+                         f'TES4Rules{stem.replace(" ", "")}')
+    return write_data_folder(outdir, f'{stem} Character Rules.esp', built, SCRIPTS, compile_psc)
 
 
 def main() -> int:

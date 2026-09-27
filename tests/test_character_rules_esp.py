@@ -11,8 +11,8 @@ import struct
 from pathlib import Path
 
 from tes5_import.base.tes5_reader import records
-from tools.release.make_character_rules_esp import (FUNC_GET_GLOBAL_VALUE, GAME_IDS, SHARES_EVENT,
-                                                    SKILL_EVENT_LAST_CHILD, SKILL_EVENT_NODE,
+from tools.release.character_rules_records import FUNC_GET_GLOBAL_VALUE, SHARES_EVENT
+from tools.release.make_character_rules_esp import (GAME_IDS, SKILL_EVENT_LAST_CHILD, SKILL_EVENT_NODE,
                                                     build_plugin)
 
 MASTERS = ['Skyrim.esm', 'Oblivion.esm']

@@ -1,11 +1,14 @@
 # Character rules: a converted game's leveling for the player
 
 **Code:** `character_rules/scripts/source/TES4Rules_Main.psc`,
-`TES4Rules_Player.psc`, `TES4Rules_SkillEvent.psc`,
-`tools/release/make_character_rules_esp.py`,
+`TES4Rules_Player.psc`, `TES4Rules_SkillEvent.psc`, the `FalloutRules_*.psc`
+scripts, `tools/release/make_character_rules_esp.py`, its shared records in
+`character_rules_records.py` and its Fallout half in
+`character_rules_falloutnv.py`,
 `script_convert/static_scripts/TES4Polyfill.psc` (the attribute functions),
-`script_convert/commands.py` (`actor_value`), and the player attribute globals
-in `tools/release/make_game_select_esp.py`.
+`script_convert/commands.py` (`actor_value`), `RewardXP` in
+`script_convert/constants_falloutnv.py`, and the player attribute globals in
+`tools/release/make_game_select_esp.py`.
 
 It builds on TESRuntime's character rules
 ([tes_runtime_character.md](tes_runtime_character.md)), which change
@@ -182,3 +185,84 @@ before; NPCs always read 100 until per-actor stats exist.
   applied; Fatigue's formula has not been read from the exe.
 - Dialogue conditions on attributes are still dropped at import.
 - Scripts' attribute writes change the global only, not what it governs.
+
+## <a id="fallout"></a>Fallout: experience and skill points
+
+`make_character_rules_esp.py --plugin FalloutNV.esm` builds a Fallout game's
+rules plugin from its export alone (`character_rules_falloutnv.py`); the rules
+reference only `Skyrim.esm` forms, so the converted plugin is not read. Built
+and compiled for `FalloutNV.esm`; not yet played. Fallout 3 has no
+TESGameSelect game, so its rules cannot start yet, though its data builds.
+
+| Record | What it is |
+|---|---|
+| QUST `...CharacterRules` | Start Game Enabled; `FalloutRules_Main` holds the rules; `FalloutRules_Player` on the player alias reports each load |
+| QUST `...Kill0`-`3`, `...PickLock0`-`3` | Started by the Story Manager on a kill (`ENAM KILL`) or a picked lock (`LOCK`); each stops, then hands the event to the rules |
+| SMQN `...KillNode` | A child of Skyrim's kill event node (`00013010`), after its last child (`0001E491`), sharing the event, while `...RulesActive` is 1 |
+| SMQN `...PickLockNode` | The first child of Skyrim's lock event node (`0005BD7B`, childless), the same way |
+| GLOB | `...RulesActive` |
+| MESG | The skill menu, two pages: eight skills and "More skills", then the rest and "Back" |
+
+Each node lists four quests. The Story Manager skips an event whose quest is
+still running (the skill event does, measured with the probe), and a node's
+quest list lets it start another instead, so kills close together, as from one
+explosion, should each find a free quest; that the engine takes the next one
+in the list is not yet checked in game.
+Two vanilla kill nodes come first and can take a kill without sharing it:
+`DA08KillFriendNode` (a friend killed with the Ebony Blade) and
+`WIKillEventsBranchNode` (Skyrim's town kill reactions).
+
+**Whose rules and starting values.** The same TESGameSelect check as the TES4
+rules ([whose rules](#whose-rules)); the rules begin at once, with no class
+menu. S.P.E.C.I.A.L. starts from the class of the player's own record ("Vault
+Dweller", 5 in every stat, in New Vegas); each skill from its
+[formula](tes5_import_character_data.md#fallout-governing-stats), plus
+`fAVDTagSkillBonus` for the class's tags (none). A Skyrim skill already higher
+raises the source skills it carries, as the TES4 rules do. The chargen pickers
+belong to the menus piece.
+
+**Where the values live.** S.P.E.C.I.A.L. uses TESGameSelect's player globals:
+Strength, Intelligence, Agility, Endurance and Luck share the TES4 attribute
+of the same name, which `TES4Polyfill` already reads, and Perception and
+Charisma have their own at `0xAF8` and `0xAF9`
+([ranges](tesgameselect.md#records)), which the polyfill's attribute index
+gives as 8 and 9. A character plays one game's rules, so the shared five never
+hold two games' values. Skills live in the rules
+script; each Skyrim skill carries the best of its source skills (Marksman:
+Guns and Energy Weapons; Speech: Barter and Speech), set by the rules after
+every level-up. TESRuntime keeps Skyrim's skills from rising by use while an
+XP game's rules are on ([XP rules](tes_runtime_character.md#what-it-changes)).
+
+**Experience**, each amount as the game's own settings give it:
+
+- **Quests:** converted `RewardXP` sends the mod event `TESCharacterXP` with
+  the amount (265 calls in New Vegas's scripts, 60 in Fallout 3's).
+- **Kills**, read from `Fallout3.exe`: the victim's level picks the first tier
+  whose `iXPLevelKillCreature*` (or `iXPLevelKillNPC*` for a person, by
+  `ActorTypeNPC`) it does not pass, else the last, and the reward is that
+  tier's `iXPRewardKillOpponent*` (or `iXPRewardKillNPC*`) (lookup `0x5ca3c0`,
+  table `0x10fd908`). With Fallout 3's master values a Radroach (level 1)
+  gives 1 and a Deathclaw 50, as fallout.wiki gives them. Fallout 3 counts a
+  kill only when the player did more than `iXPDeathRewardHealthThreshold`
+  (75) percent of the victim's Health in damage (`0x5ca2f0`), which Papyrus
+  cannot see; the rules count the player's kills, and in New Vegas also the
+  companions', as that game does.
+- **Picked locks:** the lock's Skyrim level, 1 to 100, is tier 0 to 4, read
+  against `iXPLevelPickLock*` the same way, rewarding `iXPRewardPickLock*`.
+
+**The level-up.** The experience for level L is (L - 1) × `iXPBase` +
+`iXPBumpBase` × (L - 1)(L - 2) / 2 (`Fallout3.exe` `0x601dc0`; New Vegas's
+200 and 150 give fallout.wiki's 200, 550, 1,050, 1,700). When enough has come
+in, outside combat and menus (checked again every five seconds), each level
+adds `fAVDHealthLevelMult` Health and skill points: Fallout 3's
+`iLevelUpSkillPointsBase` + (Intelligence - 1) × `iLevelUpSkillPointsInterval`
+(`0x601b50`, 10 + Intelligence with its master's 11 and 1), New Vegas's
+10 + Intelligence / 2 with the half point carried (fallout.wiki; its exe is
+encrypted). Points go one per press in the skill menu, to at most 100; then
+the rules send TESRuntime the new level, up to `iMaxCharacterLevel`.
+
+**Not yet:** perks and traits (the perk every `iLevelsPerPerk` levels), hacked
+terminals, passed speech challenges and discovered map markers (their
+`iXPReward*` settings are in the data, with no Skyrim event yet), Fallout 3's
+difficulty multiplier (`fDiffMultXP*`, `0x600ec0`; New Vegas has none),
+karma and reputation, and Health and carry weight from Endurance and Strength.

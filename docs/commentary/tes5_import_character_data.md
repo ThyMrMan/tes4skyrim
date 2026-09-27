@@ -116,12 +116,13 @@ Fallout 3 0.94). It reads the records the exporter now
 | Key | Holds |
 |---|---|
 | `attributes` | the seven S.P.E.C.I.A.L. names, from the plugin's own `AVIF`s |
-| `skills` | each skill `AVIF`: EditorID, name, actor value, [governing stat](#fallout-governing-stats), and the Skyrim skills the converted content exercises with it |
+| `skills` | each skill `AVIF`: EditorID, name, actor value, [governing stat](#fallout-governing-stats), the Skyrim skills the converted content exercises with it, and whether the game shows it |
 | `classes` | each `CLAS`: tag skills (named through the `AVIF`s, a dependent's through its master's), S.P.E.C.I.A.L., playable |
 | `races` | each `RACE`'s skill bonuses (none in either master) and whether it is playable |
 | `perks` | each `PERK`: trait or perk, minimum level, ranks, playable, hidden, its requirement conditions (raw), and each effect: quest and stage, ability, or entry point, function and value, with its condition tabs |
 | `reputations` | each `REPU` and its value |
-| `settings` | the XP rules' settings, over the engine's defaults read from the game's GECK when masterless: XP base and bump, the level cap, perks per level, skill points per level, the tag bonus, Health, carry weight and action point formulas, karma thresholds, and every `iXPReward*` and `iXPLevelKill*` reward |
+| `settings` | the XP rules' settings, over the engine's defaults read from the game's GECK when masterless: XP base and bump, the level cap, perks per level, skill points per level, the tag bonus, Health, carry weight and action point formulas, karma thresholds, every `iXPReward*` and `iXPLevel*` tier, and every `fAVDSkill*` (each skill's base and the stat and Luck multipliers) |
+| `player` | the class of the player's own `NPC_` (`00000007`), whose S.P.E.C.I.A.L. a new character starts with: New Vegas's "Vault Dweller", 5 in every stat |
 | `standings` | Karma, which Skyrim has no counterpart for |
 
 An actor value's index is not stored anywhere in an `AVIF`; it follows from
@@ -130,7 +131,10 @@ S.P.E.C.I.A.L. from `0x3E8` (5-11), derived stats from `0x44C` (12-31), skills
 from `0x4B0` (32-45), the AI values from `0x514` (0-4), and the rest from
 `0x5DC` (46 on). It matches every actor value a Fallout condition names.
 Index 44 is Throwing in Fallout 3 and Survival in New Vegas (both `AVThrowing`),
-and New Vegas keeps Big Guns as "Big Guns - OBSOLETE".
+and New Vegas keeps Big Guns as "Big Guns - OBSOLETE". Each game shows 13
+skills: its engine hides one, Fallout 3 its cut Throwing and New Vegas Big
+Guns, with nothing in the record to say so (the two `AVIF`s differ from the
+shown ones only in their text), so each is marked `playable: false` by game.
 
 Counts over the masters: New Vegas 14 skills, 74 classes (3 playable), 176
 perks (10 traits, 101 playable; 212 effects: 143 entry point, 49 ability, 20
@@ -140,11 +144,18 @@ playable), 87 perks (61 playable; 118 effects), 57 settings.
 ### <a id="fallout-governing-stats"></a>The governing stats are not in the data
 
 Which S.P.E.C.I.A.L. stat governs a skill is fixed in the engine, not stored
-in any record, and neither executable here yields it: the games' own exes are
-encrypted on disk, and the GECKs register every `fAVDSkill<Name>Base` setting
-but never read one, since the editor computes no skills. So `GOVERNING` is a
-table by `AVIF` EditorID, not traced in an exe: Barter and Speech Charisma;
+in any record, so `GOVERNING` is a table by `AVIF` EditorID, read from
+`Fallout3.exe`. The Steam Fallout 3 GOTY exe is not encrypted (`.text` entropy
+6.58, no `.bind` section; `FalloutNV.exe` is, 8.0), and its skill-value
+routine `0x57dec0` reads two tables indexed by actor value: the governing stat
+at `0x10fa194` and the skill's base setting at `0x10f91b0`. The skill is then
+base + `fAVDSkillPrimaryBonusMult` × stat, rounded down, + `fAVDSkillLuckBonusMult`
+× Luck, rounded up (`0x57e020`), which with the masters' 2, 2 and 0.5 is the
+familiar 2 + 2 × stat + Luck / 2. The table: Barter and Speech Charisma;
 Energy Weapons, Explosives and Lockpick Perception; Medicine, Repair and
 Science Intelligence; Melee Weapons Strength; Small Guns (Guns) and Sneak
-Agility; Big Guns, Survival and Unarmed Endurance. Fallout 3's Throwing was cut
-and has none.
+Agility; Big Guns and Unarmed Endurance; and actor value 44, Fallout 3's cut
+Throwing, Intelligence. New Vegas's exe cannot be read, so its Survival, which
+took over 44, is Endurance as the game shows it, and the other twelve are
+taken as Fallout 3's (fallout.wiki's New Vegas Intelligence page agrees on
+Medicine, Repair and Science).

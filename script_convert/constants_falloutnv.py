@@ -130,7 +130,7 @@ FALLOUT_COMMAND_ROWS = {
                              flags='actor_only zero_arg'),
     'getplayerteammate': dict(emit='{ref}.IsPlayerTeammate()', subj='ACTOR',
                               flags='actor_only zero_arg cmp_bool'),
-    'rewardxp': dict(note='{f} {a} - Skyrim has no experience points'),
+    'rewardxp': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterXP", "", {f0})'),
     'addnote': dict(note='{f} {a} - Pip-Boy notes have no Skyrim equivalent'),
     'setreputation': dict(note='{f} {a} - Skyrim has no reputation'),
     'addreputation': dict(note='{f} {a} - Skyrim has no reputation'),

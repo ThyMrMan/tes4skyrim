@@ -14,7 +14,7 @@ from ..base.constants import (
 )
 from ..base.locations import WORLD_NAMES
 from ..base.equivalents import TES4_MARKER_FORMID_TO_SKYRIM
-from .world_falloutnv import (marker_substitute, parent_use_flags,
+from .world_falloutnv import (marker_substitute, parent_use_flags, requires_key_level,
                               tes5_world_flags, world_map_offset)
 from .world_morrowind import is_tes3_source, lock_is_exit_only, tes3_refr_flags
 from .vendor_stock_morrowind import stock_owner
@@ -871,7 +871,7 @@ def _refr_xloc(rec: dict):
     """The XLOC lock subrecord and whether this is a keyless barrier door.
 
     Returns (bytes, barrier_door).  XLOC is 20 bytes in TES5 and the lock is
-    transferred faithfully -- TES4 level 100 becomes Requires Key (255).  AI
+    transferred faithfully -- TES4 level 100 and FO3/FNV 255 become Requires Key (255).  AI
     passes a locked barrier door by OWNERSHIP, never a weakened lock.  A TES3
     lock sealing only the way out is dropped: TES5 locks the doorway.
 
@@ -886,7 +886,8 @@ def _refr_xloc(rec: dict):
     barrier_door = False
     lock_key = get_formid(rec, 'XLOC.Key')
     lock_flags = get_int(rec, 'XLOC.Flags')
-    tes5_level = map_lock_level(lock_level, leveled=bool(lock_flags & 0x4))
+    tes5_level = map_lock_level(lock_level, leveled=bool(lock_flags & 0x4),
+                                requires_key=requires_key_level())
     if tes5_level == 255 and not lock_key:
         from ..base.object_scripts import base_is_consume_door
         barrier_door = base_is_consume_door(rec.get('NAME', ''))

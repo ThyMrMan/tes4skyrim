@@ -25,7 +25,10 @@ int SkyrimSkillIndex(const std::string& name) {
 }
 
 bool CharacterRules::Load(const Json& doc) {
-    if (doc["rules"].asString() != "skill-use") return false;
+    const std::string kind = doc["rules"].asString();
+    xp = kind == "xp";
+    if (xp) return true;
+    if (kind != "skill-use") return false;
     for (const auto& [name, value] : doc["settings"].fields()) {
         settings[name] = static_cast<float>(value.asNumber());
     }
@@ -84,6 +87,13 @@ SkillRates SourceRates(const SkillRates& vanilla, float vanillaCurve,
     out.improveMult = Threshold(vanilla, vanillaCurve, kAnchorLevel) * multiplier /
                       std::pow(kAnchorLevel, sourceCurve);
     out.improveOffset = 0.0f;
+    return out;
+}
+
+SkillRates XpRates(const SkillRates& vanilla) {
+    SkillRates out = vanilla;
+    out.useMult = 0.0f;
+    out.useOffset = 0.0f;
     return out;
 }
 

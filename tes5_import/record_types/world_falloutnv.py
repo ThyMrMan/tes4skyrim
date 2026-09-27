@@ -9,6 +9,7 @@ See: docs/commentary/tes4_export_falloutnv.md#marker-base-objects
 See: docs/commentary/tes4_export_falloutnv.md#child-worldspaces
 """
 
+from ..base.constants import TES4_REQUIRES_KEY
 from .common import get_float, get_int
 
 _XMARKER = 0x0000003B
@@ -27,6 +28,9 @@ FALLOUT_MARKER_FORMID_TO_SKYRIM = {
 #: Record types only FO3/FNV emit; their presence identifies the source game.
 FALLOUT_ONLY_SIGS = ('NAVM', 'TERM', 'MSTT', 'IDLM', 'PWAT', 'CCRD', 'REPU')
 
+#: FO3/FNV's lock level that needs its key; their 100 is a pickable Very Hard lock.
+FALLOUT_REQUIRES_KEY = 255
+
 #: True while converting an FO3/FNV source; set once per plugin at import start.
 _IS_FALLOUT_SOURCE = []
 
@@ -41,6 +45,11 @@ def register_fallout_source(by_type: dict):
 def is_fallout_source() -> bool:
     """True when this run's source plugin is FO3/FNV."""
     return bool(_IS_FALLOUT_SOURCE)
+
+
+def requires_key_level() -> int:
+    """The source's lock level that needs its key, for map_lock_level."""
+    return FALLOUT_REQUIRES_KEY if _IS_FALLOUT_SOURCE else TES4_REQUIRES_KEY
 
 
 def marker_substitute(name_raw: int):

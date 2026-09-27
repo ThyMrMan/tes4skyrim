@@ -487,10 +487,11 @@ def test_no_two_records_share_a_formid(built):
 
 
 def test_player_attribute_globals_sit_where_the_scripts_read_them(built):
-    """TES4Polyfill and the character rules read the player's attributes at 0xAF0 on, Strength to Luck."""
+    """TES4Polyfill and the character rules read the player's attributes at 0xAF0 on, Strength to Luck,
+    then the two S.P.E.C.I.A.L. stats with no TES4 attribute of their name."""
     _data, _count, recs = built
     names = ['Strength', 'Intelligence', 'Willpower', 'Agility',
-             'Speed', 'Endurance', 'Personality', 'Luck']
+             'Speed', 'Endurance', 'Personality', 'Luck', 'Perception', 'Charisma']
     assert FID_GLOB_PLAYER_ATTRIBUTES & 0xFFFFFF == 0xAF0
     assert len(PLAYER_ATTRIBUTE_GLOBALS) == len(names)
     for i, name in enumerate(names):

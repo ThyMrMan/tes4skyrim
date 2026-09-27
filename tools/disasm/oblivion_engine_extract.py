@@ -26,7 +26,8 @@ What it recovers
 `--json`       write the tables for the emulator and the importer to load.
 `--settings-json`  write the numeric setting defaults alone. The same reader works on
                the Fallout 3 and New Vegas GECKs, which register the engine's
-               settings the same way (the games' own exes are encrypted).
+               settings the same way (FalloutNV.exe is encrypted, and
+               Fallout3.exe holds its settings as static objects instead).
 
 Usage:
     python tools/disasm/oblivion_engine_extract.py --types

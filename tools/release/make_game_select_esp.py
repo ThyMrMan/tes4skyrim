@@ -163,8 +163,10 @@ GLOBALS = [
 
 #: The player's TES4 attributes, one GLOB each from here (below the travel FLST): rules write, TES4Polyfill reads.
 FID_GLOB_PLAYER_ATTRIBUTES = 0x01000AF0
+#: S.P.E.C.I.A.L. stats TES4 has no attribute for; the other five share a TES4 attribute's global.
+FALLOUT_ONLY_STATS = ('Perception', 'Charisma')
 PLAYER_ATTRIBUTE_GLOBALS = [(FID_GLOB_PLAYER_ATTRIBUTES + i, f'TESGS_Player{name}')
-                            for i, name in enumerate(TES4_ATTRIBUTE_NAMES)]
+                            for i, name in enumerate(TES4_ATTRIBUTE_NAMES + FALLOUT_ONLY_STATS)]
 
 
 def build_glob(fid: int, edid: str) -> bytes:

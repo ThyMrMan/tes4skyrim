@@ -26,15 +26,18 @@ AV_BLOCKS = ((0x3E8, 7, 5), (0x44C, 20, 12), (0x4B0, 14, 32), (0x514, 5, 0), (0x
 #: The S.P.E.C.I.A.L. block and the skill block, as (first FormID, count).
 SPECIAL_BLOCK, SKILL_BLOCK = (0x3E8, 7), (0x4B0, 14)
 
-#: Skill AVIF EditorID -> governing S.P.E.C.I.A.L.; in no record and traced in no exe (docs: fallout-governing-stats).
+#: Skill AVIF EditorID -> governing S.P.E.C.I.A.L.; in no record, read from Fallout3.exe (docs: fallout-governing-stats).
 GOVERNING = {'AVBarter': 'Charisma', 'AVBigGuns': 'Endurance', 'AVEnergyWeapons': 'Perception',
              'AVExplosives': 'Perception', 'AVLockpick': 'Perception', 'AVMedicine': 'Intelligence',
              'AVMeleeWeapons': 'Strength', 'AVRepair': 'Intelligence', 'AVScience': 'Intelligence',
              'AVSmallGuns': 'Agility', 'AVSneak': 'Agility', 'AVSpeech': 'Charisma',
              'AVUnarmed': 'Endurance'}
 
-#: New Vegas reuses Throwing's actor value for Survival; Fallout 3's Throwing was cut.
-_SURVIVAL = {'falloutnv': 'Endurance', 'fallout3': None}
+#: New Vegas reuses Throwing's actor value for Survival; Fallout 3's cut Throwing keeps Intelligence.
+_SURVIVAL = {'falloutnv': 'Endurance', 'fallout3': 'Intelligence'}
+
+#: The skill each game's engine hides, leaving 13: New Vegas's Big Guns, Fallout 3's Throwing.
+_CUT_SKILL = {'falloutnv': 'AVBigGuns', 'fallout3': 'AVThrowing'}
 
 #: Skill AVIF EditorID -> the Skyrim skills the converted content exercises with it.
 SKYRIM_SKILLS = {'AVBarter': ('Speechcraft',), 'AVSpeech': ('Speechcraft',),
@@ -42,7 +45,7 @@ SKYRIM_SKILLS = {'AVBarter': ('Speechcraft',), 'AVSpeech': ('Speechcraft',),
                  'AVMeleeWeapons': ('OneHanded', 'TwoHanded'), 'AVSmallGuns': ('Marksman',),
                  'AVEnergyWeapons': ('Marksman',), 'AVBigGuns': ('Marksman',)}
 
-#: The settings the XP rules read by name; every iXPReward* and iXPLevelKill* setting is kept too.
+#: The settings the XP rules read by name; every iXPReward*, iXPLevel* and fAVDSkill* setting is kept too.
 XP_SETTINGS = (
     'iXPBase', 'iXPBumpBase', 'iMaxCharacterLevel', 'iLevelsPerPerk',
     'iLevelUpSkillPointsBase', 'iLevelUpSkillPointsInterval', 'fAVDTagSkillBonus',
@@ -51,7 +54,10 @@ XP_SETTINGS = (
     'fAVDHealthLevelMult', 'fAVDCarryWeightsBase', 'fAVDCarryWeightMult',
     'fAVDActionPointsBase', 'fAVDActionPointsMult', 'fAlignEvilMaxKarma',
     'fAlignGoodMinKarma')
-_XP_PREFIXES = ('iXPReward', 'iXPLevelKill')
+_XP_PREFIXES = ('iXPReward', 'iXPLevel', 'fAVDSkill')
+
+#: The player's NPC_ record, whose class carries the S.P.E.C.I.A.L. a new character starts with.
+_PLAYER = 0x000007
 
 #: CLAS and RACE DATA.Flags bit 0: offered at character creation.
 _PLAYABLE = 0x1
@@ -96,7 +102,8 @@ def _special(avifs: list) -> list:
 
 
 def _skills(avifs: list, game: str, masters: list, plugin: str) -> list:
-    """Each skill AVIF: its actor value, name, governing stat and the Skyrim skills it maps to."""
+    """Each skill AVIF: its actor value, name, governing stat, the Skyrim skills it maps to, and
+    whether the game shows it."""
     rows = []
     for rec in sorted(avifs, key=lambda r: int(r['FormID'], 16)):
         if not _in_block(rec, SKILL_BLOCK):
@@ -105,7 +112,7 @@ def _skills(avifs: list, game: str, masters: list, plugin: str) -> list:
         governing = _SURVIVAL[game] if edid == 'AVThrowing' else GOVERNING.get(edid)
         rows.append({'id': edid, 'name': get_str(rec, 'FULL'), 'av': actor_value_index(int(rec['FormID'], 16)),
                      'form': _form(rec['FormID'], masters, plugin), 'attribute': governing,
-                     'skyrim': list(SKYRIM_SKILLS.get(edid, ()))})
+                     'skyrim': list(SKYRIM_SKILLS.get(edid, ())), 'playable': edid != _CUT_SKILL[game]})
     return rows
 
 
@@ -182,6 +189,14 @@ def _reputations(records: list, masters: list, plugin: str) -> list:
              'value': round(get_float(rec, 'DATA.Value'), 6)} for rec in records]
 
 
+def _player(npcs: list, masters: list, plugin: str) -> dict:
+    """The player record's class as a form, or {} when this plugin does not define the player."""
+    for rec in npcs:
+        if int(rec['FormID'], 16) & 0xFFFFFF == _PLAYER and rec.get('CNAM.Class'):
+            return {'class': _form(rec['CNAM.Class'], masters, plugin)}
+    return {}
+
+
 def _wanted(name: str) -> bool:
     """Whether the XP rules read this setting."""
     return name in XP_SETTINGS or name.startswith(_XP_PREFIXES)
@@ -215,7 +230,8 @@ def character_data(by_type: dict, masters: list, plugin: str, game: str,
            'races': _races(by_type.get('RACE', []), skill_names, masters, plugin),
            'perks': _perks(by_type.get('PERK', []), masters, plugin),
            'reputations': _reputations(by_type.get('REPU', []), masters, plugin),
-           'settings': _settings(by_type.get('GMST', []), game, not masters)}
+           'settings': _settings(by_type.get('GMST', []), game, not masters),
+           'player': _player(by_type.get('NPC_', []), masters, plugin)}
     doc = {key: value for key, value in doc.items() if value}
     if not doc:
         return {}
