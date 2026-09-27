@@ -43,7 +43,7 @@ there by the converter for each converted plugin:
 
 | Folder | Holds |
 |---|---|
-| `SKSE\Plugins\TESRuntime\` | `<plugin>.crime.json`, `<plugin>.apparatus.json` |
+| `SKSE\Plugins\TESRuntime\` | `<plugin>.crime.json`, `<plugin>.apparatus.json`, `<plugin>.character.json` |
 | `SKSE\Plugins\CreatureRuntime\animation\` | `<plugin>.json` animation cache fragments |
 | `SKSE\Plugins\FalloutRuntime\` | `<plugin>.guns.json`, `<plugin>.bodyparts.json`, optional `FalloutRuntime.ini` |
 | `SKSE\Plugins\MorrowindRuntime\` | each Morrowind plugin's dialogue and script tables |

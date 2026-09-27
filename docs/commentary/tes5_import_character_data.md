@@ -4,9 +4,9 @@
 (`export_SKIL`), `tools/disasm/oblivion_engine_extract.py` (`--settings`),
 `tes4_export/oblivion_engine_tables.json` (`settings`).
 
-**Nothing reads the file yet.** It is the data the classic character systems
-work builds on: the runtime's in-memory skill rates and the player's leveling
-rules both read it.
+TESRuntime reads it for Skyrim's skill rates while a game's rules are on
+([tes_runtime_character.md](tes_runtime_character.md#skill-rates)); the
+player's leveling rules will read it too.
 
 ## <a id="the-character-data-file"></a>What it holds
 
