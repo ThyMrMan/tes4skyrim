@@ -24,12 +24,17 @@ What it recovers
 `--settings`   every game setting the engine registers, with its default
                (a plugin's GMST overrides it; the master stores only changes).
 `--json`       write the tables for the emulator and the importer to load.
+`--settings-json`  write the numeric setting defaults alone. The same reader works on
+               the Fallout 3 and New Vegas GECKs, which register the engine's
+               settings the same way (the games' own exes are encrypted).
 
 Usage:
     python tools/disasm/oblivion_engine_extract.py --types
     python tools/disasm/oblivion_engine_extract.py --functions GetStage
     python tools/disasm/oblivion_engine_extract.py --settings LevelUp
     python tools/disasm/oblivion_engine_extract.py --json tes4_export/oblivion_engine_tables.json
+    python tools/disasm/oblivion_engine_extract.py --exe <Fallout New Vegas>/Geck.exe \
+        --settings-json tes4_export/falloutnv_engine_settings.json
 """
 
 import argparse
@@ -254,6 +259,14 @@ def _print_settings(settings, needle):
     print()
 
 
+def _write_settings(exe, settings, path):
+    """The numeric setting defaults alone; text settings are game text, and no rules read them."""
+    numbers = {name: value for name, value in settings.items() if name[0] != 's'}
+    with open(path, 'w', encoding='utf-8') as f:
+        json.dump({'source': exe.path.rsplit('\\', 1)[-1], 'settings': numbers}, f, indent=2)
+    print(f'wrote {path}: {len(numbers)} numeric settings of {len(settings)}')
+
+
 def main():
     ap = argparse.ArgumentParser(
         description=__doc__,
@@ -265,6 +278,8 @@ def main():
     ap.add_argument('--settings', metavar='NAME', nargs='?', const='',
                     help='list setting defaults, optionally filtered')
     ap.add_argument('--json', help='write all tables to this JSON path')
+    ap.add_argument('--settings-json', metavar='PATH',
+                    help='write only the setting defaults, e.g. from a Fallout GECK')
     args = ap.parse_args()
 
     exe = Exe(args.exe)
@@ -275,9 +290,12 @@ def main():
         sys.exit(f'.text entropy {ent:.2f} -- this build is packed and its '
                  'tables cannot be read')
 
+    settings = read_settings(exe)
+    if args.settings_json:
+        _write_settings(exe, settings, args.settings_json)
+        return
     types = read_types(exe)
     funcs = read_functions(exe)
-    settings = read_settings(exe)
     show_default = not (args.types or args.functions is not None
                         or args.settings is not None or args.json)
 

@@ -999,3 +999,23 @@ volume was a bare REFR with nothing to enter: `OnTriggerEnter` never fired.
 VCG01 hung on this — `VCG01VigorTesterTriggerSCRIPT` sets stage 60 from
 `onTriggerEnter`, and the tester's `OnActivate` only advances at stage 60.
 The raw subrecord now round-trips as `XPRM.Raw`.
+
+## <a id="character-records"></a>Character records: AVIF, PERK, REPU and the Fallout CLAS
+
+**Code:** `tes4_export/record_types/character_falloutnv.py`.
+
+The classic character systems plan's character data reads these; nothing else
+does. Until they were decoded the export held only their subrecord sizes.
+Layouts are xEdit's (`wbDefinitionsFNV.pas`, `wbDefinitionsFO3.pas`, the same
+for these four types):
+
+| Record | Exported |
+|---|---|
+| `AVIF` | `FULL`, `DESC`, `ICON`, `ANAM` (the short name) |
+| `REPU` | `FULL`, `ICON`, `DATA.Value` (a float) |
+| `PERK` | `FULL`, `DESC`, `ICON`; its requirement conditions as `Condition[i].Raw`; `DATA.Trait`, `MinLevel`, `Ranks`, `Playable`, `Hidden` (Fallout 3 may stop before `Hidden`); and per effect `Effect[i].Type` (`QuestStage`, `Ability`, `EntryPoint`), `Rank`, `Priority`, its data (`Quest` and `Stage`, `Ability`, or `EntryPoint`, `Function` and `ConditionTabs`), each condition tab's `RunOn` and `Condition[k].Raw`, and the entry point's value (`ValueType`, `Value` as hex, `ButtonLabel`, `ScriptFlags`, `ScriptText`) |
+| `CLAS` | Oblivion's exporter reads a 50-byte `DATA`, so the 28-byte Fallout one printed nothing; the delta adds `DATA.TagSkill[0..3]` (actor values), `Flags`, `Services`, `Teaches`, `MaxTraining`, and `ATTR.<stat>` for the seven S.P.E.C.I.A.L. bytes |
+
+A `PERK` is read in subrecord order: conditions before the perk's own `DATA`
+are its requirements, each `PRKE` opens an effect whose `DATA` follows, each
+`PRKC` opens one of its condition tabs, and `PRKF` closes it.

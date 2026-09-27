@@ -1,8 +1,11 @@
 # The character data file
 
-**Code:** `tes5_import/character_data.py`, `tes4_export/record_types/actors.py`
-(`export_SKIL`), `tools/disasm/oblivion_engine_extract.py` (`--settings`),
-`tes4_export/oblivion_engine_tables.json` (`settings`).
+**Code:** `tes5_import/character_data.py`, `tes5_import/character_data_falloutnv.py`,
+`tes4_export/record_types/actors.py` (`export_SKIL`),
+`tes4_export/record_types/character_falloutnv.py`,
+`tools/disasm/oblivion_engine_extract.py` (`--settings`, `--settings-json`),
+`tes4_export/oblivion_engine_tables.json` (`settings`),
+`tes4_export/falloutnv_engine_settings.json`, `tes4_export/fallout3_engine_settings.json`.
 
 TESRuntime reads it for Skyrim's skill rates while a game's rules are on
 ([tes_runtime_character.md](tes_runtime_character.md#skill-rates)), and the
@@ -14,10 +17,8 @@ Every TES4-format plugin that defines a skill, class, race, birthsign or
 leveling setting writes `SKSE/Plugins/TESRuntime/<plugin>.character.json`,
 beside the other TESRuntime sidecars, so the
 [sidecar sweep](tes5_import_pipeline.md#stale-runtime-sidecars) removes it
-when a rebuild stops writing it. TES3 and FO3/FNV sources write none yet:
-their records differ (FO3/FNV keep S.P.E.C.I.A.L. and skills in `AVIF`, which
-the exporter does not dump), and each gets its own reader when its rules are
-built.
+when a rebuild stops writing it. FO3/FNV plugins write their own shape
+([Fallout](#fallout)); TES3 sources write none yet.
 
 | Key | Holds |
 |---|---|
@@ -102,3 +103,48 @@ value, and the second was never written. Nothing read it: `SKIL` is in
 `DATA.Specialization`, `DATA.UseValue1` and `DATA.UseValue2`; Athletics reads
 0.03 and 0.04, Speechcraft 2.4 and 1.0. An export made before the fix has no
 `INDX.Skill`, so its skills are left out of the file until it is re-exported.
+
+## <a id="fallout"></a>Fallout 3 and New Vegas
+
+**Code:** `tes5_import/character_data_falloutnv.py`.
+
+An FO3/FNV plugin's file has `rules: xp` and a `game` (`falloutnv` or
+`fallout3`, from the plugin header's own version: New Vegas writes 1.34,
+Fallout 3 0.94). It reads the records the exporter now
+[decodes](tes4_export_falloutnv.md#character-records):
+
+| Key | Holds |
+|---|---|
+| `attributes` | the seven S.P.E.C.I.A.L. names, from the plugin's own `AVIF`s |
+| `skills` | each skill `AVIF`: EditorID, name, actor value, [governing stat](#fallout-governing-stats), and the Skyrim skills the converted content exercises with it |
+| `classes` | each `CLAS`: tag skills (named through the `AVIF`s, a dependent's through its master's), S.P.E.C.I.A.L., playable |
+| `races` | each `RACE`'s skill bonuses (none in either master) and whether it is playable |
+| `perks` | each `PERK`: trait or perk, minimum level, ranks, playable, hidden, its requirement conditions (raw), and each effect: quest and stage, ability, or entry point, function and value, with its condition tabs |
+| `reputations` | each `REPU` and its value |
+| `settings` | the XP rules' settings, over the engine's defaults read from the game's GECK when masterless: XP base and bump, the level cap, perks per level, skill points per level, the tag bonus, Health, carry weight and action point formulas, karma thresholds, and every `iXPReward*` and `iXPLevelKill*` reward |
+| `standings` | Karma, which Skyrim has no counterpart for |
+
+An actor value's index is not stored anywhere in an `AVIF`; it follows from
+the record's FormID block, which both masters use identically:
+S.P.E.C.I.A.L. from `0x3E8` (5-11), derived stats from `0x44C` (12-31), skills
+from `0x4B0` (32-45), the AI values from `0x514` (0-4), and the rest from
+`0x5DC` (46 on). It matches every actor value a Fallout condition names.
+Index 44 is Throwing in Fallout 3 and Survival in New Vegas (both `AVThrowing`),
+and New Vegas keeps Big Guns as "Big Guns - OBSOLETE".
+
+Counts over the masters: New Vegas 14 skills, 74 classes (3 playable), 176
+perks (10 traits, 101 playable; 212 effects: 143 entry point, 49 ability, 20
+quest stage), 13 reputations, 60 settings; Fallout 3 14 skills, 53 classes (3
+playable), 87 perks (61 playable; 118 effects), 57 settings.
+
+### <a id="fallout-governing-stats"></a>The governing stats are not in the data
+
+Which S.P.E.C.I.A.L. stat governs a skill is fixed in the engine, not stored
+in any record, and neither executable here yields it: the games' own exes are
+encrypted on disk, and the GECKs register every `fAVDSkill<Name>Base` setting
+but never read one, since the editor computes no skills. So `GOVERNING` is a
+table by `AVIF` EditorID, not traced in an exe: Barter and Speech Charisma;
+Energy Weapons, Explosives and Lockpick Perception; Medicine, Repair and
+Science Intelligence; Melee Weapons Strength; Small Guns (Guns) and Sneak
+Agility; Big Guns, Survival and Unarmed Endurance. Fallout 3's Throwing was cut
+and has none.

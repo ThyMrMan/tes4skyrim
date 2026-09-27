@@ -4,7 +4,8 @@ classes, races and birthsigns, as `SKSE/Plugins/TESRuntime/<plugin>.character.js
 Every form is `[owning plugin, local id]`, so a plugin that overrides a class
 or adds a birthsign extends its master's data in load order. A masterless
 plugin also carries the engine's attributes, standings and leveling defaults
-under its own GMSTs. FO3/FNV and TES3 sources write none yet.
+under its own GMSTs. FO3/FNV plugins get theirs from character_data_falloutnv;
+TES3 sources write none yet.
 
 See: docs/commentary/tes5_import_character_data.md#the-character-data-file
 """
@@ -17,6 +18,8 @@ from core.plugin_masters import masters_from_export_header
 from .base.constants import (TES4_ATTRIBUTE_NAMES, TES4_AV_NAMES,
                              TES4_SKILL_AV_BASE)
 from .base.text_reader import get_float, get_int, get_str
+from .character_data_falloutnv import character_data as fallout_character_data
+from .character_data_falloutnv import game_of
 from .dialogue.morrowind_sidecar import is_tes3_export
 from .record_types.crime import SIDECAR_DIR
 from .record_types.world_falloutnv import is_fallout_source
@@ -230,13 +233,16 @@ def character_data(by_type: dict, masters: list, plugin: str,
 def write_character_sidecar(by_type: dict, export_dir: str, output_path: str,
                             master_export: dict = None) -> int:
     """Write `<plugin>.character.json` beside the other TESRuntime sidecars.
-    Returns files written: 0 for a TES3 or FO3/FNV source, or a plugin that
-    defines no character data."""
-    if is_tes3_export(export_dir) or is_fallout_source():
+    Returns files written: 0 for a TES3 source, or a plugin that defines no
+    character data."""
+    if is_tes3_export(export_dir):
         return 0
     plugin = os.path.basename(output_path)
-    doc = character_data(by_type, masters_from_export_header(export_dir), plugin,
-                         master_export)
+    masters = masters_from_export_header(export_dir)
+    if is_fallout_source():
+        doc = fallout_character_data(by_type, masters, plugin, game_of(export_dir), master_export)
+    else:
+        doc = character_data(by_type, masters, plugin, master_export)
     if not doc:
         return 0
     path = os.path.join(os.path.dirname(output_path), SIDECAR_DIR,
