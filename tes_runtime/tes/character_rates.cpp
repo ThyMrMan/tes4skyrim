@@ -41,6 +41,10 @@ bool CharacterRules::Load(const Json& doc) {
 }
 
 void CharacterRules::AddClasses(const Json& doc) {
+    // Only skill-use classes carry what the rates read; an XP game's class of
+    // the same EditorID (New Vegas's Farmer, Oblivion's Farmer) must not
+    // replace one.
+    if (doc["rules"].asString() != "skill-use") return;
     for (const Json& entry : doc["classes"].items()) {
         CharacterClass cls;
         cls.specialization = entry["specialization"].asString();

@@ -13,6 +13,7 @@ import struct
 from ..tes4_reader import (Record, get_all_subrecords,
                            get_formid_str, get_string,
                            get_subrecord)
+from .character_falloutnv import CHARACTER_EXPORTERS, emit_class_deltas
 from .quest_falloutnv import emit_quest_deltas
 from .common import (emit_float, emit_formid, emit_model, emit_raw_hex,
                      emit_script, emit_string, emit_u8, emit_u16, emit_u32)
@@ -483,6 +484,7 @@ _DELTA_DISPATCH = {
     "ENCH": _emit_effect_deltas,
     "INGR": _emit_effect_deltas,
     "QUST": emit_quest_deltas,
+    "CLAS": emit_class_deltas,
 }
 
 #: Types carrying an OBND that TES4 has no field for; Skyrim reads it natively.
@@ -780,4 +782,5 @@ FALLOUT_BASE_EXPORTERS = {
     "TERM": export_ACTIVATOR_BASE,
     "NOTE": export_ACTIVATOR_BASE,
     "TACT": export_ACTIVATOR_BASE,
+    **CHARACTER_EXPORTERS,
 }

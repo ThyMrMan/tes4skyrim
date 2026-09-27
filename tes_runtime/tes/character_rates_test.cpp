@@ -71,6 +71,11 @@ void TestReader() {
           "a later file's class replaces an earlier one");
     CharacterRules other;
     Check(!other.Load(Json::Parse(R"({"rules": "xp"})")), "a non-skill-use file is refused");
+    CharacterRules mixed = Rules();
+    mixed.AddClasses(Json::Parse(
+        R"({"rules": "xp", "classes": [{"id": "Knight", "tags": ["Guns"]}]})"));
+    Check(mixed.classes.at("Knight").major.count("Blade") == 1,
+          "an XP game's class of the same id leaves the skill-use one");
     Check(SkyrimSkillIndex("Enchanting") == kEnchanting && SkyrimSkillIndex("Blade") == -1,
           "Skyrim skill names map to their index");
 }

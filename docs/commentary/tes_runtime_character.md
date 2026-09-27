@@ -32,7 +32,7 @@ with mod events, the channel converted scripts already use for `TES4Spin`:
 
 | Event | `strArg` | `numArg` | Does |
 |---|---|---|---|
-| `TESCharacterRules` | the plugin, e.g. `Oblivion.esm` | 1 | on, with that plugin's `character.json` and every file's classes |
+| `TESCharacterRules` | the plugin, e.g. `Oblivion.esm` | 1 | on, with that plugin's `character.json` and every `skill-use` file's classes (an XP game's, such as New Vegas's `Farmer`, never replaces Oblivion's of the same EditorID) |
 | `TESCharacterRules` | | 0 | off |
 | `TESCharacterClass` | the class's EditorID | | the class the rates follow |
 | `TESCharacterLevel` | | the level | sets the player's level |
