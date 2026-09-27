@@ -1,7 +1,9 @@
 # Classic character systems: attributes, skills, leveling and perks - design plan
 
-**Status: PLAN, unimplemented.** No code has been written. Every piece below is
-meant to land as its own small PR, and every piece is off by default.
+**Status: PLAN.** Piece A is written for Oblivion, on its own branch
+(`feat/character-data`); nothing reads its file until pieces I and D land.
+Every other piece is unimplemented. Every piece is meant to land as its own
+small PR, and every piece is off by default.
 
 Goal: a converted game plays by its own character rules, not Skyrim's.
 Morrowind and Oblivion keep their attributes, skills, classes, birthsigns and
@@ -257,7 +259,7 @@ art source per game read from that game's install.
 
 | # | Piece | Where | Depends on |
 |---|---|---|---|
-| A | Character data, all four games, with engine defaults merged under each plugin's GMSTs | `tes5_import/` new module | nothing |
+| A | Character data, all four games, with engine defaults merged under each plugin's GMSTs. Written for Oblivion (`tes5_import/character_data.py`, with the engine's setting defaults read from `Oblivion.exe` and a fix to the `SKIL` export, which read every field one slot early); Morrowind and Fallout follow with their rules, Fallout needing `AVIF`, `PERK` and `REPU` exported first | `tes5_import/` new module | nothing |
 | I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, Skyrim's level-up and perk point withheld, and a native that sets the player's level | `tes_runtime/common/`, called by each game's runtime | A |
 | D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs | rules plugin, `script_convert/` | A, I |
 | E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
