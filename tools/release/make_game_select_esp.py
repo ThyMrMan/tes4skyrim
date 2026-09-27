@@ -33,6 +33,7 @@ from tes5_import.base.writer import (pack_record, pack_subrecord, pack_tes4_head
                                 pack_formid_subrecord, pack_uint32_subrecord,
                                 count_records_and_groups)
 from tes5_import.base.conditions import build_ctda
+from tes5_import.base.constants import TES4_ATTRIBUTE_NAMES
 from script_convert.pipeline import build_vmad_object_script, build_vmad_quest_fragments
 from tools.esm.tes5_esm_reader import read_tes5_file
 
@@ -159,6 +160,11 @@ GLOBALS = [
     (FID_GLOB_MORROWIND,    'TESGS_HasMorrowind'),
     (FID_GLOB_ARKTWEND,     'TESGS_HasArktwend'),
 ]
+
+#: The player's TES4 attributes, one GLOB each from here (below the travel FLST): rules write, TES4Polyfill reads.
+FID_GLOB_PLAYER_ATTRIBUTES = 0x01000AF0
+PLAYER_ATTRIBUTE_GLOBALS = [(FID_GLOB_PLAYER_ATTRIBUTES + i, f'TESGS_Player{name}')
+                            for i, name in enumerate(TES4_ATTRIBUTE_NAMES)]
 
 
 def build_glob(fid: int, edid: str) -> bytes:
@@ -478,6 +484,7 @@ def build_plugin(skyrim_esm: str):
     vanilla = vanilla_records(skyrim_esm)
     globs = [build_glob(f, e) for f, e in GLOBALS]
     globs.append(build_glob(FID_GLOB_CURRENT, 'TESGS_CurrentGame'))
+    globs += [build_glob(f, e) for f, e in PLAYER_ATTRIBUTE_GLOBALS]
     groups = [
         pack_top_group('GLOB', b''.join(globs)),
         pack_top_group('BOOK', build_scroll(vanilla[('BOOK', FID_ELDER_SCROLL)])),

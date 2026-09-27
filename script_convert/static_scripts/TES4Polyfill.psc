@@ -86,37 +86,63 @@ EndFunction
 
 ; SKYRIM HAS NO ATTRIBUTES. Strength, Intelligence, Willpower, Agility, Speed,
 ; Endurance, Personality and Luck do not exist as actor values, and no TES5
-; actor value is a faithful stand-in — every candidate sits on a different
-; scale, so comparing a 0-100 attribute threshold against one is arbitrary.
+; actor value is a faithful stand-in: every candidate sits on a different
+; scale. Aliasing them (Strength->UnarmedDamage, Agility->SpeedMult) broke every
+; Morroblivion guild's rank gates.
 ;
-; These used to be aliased onto the nearest-looking AV (Strength->UnarmedDamage,
-; Endurance->HealRate, Agility->SpeedMult, Personality->Speechcraft) and that
-; silently broke every Morroblivion guild. The Fighters Guild advancement
-; script gates each promotion on `Player.GetAV Strength >= 30 && Player.GetAV
-; Endurance >= 30`; UnarmedDamage sits near 0 so the check could never pass at
-; any level, while SpeedMult sits near 100 so the Thieves Guild's Agility gate
-; passed unconditionally. Neither is the authored behaviour.
-;
-; IsTES4Attribute lets the readers below no-op instead: a read returns a value
-; that satisfies any authored threshold (attribute gates cap at 100 in TES4 —
-; the highest in the guild scripts is 35) so the gate falls open, and a write
-; is discarded rather than corrupting a live Skyrim value. Falling open is the
-; faithful outcome: an Oblivion attribute gate exists to keep an
-; under-developed character out, and a Skyrim character has no way to raise an
-; attribute at all, so enforcing it would lock the content away permanently
-; rather than merely early.
+; So a converted script reads and writes attributes through the functions
+; below. While a game's character rules keep the player's attributes, the
+; player's are real: TESGameSelect.esp holds one global per attribute
+; (TESGS_PlayerStrength ... at 0xAF0 on), written by the rules and 0 while no
+; rules keep them. Otherwise a read returns TES4AttributeStub(), above every
+; authored threshold, so the gate falls open, and a write is discarded: a
+; Skyrim character with no rules cannot raise an attribute, so enforcing a gate
+; would lock the content away for good. NPCs always read the stub.
+; See: docs/commentary/character_rules.md#attributes
 Bool Function IsTES4Attribute(String avName) Global
-  Return avName == "Strength" || avName == "Intelligence" || \
-         avName == "Willpower" || avName == "Agility" || \
-         avName == "Speed" || avName == "Endurance" || \
-         avName == "Personality" || avName == "Luck"
+  Return TES4AttributeIndex(avName) >= 0
 EndFunction
 
-; Value returned for a removed attribute. Above every authored TES4 attribute
-; threshold (the ceiling is 100) so `>=` gates pass, and positive so the rarer
-; `> 0` / `!= 0` forms behave the same way.
+; The attribute's index, Strength 0 to Luck 7 in TES4's order, or -1.
+Int Function TES4AttributeIndex(String avName) Global
+  If avName == "Strength"
+    Return 0
+  ElseIf avName == "Intelligence"
+    Return 1
+  ElseIf avName == "Willpower"
+    Return 2
+  ElseIf avName == "Agility"
+    Return 3
+  ElseIf avName == "Speed"
+    Return 4
+  ElseIf avName == "Endurance"
+    Return 5
+  ElseIf avName == "Personality"
+    Return 6
+  ElseIf avName == "Luck"
+    Return 7
+  EndIf
+  Return -1
+EndFunction
+
+; Value returned for an attribute no rules keep. Above every authored TES4
+; attribute threshold (the ceiling is 100) so `>=` gates pass, and positive so
+; the rarer `> 0` / `!= 0` forms behave the same way.
 Float Function TES4AttributeStub() Global
   Return 100.0
+EndFunction
+
+; The player's global for an attribute while character rules keep it, else None.
+GlobalVariable Function PlayerAttributeGlobal(Actor akActor, String avName) Global
+  Int index = TES4AttributeIndex(avName)
+  If index < 0 || akActor != Game.GetPlayer() || Game.GetModByName("TESGameSelect.esp") == 255
+    Return None
+  EndIf
+  GlobalVariable value = Game.GetFormFromFile(0xAF0 + index, "TESGameSelect.esp") as GlobalVariable
+  If value && value.GetValue() > 0.0
+    Return value
+  EndIf
+  Return None
 EndFunction
 
 String Function MapActorValue(String avName) Global
@@ -152,8 +178,20 @@ String Function MapActorValue(String avName) Global
   EndIf
 EndFunction
 
+; A kept attribute stays at least 1, so it never reads as "no rules keep it".
+Float Function ClampAttribute(Float afValue) Global
+  If afValue < 1.0
+    Return 1.0
+  EndIf
+  Return afValue
+EndFunction
+
 Float Function GetTES4ActorValue(Actor akActor, String avName) Global
   If IsTES4Attribute(avName)
+    GlobalVariable kept = PlayerAttributeGlobal(akActor, avName)
+    If kept
+      Return kept.GetValue()
+    EndIf
     Return TES4AttributeStub()
   EndIf
   Return akActor.GetActorValue(MapActorValue(avName))
@@ -161,6 +199,10 @@ EndFunction
 
 Function SetTES4ActorValue(Actor akActor, String avName, Float afValue) Global
   If IsTES4Attribute(avName)
+    GlobalVariable kept = PlayerAttributeGlobal(akActor, avName)
+    If kept
+      kept.SetValue(ClampAttribute(afValue))
+    EndIf
     Return
   EndIf
   akActor.SetActorValue(MapActorValue(avName), afValue)
@@ -168,6 +210,10 @@ EndFunction
 
 Function ModTES4ActorValue(Actor akActor, String avName, Float afValue) Global
   If IsTES4Attribute(avName)
+    GlobalVariable kept = PlayerAttributeGlobal(akActor, avName)
+    If kept
+      kept.SetValue(ClampAttribute(kept.GetValue() + afValue))
+    EndIf
     Return
   EndIf
   akActor.ModActorValue(MapActorValue(avName), afValue)
@@ -175,6 +221,7 @@ EndFunction
 
 Function ForceTES4ActorValue(Actor akActor, String avName, Float afValue) Global
   If IsTES4Attribute(avName)
+    SetTES4ActorValue(akActor, avName, afValue)
     Return
   EndIf
   akActor.ForceActorValue(MapActorValue(avName), afValue)

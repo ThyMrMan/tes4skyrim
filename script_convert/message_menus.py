@@ -188,6 +188,11 @@ def _paged(edid_fmt: str, title: str, labels: list) -> list:
     return pages
 
 
+def chargen_class_names(names) -> list:
+    """The class menu's entries: each distinct name once, sorted ignoring case."""
+    return sorted(set(names), key=str.lower)
+
+
 def build_chargen_menus(bsgn_records: list, clas_records: list,
                         spel_edid_by_fid24: dict) -> dict:
     """Shared birthsign/class menu plan.
@@ -250,7 +255,7 @@ def build_chargen_menus(bsgn_records: list, clas_records: list,
             except ValueError:
                 fid24 = 0
             classes.append((full, fid24))
-    names = sorted({c[0] for c in classes}, key=str.lower)
+    names = chargen_class_names(c[0] for c in classes)
     if classes:
         index_of = {n.lower(): i for i, n in enumerate(names)}
         plan['class'] = {

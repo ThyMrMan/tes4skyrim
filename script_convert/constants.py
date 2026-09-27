@@ -54,38 +54,18 @@ TYPE_MAP = {
     'array_var':  'String',
 }
 
-# Actor value name mapping (TES4 -> TES5)
-# TES4 attribute names. SKYRIM HAS NO ATTRIBUTES — Strength, Intelligence,
-# Willpower, Agility, Speed, Endurance, Personality and Luck do not exist as
-# actor values, and no TES5 actor value is a faithful stand-in, because every
-# candidate sits on a different scale than TES4's 0-100.
-#
-# They used to be aliased onto the nearest-looking AV here
-# (strength->UnarmedDamage, endurance->HealRate, agility/speed/acrobatics->
-# SpeedMult, personality->Speechcraft, luck->LuckModifier — which is not even
-# a real AV name, so it failed silently). That broke every Morroblivion guild:
-# the Fighters Guild gates each rank on `Player.GetAV Strength >= 30 &&
-# Player.GetAV Endurance >= 30`, and UnarmedDamage sits near 0, so no character
-# could ever qualify at any level; the Thieves Guild's Agility gate read
-# SpeedMult (~100) and passed unconditionally instead.
-#
-# An attribute read is now a no-op that returns ATTRIBUTE_STUB_VALUE, so the
-# gate falls OPEN, and an attribute write is discarded. Falling open is the
-# faithful outcome: an Oblivion attribute gate exists to keep an
-# under-developed character out, and a Skyrim character cannot raise an
-# attribute at all, so enforcing it would lock the content away permanently
-# rather than merely early. Mirrors dialog_conditions._TES4_AV_ATTRIBUTES,
-# which drops the equivalent CTDA, and TES4Polyfill.IsTES4Attribute.
+#: TES4's attributes, which Skyrim lacks; converted scripts read and write them through TES4Polyfill.
 TES4_ATTRIBUTES = frozenset({
     'strength', 'intelligence', 'willpower', 'agility',
     'speed', 'endurance', 'personality', 'luck',
 })
 
-# Value substituted for a removed attribute read. Above every authored TES4
-# attribute threshold (TES4 attributes cap at 100; the highest in the guild
-# advancement scripts is 35) so `>=` gates pass, and positive so the rarer
-# `> 0` / `!= 0` forms behave the same way.
-ATTRIBUTE_STUB_VALUE = '100.0'
+#: Papyrus AV native -> the TES4Polyfill function that reads or writes an attribute instead.
+ATTRIBUTE_POLYFILL = {
+    'GetActorValue': 'GetTES4ActorValue', 'GetBaseActorValue': 'GetTES4ActorValue',
+    'SetActorValue': 'SetTES4ActorValue', 'ForceActorValue': 'SetTES4ActorValue',
+    'ModActorValue': 'ModTES4ActorValue',
+}
 
 ACTOR_VALUE_MAP = {
     'armorer':      'Smithing',

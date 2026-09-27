@@ -107,6 +107,30 @@ def test_a_dependent_plugin_carries_only_what_it_defines():
     assert 'attributes' not in doc and 'standings' not in doc
 
 
+def test_blunt_weapons_mysticism_spells_and_skill_books_are_listed():
+    """Blunt is WEAP type 2 or 3; Mysticism a spell whose first effect's MGEF is school 4, the
+    MGEF found in the master chain; a book lists under the skill it teaches."""
+    by_type = {'WEAP': [{'FormID': '00000100', 'DATA.Type': '2'},
+                        {'FormID': '00000101', 'DATA.Type': '0'}],
+               'SPEL': [{'FormID': '00000200', 'Effect[0].EFID': 'TELE'},
+                        {'FormID': '00000201', 'Effect[0].EFID': 'FIDG'}],
+               'BOOK': [{'FormID': '00000300', 'DATA.Teaches': '2'},
+                        {'FormID': '00000301', 'DATA.Teaches': '255'}]}
+    masters_mgef = {'1': {'Signature': 'MGEF', 'EditorID': 'TELE', 'DATA.School': '4'},
+                    '2': {'Signature': 'MGEF', 'EditorID': 'FIDG', 'DATA.School': '2'}}
+    doc = character_data(by_type, ['Oblivion.esm'], 'Mod.esp', masters_mgef)
+    assert doc['folds'] == {'Blunt': [['Oblivion.esm', 0x100]],
+                            'Mysticism': [['Oblivion.esm', 0x200]]}
+    assert doc['books'] == {'Blade': [['Oblivion.esm', 0x300]]}
+
+
+def test_text_settings_keep_their_text():
+    """An `s` setting is read as text, over the engine's default."""
+    doc = character_data({'GMST': [_gmst('sMeditate', 'Sleep on it.')]}, [], 'Oblivion.esm')
+    assert doc['settings']['sMeditate'] == 'Sleep on it.'
+    assert doc['settings']['sAttributeNameLuck'] == 'Luck'
+
+
 def test_a_plugin_defining_nothing_writes_nothing():
     """No character records and no leveling GMSTs: no document."""
     assert character_data({'GMST': [_gmst('fDialogSpeachDelay', '0.15')]},

@@ -158,7 +158,8 @@ def _write_runtime_sidecars(st, export_dir: str) -> None:
         export_dir, st.output_path, os.path.basename(st.output_path),
         writer=st.writer,
         master_index=getattr(st.ctx, 'master_index', None) if st.ctx else None)
-    staged += write_character_sidecar(st.by_type, export_dir, st.output_path)
+    staged += write_character_sidecar(st.by_type, export_dir, st.output_path,
+                                      getattr(st.ctx, 'master_export', None))
     if staged:
         print(f'  Staged {staged} runtime sidecar file(s)')
 

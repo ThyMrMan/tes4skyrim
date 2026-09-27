@@ -74,6 +74,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [asset_convert_terrain.md](commentary/asset_convert_terrain.md) | asset_convert/lod/terrain_lod.py — terrain, LOD and grass |
 | [asset_convert_texture.md](commentary/asset_convert_texture.md) | asset_convert/texture/parallax.py — textures, shaders and parallax |
 | [asset_convert_ui.md](commentary/asset_convert_ui.md) | asset_convert/ui/ui_menus.py - Oblivion UI in Skyrim |
+| [character_rules.md](commentary/character_rules.md) | character_rules/, tools/release/make_character_rules_esp.py - a converted game's leveling for the player |
 | [ck_exe_disassembly.md](commentary/ck_exe_disassembly.md) | tools/disasm/ - CreationKit.exe as a source |
 | [ck_navmesh_generation.md](commentary/ck_navmesh_generation.md) | tools/navmesh/ - how the CK generates navmesh |
 | [ck_reference_init_hang.md](commentary/ck_reference_init_hang.md) | tes5_import/base/writer.py - the CK reference-init hang |

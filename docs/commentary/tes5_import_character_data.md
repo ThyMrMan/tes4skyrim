@@ -5,8 +5,8 @@
 `tes4_export/oblivion_engine_tables.json` (`settings`).
 
 TESRuntime reads it for Skyrim's skill rates while a game's rules are on
-([tes_runtime_character.md](tes_runtime_character.md#skill-rates)); the
-player's leveling rules will read it too.
+([tes_runtime_character.md](tes_runtime_character.md#skill-rates)), and the
+rules plugin is built from it ([character_rules.md](character_rules.md#the-rules-plugin)).
 
 ## <a id="the-character-data-file"></a>What it holds
 
@@ -26,7 +26,9 @@ built.
 | `classes` | each `CLAS`: its two primary attributes, specialization, seven major skills, and whether chargen offers it |
 | `races` | each `RACE`: skill bonuses, base attributes for each sex, the spells it grants, and whether chargen offers it |
 | `signs` | each `BSGN` and the spells it grants |
-| `settings` | the [leveling settings](#engine-defaults) |
+| `folds` | the Blunt weapons (`WEAP` type 2 or 3) and Mysticism spells (first effect's `MGEF` school 4, found in the master chain) whose use credits a [folded skill](#skyrim-skills) |
+| `books` | each skill's books, by `BOOK DATA.Teaches` |
+| `settings` | the [leveling settings](#engine-defaults), and the texts the level-up shows: `sMeditate`, `sLevelUp2` to `sLevelUp20`, the eight `sAttributeName`s |
 | `attributes`, `standings` | a masterless plugin only: the engine's eight attributes, and Fame and Infamy with the Skyrim actor values that already carry them |
 
 Every record is a form `[owning plugin, local id]`, resolved against the

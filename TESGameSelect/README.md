@@ -167,6 +167,12 @@ Arktwend must be converted in authored mode (`convert.py -f
 Arktwend_English.esm --morrowind-source vanilla`, or Settings > Morrowind
 source > Vanilla); the exporter refuses to build it in Morroblivion mode.
 
+The plugin also holds the player's eight TES4 attributes, one global each
+(`TESGS_PlayerStrength` at `0xAF0` to `TESGS_PlayerLuck` at `0xAF7`), which a
+converted game's character rules write and converted scripts read through
+`TES4Polyfill`; 0 means no rules keep them. See
+[character_rules.md](../docs/commentary/character_rules.md#attributes).
+
 ## Rebuilding
 
 ```bash

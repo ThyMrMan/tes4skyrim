@@ -28,12 +28,15 @@ VERSION = 1
 ENGINE_TABLES = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
                              'tes4_export', 'oblivion_engine_tables.json')
 
-#: The settings the skill-use rules read.
+#: The settings the skill-use rules read: numbers, then the texts their level-up shows.
 LEVELING_SETTINGS = (
     'iLevelUpSkillCount', *(f'iLevelUp{n:02d}Mult' for n in range(1, 11)),
     'fSkillUseExp', 'fSkillUseFactor', 'fSkillUseMajorMult',
     'fSkillUseMinorMult', 'fSkillUseSpecMult', 'fPCBaseHealthMult',
-    'fPCBaseMagickaMult', 'iTrainingSkills')
+    'fPCBaseMagickaMult', 'fActorStrengthEncumbranceMult', 'iTrainingSkills',
+    'fAttributeClassPrimaryBonus', 'fAttributeClassSecondaryBonus',
+    'sMeditate', *(f'sLevelUp{n}' for n in range(2, 21)),
+    *(f'sAttributeName{name}' for name in TES4_ATTRIBUTE_NAMES))
 
 #: CLAS and SKIL DATA.Specialization.
 SPECIALIZATIONS = ('Combat', 'Magic', 'Stealth')
@@ -60,6 +63,12 @@ _PLAYABLE = 0x1
 
 #: A class names seven major skills; a race boosts up to seven.
 _MAJOR_SKILLS = _SKILL_BOOSTS = 7
+
+#: WEAP DATA.Type of a one- and a two-handed blunt weapon.
+_BLUNT_TYPES = (2, 3)
+
+#: MGEF DATA.School of Mysticism.
+_MYSTICISM = 4
 
 
 def _form(formid: str, masters: list, plugin: str) -> list:
@@ -145,11 +154,47 @@ def _signs(records: list, masters: list, plugin: str) -> list:
              'spells': _spells(rec, masters, plugin)} for rec in records]
 
 
+def _folds(by_type: dict, master_export: dict, masters: list, plugin: str) -> dict:
+    """The weapons and spells whose use credits a folded skill: Blunt weapons,
+    and spells whose first effect is Mysticism, looked up in the master chain.
+
+    See: docs/commentary/tes5_import_character_data.md#skyrim-skills
+    """
+    effects = {get_str(rec, 'EditorID').lower(): rec
+               for rec in (*(master_export or {}).values(), *by_type.get('MGEF', []))
+               if rec.get('Signature') == 'MGEF'}
+    blunt = [_form(rec['FormID'], masters, plugin) for rec in by_type.get('WEAP', [])
+             if get_int(rec, 'DATA.Type', -1) in _BLUNT_TYPES]
+    mysticism = [_form(rec['FormID'], masters, plugin) for rec in by_type.get('SPEL', [])
+                 if get_int(effects.get(get_str(rec, 'Effect[0].EFID').lower(), {}),
+                            'DATA.School', -1) == _MYSTICISM]
+    return {name: forms for name, forms in (('Blunt', blunt), ('Mysticism', mysticism))
+            if forms}
+
+
+def _books(records: list, masters: list, plugin: str) -> dict:
+    """Skill -> the books that teach it (BOOK DATA.Teaches, a 0-based skill index)."""
+    out = {}
+    for rec in records:
+        name = _skill_name(get_int(rec, 'DATA.Teaches', -1) + TES4_SKILL_AV_BASE)
+        if name:
+            out.setdefault(name, []).append(_form(rec['FormID'], masters, plugin))
+    return out
+
+
 def engine_defaults() -> dict:
     """The engine's defaults for LEVELING_SETTINGS, from ENGINE_TABLES."""
     with open(ENGINE_TABLES, encoding='utf-8') as handle:
         settings = json.load(handle).get('settings', {})
     return {name: settings[name] for name in LEVELING_SETTINGS if name in settings}
+
+
+def _setting_value(name: str, rec: dict):
+    """A GMST's value by its name's type letter: int, text or float."""
+    if name[0] == 's':
+        return get_str(rec, 'DATA.Value')
+    value = get_float(rec, 'DATA.Value')
+    return int(value) if name[0] == 'i' else round(value, 6)
 
 
 def _settings(records: list, masterless: bool) -> dict:
@@ -158,18 +203,20 @@ def _settings(records: list, masterless: bool) -> dict:
     for rec in records:
         name = get_str(rec, 'EditorID')
         if name in LEVELING_SETTINGS:
-            value = get_float(rec, 'DATA.Value')
-            out[name] = int(value) if name[0] == 'i' else round(value, 6)
+            out[name] = _setting_value(name, rec)
     return out
 
 
-def character_data(by_type: dict, masters: list, plugin: str) -> dict:
+def character_data(by_type: dict, masters: list, plugin: str,
+                   master_export: dict = None) -> dict:
     """The character data document for one TES4 plugin's records, or {} when
-    it defines none of them."""
+    it defines none of them. `master_export` supplies the masters' MGEFs."""
     doc = {'skills': _skills(by_type.get('SKIL', []), masters, plugin),
            'classes': _classes(by_type.get('CLAS', []), masters, plugin),
            'races': _races(by_type.get('RACE', []), masters, plugin),
            'signs': _signs(by_type.get('BSGN', []), masters, plugin),
+           'folds': _folds(by_type, master_export, masters, plugin),
+           'books': _books(by_type.get('BOOK', []), masters, plugin),
            'settings': _settings(by_type.get('GMST', []), not masters)}
     doc = {key: value for key, value in doc.items() if value}
     if not doc:
@@ -180,14 +227,16 @@ def character_data(by_type: dict, masters: list, plugin: str) -> dict:
     return {'version': VERSION, 'plugin': plugin, 'rules': 'skill-use', **doc}
 
 
-def write_character_sidecar(by_type: dict, export_dir: str, output_path: str) -> int:
+def write_character_sidecar(by_type: dict, export_dir: str, output_path: str,
+                            master_export: dict = None) -> int:
     """Write `<plugin>.character.json` beside the other TESRuntime sidecars.
     Returns files written: 0 for a TES3 or FO3/FNV source, or a plugin that
     defines no character data."""
     if is_tes3_export(export_dir) or is_fallout_source():
         return 0
     plugin = os.path.basename(output_path)
-    doc = character_data(by_type, masters_from_export_header(export_dir), plugin)
+    doc = character_data(by_type, masters_from_export_header(export_dir), plugin,
+                         master_export)
     if not doc:
         return 0
     path = os.path.join(os.path.dirname(output_path), SIDECAR_DIR,

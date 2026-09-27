@@ -18,7 +18,7 @@ argument text -- so those are properties of the CALL and live on it.
 
 from script_convert import resolve_name as _resolve_name
 from script_convert.constants import (
-    ACTOR_VALUE_MAP, ANIM_GROUP_EVENTS, ATTRIBUTE_STUB_VALUE, CASTABLE,
+    ACTOR_VALUE_MAP, ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, CASTABLE,
     FORCE_GREET_QUEST, PLACED_REF_SIGS, TES4_ASSAULT_BOUNTY, TES4_ATTRIBUTES,
     TES4_MISC_STAT_NAMES, TES4_MURDER_BOUNTY,
     TES4_STEAL_BOUNTY, is_generated_script_type, mgef_family_keyword_name,
@@ -1382,66 +1382,71 @@ _AV_SET_ONLY = frozenset({'aggression', 'confidence', 'morality', 'mood', 'assis
 
 @command(*sorted(ACTOR_VALUE_FUNCTIONS))
 def actor_value(ctx, call) -> str:
-    """Get/Set/Mod ActorValue -- the AV NAME is a quoted string in Papyrus.
+    """Get/Set/Mod ActorValue: the AV name is a quoted string in Papyrus, the
+    OBSE `...2` aliases included. An attribute, which Skyrim lacks, goes
+    through TES4Polyfill, which keeps the player's for a game's character rules.
 
-    The OBSE `...2` aliases take the same (AV name, value) arguments as the
-    vanilla commands they map onto, so they quote the name here too: without
-    them `modAV2 Health 300` emitted an unquoted `Health` and the script failed
-    with "undefined identifier".
-
-    SKYRIM HAS NO ATTRIBUTES.  A call naming Strength, Intelligence,
-    Willpower, Agility, Speed, Endurance, Personality or Luck has no faithful
-    target -- every TES5 actor value sits on a different scale than TES4's
-    0-100, so aliasing one onto the nearest look-alike does not preserve the
-    authored threshold.  Aliasing them (strength->UnarmedDamage,
-    agility/speed->SpeedMult) broke every Morroblivion guild: the Fighters
-    Guild gates each rank on `GetAV Strength >= 30`, UnarmedDamage sits near 0
-    so nobody qualified, while the Thieves Guild's Agility gate read SpeedMult
-    (~100) and passed unconditionally.  A read becomes ATTRIBUTE_STUB_VALUE
-    (above every authored threshold) so the gate falls OPEN -- the faithful
-    outcome, since a Skyrim character cannot raise an attribute at all and
-    enforcing it would lock the content away permanently rather than early.
+    See: docs/commentary/script_convert.md#skyrim-has-no-attributes
     """
     if not len(call):
         return None
     raw = call.source(0).rstrip(',').strip('"\'')
     if raw.lower() in TES4_ATTRIBUTES:
-        if call.name in ACTOR_VALUE_READ_FUNCTIONS:
-            return ATTRIBUTE_STUB_VALUE
-        return (f';TES4 attribute {raw} has no Skyrim equivalent '
-                f'-- write dropped')
-
-    av = ACTOR_VALUE_MAP.get(raw.lower(), raw)
-    # Oblivion's single Encumbrance AV is TWO in Skyrim: the current carried
-    # weight is InventoryWeight, the maximum is CarryWeight.  TES4 splits them
-    # the modified-vs-base way, so the over-encumbered idiom is
-    # `player.getav encumbrance > player.getbaseav encumbrance` -- MQ01's
-    # stage 75/78 tutorial.  Mapping both sides to CarryWeight compared the cap
-    # against itself, so neither tutorial stage could ever fire.
-    if raw.lower() == 'encumbrance' and call.name in _AV_READ:
-        av = 'InventoryWeight'
-
+        return _attribute_call(ctx, call, raw)
+    av = _av_name(raw, call)
     args = [f'"{av}"']
     if len(call) > 1:
         scaled = (ctx._scale_enum_av(av, call.source(1))
                   if call.name in _AV_SET else None)
         args.append(scaled if scaled is not None else call.arg(1))
-
-    papyrus = (_AV_PAPYRUS.get(call.name)
-               or getattr(COMMAND_ROWS.get(call.name), 'emit', '')
-               or 'GetActorValue')
+    papyrus = _av_papyrus(call)
     if papyrus == 'ForceActorValue' and av.lower() in _AV_SET_ONLY:
         papyrus = 'SetActorValue'
+    return f'{_av_subject(ctx, call)}{papyrus}({", ".join(args)})'
+
+
+def _av_name(raw: str, call) -> str:
+    """The Skyrim AV a TES4 name means; a read of Encumbrance is InventoryWeight.
+
+    See: docs/commentary/script_convert.md#encumbrance-is-two-values
+    """
+    if raw.lower() == 'encumbrance' and call.name in _AV_READ:
+        return 'InventoryWeight'
+    return ACTOR_VALUE_MAP.get(raw.lower(), raw)
+
+
+def _av_papyrus(call) -> str:
+    """The Papyrus native a TES4 AV command becomes."""
+    return (_AV_PAPYRUS.get(call.name)
+            or getattr(COMMAND_ROWS.get(call.name), 'emit', '')
+            or 'GetActorValue')
+
+
+def _av_subject(ctx, call) -> str:
+    """The actor an AV call names, as a call prefix: the player for the
+    PC-only commands, nothing in an Actor script's own body (where `Self.`
+    would change only the output text) and `(Self as Actor).` in any other."""
     if call.name in _AV_PLAYER_ONLY:
-        return f'Game.GetPlayer().{papyrus}({", ".join(args)})'
+        return 'Game.GetPlayer().'
     ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)
-    if ref == 'Self':
-        # An ACTOR script IS the subject, so the call is written bare -- adding
-        # `Self.` changes nothing at runtime but every such line then differs
-        # from the reference output.  Any other Self needs the cast.
-        return (f'{papyrus}({", ".join(args)})' if call.extends == 'Actor'
-                else f'(Self as Actor).{papyrus}({", ".join(args)})')
-    return f'{ref}.{papyrus}({", ".join(args)})'
+    if ref != 'Self':
+        return f'{ref}.'
+    return '' if call.extends == 'Actor' else '(Self as Actor).'
+
+
+def _attribute_call(ctx, call, raw: str) -> str:
+    """An attribute read or write as its TES4Polyfill call, or a dropped-line
+    comment for a command the polyfill has no counterpart for.
+
+    See: docs/commentary/character_rules.md#attributes
+    """
+    fn = ATTRIBUTE_POLYFILL.get(_av_papyrus(call))
+    if not fn:
+        return f';TES4 attribute {raw}: {call.name} is not kept -- dropped'
+    args = [_av_subject(ctx, call)[:-1] or 'Self', f'"{raw.capitalize()}"']
+    if len(call) > 1:
+        args.append(call.arg(1))
+    return f'TES4Polyfill.{fn}({", ".join(args)})'
 
 
 #: AV commands naming the PLAYER by definition, whatever script calls them.

@@ -552,18 +552,23 @@ class TestActorValueMap:
         for attr in TES4_ATTRIBUTES:
             assert attr not in ACTOR_VALUE_MAP
 
-    def test_attribute_read_is_stubbed_open(self, converter):
-        """A read of a removed attribute yields a value that passes the gate."""
+    def test_attribute_read_goes_through_the_polyfill(self, converter):
+        """An attribute read asks TES4Polyfill, which keeps the player's for the character rules."""
         result = conv_expr(converter,
             'Player.GetAV Strength >= 30 && Player.GetAV Endurance >= 30',
             'Quest')
-        assert result == '100.0 >= 30 && 100.0 >= 30'
+        assert result == ('TES4Polyfill.GetTES4ActorValue(Game.GetPlayer(), "Strength") >= 30'
+                          ' && TES4Polyfill.GetTES4ActorValue(Game.GetPlayer(), "Endurance") >= 30')
 
-    def test_attribute_write_is_dropped(self, converter):
-        result = conv_line(converter, 'Player.SetAV Strength 50',
-                                                  'Quest')
-        assert result.lstrip().startswith(';')
-        assert 'SetActorValue' not in result
+    def test_attribute_write_goes_through_the_polyfill(self, converter):
+        """A write reaches the polyfill, never a Skyrim actor value."""
+        result = conv_line(converter, 'Player.SetAV Strength 50', 'Quest')
+        assert result.strip() == 'TES4Polyfill.SetTES4ActorValue(Game.GetPlayer(), "Strength", 50)'
+
+    def test_attribute_in_an_actor_script_names_self(self, converter):
+        """An Actor script's own attribute is `Self`, not a bare call."""
+        result = conv_line(converter, 'ModAV agility -5', 'Actor')
+        assert result.strip() == 'TES4Polyfill.ModTES4ActorValue(Self, "Agility", -5)'
 
     def test_skill_read_still_maps(self, converter):
         """Skills survive the attribute no-op -- only attributes are stubbed."""

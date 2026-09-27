@@ -98,3 +98,11 @@ every shipped versionlib (`tools/validate/stable_id_check.py`):
 
 `fSkillUseCurve` (374905) and `fXPLevelUpBase` (374908) resolve straight to
 the settings' values.
+
+SKSE 2.2.6's own headers agree with all of this: `ActorValueInfo::skillUsages`
+at `+0x108`, in the order use mult, offset mult, improve mult, improve offset,
+with the threshold computed the same way (`PapyrusActorValueInfo.cpp`), and
+`PlayerSkills::data` pointing at the experience (`+0`) and its threshold
+(`+4`), whose `SetLevel` is the same `0x77B350` (`GameFormComponents.h`).
+SKSE's comment puts the skill pointer at `PlayerCharacter+0x9B0`; every
+1.6.1170 caller disassembled here reads `+0x9b8`, which the runtime uses.
