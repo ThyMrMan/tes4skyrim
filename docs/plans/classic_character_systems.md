@@ -1,8 +1,8 @@
 # Classic character systems: attributes, skills, leveling and perks - design plan
 
-**Status: PLAN.** Piece A is written for Oblivion, on its own branch
-(`feat/character-data`); nothing reads its file until pieces I and D land.
-Every other piece is unimplemented. Every piece is meant to land as its own
+**Status: PLAN.** Pieces A and I are written for Oblivion, each on its own
+branch (`feat/character-data`, `feat/character-runtime`); nothing turns I on
+until piece D's rules quest exists. Every other piece is unimplemented. Every piece is meant to land as its own
 small PR, and every piece is off by default.
 
 Goal: a converted game plays by its own character rules, not Skyrim's.
@@ -115,25 +115,31 @@ converted game's rules are on. Two such changes are needed:
 - **Skill XP rates.** Skyrim keeps them in its 18 skill `AVIF` records
   ([checked](#checked)). Overriding those would collide with any mod that
   changes skill rates, the last one loaded winning, and would change Skyrim's
-  own skills whenever the plugin is loaded. The runtime instead writes the
-  source game's rates, from the character data file, into the loaded skill
-  records at load: Oblivion's and Morrowind's from their skill records, and
-  zero for Fallout, whose skills rise only by points.
+  own skills whenever the plugin is loaded. The runtime instead rewrites the
+  loaded skill records' rates while the rules are on. The per-action gains
+  measure different things in each game (Skyrim's damage dealt or gold, where
+  Oblivion counts uses), so Skyrim's stay; the threshold curve takes the
+  source game's exponent and its class multipliers, anchored to Skyrim's own
+  rates at level 25 (Oblivion's formula, read from `Oblivion.exe`, is
+  `(level x fSkillUseFactor) ^ fSkillUseExp x specialization x major or
+  minor`). Fallout's are zero, as its skills rise only by points.
 - **Skyrim's own leveling.** With a game's rules on, Skyrim's character level
   still rises from its own skill experience, and its level-up screen and perk
   point still arrive, so the player would level twice. In data that means
   overriding `fXPLevelUpBase` and `fXPLevelUpMult`; the runtime instead
   withholds Skyrim's level-up and perk point while the rules are on. One gate
-  covers both ([checked](#level-up-in-the-exe)): the runtime keeps the level-up
-  threshold stored in the player's skill data out of reach, and SKSE's
-  `SetGameSettingFloat` raises `fXPLevelUpBase` in memory for the "Level up
-  available" message, which works from the settings instead.
+  covers both ([checked](#level-up-in-the-exe)): every call to the "can level
+  up" check answers no, which writes nothing the save keeps, and
+  `fXPLevelUpBase` is raised in memory for the "Level up available" message,
+  which works from the settings instead.
 - **Raising the player's level.** Skyrim's level is what leveled lists and
   encounter zones scale by, so when the source game's rules grant a level,
   Skyrim's must follow. The engine's own set-level routine does exactly that,
   with no level-up screen, no perk point and no Health, Magicka or Stamina
-  bonus; Papyrus has no way to call it, so the runtime exposes it as a native
-  the rules quest calls.
+  bonus; Papyrus has no way to call it, so the rules quest asks the runtime
+  with a mod event (`TESCharacterLevel`), the channel converted scripts
+  already use for `TES4Spin`, rather than a new native, which the runtimes'
+  standalone SKSE interface cannot register without SKSE's source.
 
 Mechanics Skyrim has no counterpart for follow the same rule: Fallout's perk
 entry points that Skyrim lacks (action points, VATS, gun spread, damage
@@ -260,7 +266,7 @@ art source per game read from that game's install.
 | # | Piece | Where | Depends on |
 |---|---|---|---|
 | A | Character data, all four games, with engine defaults merged under each plugin's GMSTs. Written for Oblivion (`tes5_import/character_data.py`, with the engine's setting defaults read from `Oblivion.exe` and a fix to the `SKIL` export, which read every field one slot early); Morrowind and Fallout follow with their rules, Fallout needing `AVIF`, `PERK` and `REPU` exported first | `tes5_import/` new module | nothing |
-| I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, Skyrim's level-up and perk point withheld, and a native that sets the player's level | `tes_runtime/common/`, called by each game's runtime | A |
+| I | Skyrim's behavior while a game's rules are on, in memory: the source game's skill XP rates, Skyrim's level-up and perk point withheld, and a mod event that sets the player's level. Written in TESRuntime, which serves every converted game (`tes_runtime/tes/character_rules.cpp`) | `tes_runtime/tes/` | A |
 | D | Skill-use leveling for the player: rules quest on story events, GLOB stats, message-box level-up, class effects; the polyfill reads the GLOBs | rules plugin, `script_convert/` | A, I |
 | E | Fallout XP leveling on story events, perk and trait conversion, karma and reputation; Fallout-only perk entry points | `tes5_import/*_falloutnv.py`, rules plugin, `tes_runtime/fallout/` | A, I |
 | B | Shared stat store for per-actor stats; Morrowind switched over with identical behavior | `tes_runtime/common/` | A |
