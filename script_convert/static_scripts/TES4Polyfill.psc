@@ -99,8 +99,10 @@ EndFunction
 ; Skyrim character with no rules cannot raise an attribute, so enforcing a gate
 ; would lock the content away for good. NPCs always read the stub.
 ; See: docs/commentary/character_rules.md#attributes
+; Fallout's Perception and Charisma count too: no rules keep them yet, so
+; they read the stub and discard writes like an unkept attribute.
 Bool Function IsTES4Attribute(String avName) Global
-  Return TES4AttributeIndex(avName) >= 0
+  Return TES4AttributeIndex(avName) >= 0 || avName == "Perception" || avName == "Charisma"
 EndFunction
 
 ; The attribute's index, Strength 0 to Luck 7 in TES4's order, or -1.

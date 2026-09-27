@@ -18,8 +18,8 @@ argument text -- so those are properties of the CALL and live on it.
 
 from script_convert import resolve_name as _resolve_name
 from script_convert.constants import (
-    ACTOR_VALUE_MAP, ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, CASTABLE,
-    FORCE_GREET_QUEST, PLACED_REF_SIGS, TES4_ASSAULT_BOUNTY, TES4_ATTRIBUTES,
+    ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, AV_ARGUMENT_NAMES, CASTABLE,
+    FORCE_GREET_QUEST, PLACED_REF_SIGS, PRIMARY_STATS, TES4_ASSAULT_BOUNTY,
     TES4_MISC_STAT_NAMES, TES4_MURDER_BOUNTY,
     TES4_STEAL_BOUNTY, is_generated_script_type, mgef_family_keyword_name,
     safe_property_name, papyrus_script_name
@@ -34,7 +34,8 @@ from script_convert.message_menus import PAGE_OPTIONS
 from script_convert.poll_motion import axis_key, rate_scale
 from script_convert.emit import expr as _expr
 from script_convert.constants import typed_already
-from script_convert.constants_falloutnv import FALLOUT_COMMAND_ALIASES
+from script_convert.constants_falloutnv import (FALLOUT_COMMAND_ALIASES,
+                                                FALLOUT_UNMAPPED_ACTOR_VALUES)
 from tes5_import.dialogue.say_topics import PLAYER_TOKENS
 
 #: TES4 command name (lowercase) -> handler `(ctx, call) -> str | None`.
@@ -1380,6 +1381,16 @@ _AV_READ = frozenset({'getactorvalue', 'getav'})
 _AV_SET_ONLY = frozenset({'aggression', 'confidence', 'morality', 'mood', 'assistance'})
 
 
+def _unmapped_actor_value(ctx, call, raw: str) -> str:
+    """An FO3/FNV actor value Skyrim's table lacks: an inert read, or a dropped write.
+
+    See: docs/commentary/script_convert.md#fallout-actor-value-names
+    """
+    if call.name in ACTOR_VALUE_READ_FUNCTIONS:
+        return ctx.note(f'{call.raw_name} {raw} - Skyrim has no {raw} actor value')
+    return f';Fallout actor value {raw} has no Skyrim equivalent -- write dropped'
+
+
 @command(*sorted(ACTOR_VALUE_FUNCTIONS))
 def actor_value(ctx, call) -> str:
     """Get/Set/Mod ActorValue: the AV name is a quoted string in Papyrus, the
@@ -1391,8 +1402,10 @@ def actor_value(ctx, call) -> str:
     if not len(call):
         return None
     raw = call.source(0).rstrip(',').strip('"\'')
-    if raw.lower() in TES4_ATTRIBUTES:
+    if raw.lower() in PRIMARY_STATS:
         return _attribute_call(ctx, call, raw)
+    if raw.lower() in FALLOUT_UNMAPPED_ACTOR_VALUES:
+        return _unmapped_actor_value(ctx, call, raw)
     av = _av_name(raw, call)
     args = [f'"{av}"']
     if len(call) > 1:
@@ -1412,7 +1425,7 @@ def _av_name(raw: str, call) -> str:
     """
     if raw.lower() == 'encumbrance' and call.name in _AV_READ:
         return 'InventoryWeight'
-    return ACTOR_VALUE_MAP.get(raw.lower(), raw)
+    return AV_ARGUMENT_NAMES.get(raw.lower(), raw)
 
 
 def _av_papyrus(call) -> str:
