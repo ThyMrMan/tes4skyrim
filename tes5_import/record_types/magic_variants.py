@@ -11,6 +11,7 @@ script variant, then its Constant clone.
 import struct
 import threading
 
+from ..base.constants import TES4_AV_NAMES
 from ..base.owned_records import MGEF_FAMILY_KEYWORDS
 from ..base.text_reader import get_int, get_str
 from ..base.writer import (pack_formid_subrecord, pack_record,
@@ -244,18 +245,6 @@ def ability_variant(fid: int, code: str, magnitude: int, writer) -> int:
 # Per-actor-value variants
 # ---------------------------------------------------------------------------
 
-_ATTR_NAMES = {
-    0: 'Strength', 1: 'Intelligence', 2: 'Willpower', 3: 'Agility',
-    4: 'Speed', 5: 'Endurance', 6: 'Personality', 7: 'Luck',
-}
-_SKILL_NAMES = {
-    12: 'Armorer', 13: 'Athletics', 14: 'Blade', 15: 'Block', 16: 'Blunt',
-    17: 'HandToHand', 18: 'HeavyArmor', 19: 'Alchemy', 20: 'Alteration',
-    21: 'Conjuration', 22: 'Destruction', 23: 'Illusion', 24: 'Mysticism',
-    25: 'Restoration', 26: 'Acrobatics', 27: 'LightArmor', 28: 'Marksman',
-    29: 'Mercantile', 30: 'Security', 31: 'Sneak', 32: 'Speechcraft',
-}
-
 
 def _wanted_av_pairs(by_code: dict, effect_records: list) -> list:
     """Every (code, TES4 actor value) an item uses, sorted so FormIDs stay reproducible."""
@@ -284,7 +273,7 @@ def build_av_variants(mgef_records: list, effect_records: list, writer) -> int:
     for code, av in _wanted_av_pairs(by_code, effect_records):
         src = by_code[code]
         tes5_av = resolve_actor_value(code, av, src)
-        name = _ATTR_NAMES.get(av) or _SKILL_NAMES.get(av)
+        name = TES4_AV_NAMES.get(av)
         if tes5_av == AV_NONE or not name:
             continue
         edid = f'TES4{code}{name}'

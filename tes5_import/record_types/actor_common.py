@@ -12,8 +12,9 @@ See: docs/commentary/tes5_import_actors.md
 import re
 import struct
 
-from ..base.constants import (DEFAULT_RACE, RACE_MAP, TES4_SKILL_TO_TES5,
-                         TES5_SKILL_ORDER)
+from ..base.constants import (DEFAULT_RACE, RACE_MAP, TES4_ATTRIBUTE_NAMES,
+                              TES4_SKILL_AV_BASE, TES4_SKILL_TO_TES5,
+                              TES5_SKILL_ORDER)
 from ..base.equivalents import ATTRIBUTE_SKILL_MAP, VOICE_TYPE_MAP
 from ..base.race_lookup import tes4_race_edid
 from ..base.conditions import FUNC_GET_IN_FACTION, build_or_chain, needs_origin_gate
@@ -636,7 +637,7 @@ def _npc_trainer_params(rec: dict):
     max_train = get_int(rec, 'AIDT.MaxTraining')
     if max_train <= 0:
         return None
-    teaches_name = TES4_SKILL_TO_TES5.get(get_int(rec, 'AIDT.Teaches') + 12)
+    teaches_name = TES4_SKILL_TO_TES5.get(get_int(rec, 'AIDT.Teaches') + TES4_SKILL_AV_BASE)
     if not teaches_name or teaches_name not in TES5_SKILL_ORDER:
         return None
     return TES5_SKILL_ORDER.index(teaches_name), min(255, max_train)
@@ -856,9 +857,6 @@ def convert_FACT(rec: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-#: TES4 skill actor values start at 12; DATA.Teaches is a 0-based index.
-_TES4_SKILL_AV_BASE = 12
-
 #: CLAS DATA flags and bleedout, both at their vanilla defaults.
 _CLAS_FLAGS_DEFAULT = 0xFFFC0000
 _CLAS_BLEEDOUT_DEFAULT = 0.1
@@ -875,10 +873,6 @@ _SPEC_SKILLS = {
         'Alchemy'),
 }
 
-#: TES4 attribute order, indexed by DATA.PrimaryAttribute1/2.
-_TES4_ATTR_NAMES = ('Strength', 'Intelligence', 'Willpower', 'Agility',
-                    'Speed', 'Endurance', 'Personality', 'Luck')
-
 
 def _clas_skill_weights(rec: dict) -> bytes:
     """The 18 TES5 skill weights for a TES4 class, clamped to 0-255.
@@ -893,9 +887,9 @@ def _clas_skill_weights(rec: dict) -> bytes:
 
     for key in ('DATA.PrimaryAttribute1', 'DATA.PrimaryAttribute2'):
         idx = get_int(rec, key)
-        if not 0 <= idx < len(_TES4_ATTR_NAMES):
+        if not 0 <= idx < len(TES4_ATTRIBUTE_NAMES):
             continue
-        attr = _TES4_ATTR_NAMES[idx]
+        attr = TES4_ATTRIBUTE_NAMES[idx]
         favoured = (TES5_SKILL_ORDER if attr == 'Luck'
                     else ATTRIBUTE_SKILL_MAP.get(attr, []))
         for skill in favoured:
@@ -931,7 +925,7 @@ def convert_CLAS(rec: dict, *, override_fid: int = 0, override_edid: str = '',
 
     skill_weights = _clas_skill_weights(rec)
 
-    teaches_tes4 = get_int(rec, 'DATA.Teaches') + _TES4_SKILL_AV_BASE
+    teaches_tes4 = get_int(rec, 'DATA.Teaches') + TES4_SKILL_AV_BASE
     teaches_tes5_name = TES4_SKILL_TO_TES5.get(teaches_tes4)
     if teaches_tes5_name and teaches_tes5_name in TES5_SKILL_ORDER:
         teaches = TES5_SKILL_ORDER.index(teaches_tes5_name)

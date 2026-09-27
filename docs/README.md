@@ -87,6 +87,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [script_convert_morrowind.md](commentary/script_convert_morrowind.md) | script_convert/ - what TES3 scripts do differently |
 | [tes4_export_falloutnv.md](commentary/tes4_export_falloutnv.md) | tes4_export/record_types/falloutnv.py - FO3/FNV export deltas |
 | [tes4_export_morrowind.md](commentary/tes4_export_morrowind.md) | tes4_export/tes3_reader.py, export_morrowind.py - TES3 export and Morroblivion compatibility |
+| [tes5_import_character_data.md](commentary/tes5_import_character_data.md) | tes5_import/character_data.py - the character data file |
 | [tes5_import_conditions.md](commentary/tes5_import_conditions.md) | tes5_import/base/conditions.py - CTDA translation |
 | [tes5_import_dialogue.md](commentary/tes5_import_dialogue.md) | tes5_import/dialogue/converter.py - dialogue and voice |
 | [tes5_import_actors.md](commentary/tes5_import_actors.md) | tes5_import/record_types/actor_common.py, npc.py, creature.py - actor conversion |

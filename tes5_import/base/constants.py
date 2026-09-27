@@ -208,6 +208,25 @@ TES5_SKILL_ORDER = [
     'Illusion', 'Restoration', 'Enchanting',
 ]
 
+#: TES4's eight attributes, by actor value 0-7.
+TES4_ATTRIBUTE_NAMES = ('Strength', 'Intelligence', 'Willpower', 'Agility',
+                        'Speed', 'Endurance', 'Personality', 'Luck')
+
+#: TES4's first skill actor value; its 21 skills run 12-32.
+TES4_SKILL_AV_BASE = 12
+
+#: TES4's skills, by actor value from TES4_SKILL_AV_BASE.
+TES4_SKILL_NAMES = (
+    'Armorer', 'Athletics', 'Blade', 'Block', 'Blunt', 'HandToHand',
+    'HeavyArmor', 'Alchemy', 'Alteration', 'Conjuration', 'Destruction',
+    'Illusion', 'Mysticism', 'Restoration', 'Acrobatics', 'LightArmor',
+    'Marksman', 'Mercantile', 'Security', 'Sneak', 'Speechcraft',
+)
+
+#: TES4 actor value -> attribute or skill name, for the values 0-7 and 12-32.
+TES4_AV_NAMES = {**dict(enumerate(TES4_ATTRIBUTE_NAMES)),
+                 **dict(enumerate(TES4_SKILL_NAMES, TES4_SKILL_AV_BASE))}
+
 
 # ---------------------------------------------------------------------------
 # Lock level mapping
