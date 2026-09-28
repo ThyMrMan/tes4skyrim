@@ -42,6 +42,8 @@ def export_DIAL(rec: Record) -> list:
     data = get_subrecord(rec, "DATA")
     if data and len(data.data) >= 1:
         lines.append(f"DATA.Type={data.data[0]}")
+    if data and len(data.data) >= 2:
+        lines.append(f"DATA.Flags={data.data[1]}")
     return lines
 
 
@@ -74,6 +76,8 @@ def export_INFO(rec: Record) -> list:
         lines.append(f"DATA.DialogType={d[0]}")
         lines.append(f"DATA.NextSpeaker={d[1]}")
         lines.append(f"DATA.Flags={d[2]}")
+        if len(d) >= 4:
+            lines.append(f"DATA.Flags2={d[3]}")
 
     emit_formid(lines, "QSTI.Quest", get_subrecord(rec, "QSTI"))
     emit_formid(lines, "TPIC.Topic", get_subrecord(rec, "TPIC"))
@@ -83,6 +87,8 @@ def export_INFO(rec: Record) -> list:
     emit_conditions(lines, rec)
     _emit_formid_list(lines, rec, "TCLT", "Choice")
     _emit_formid_list(lines, rec, "TCLF", "LinkFrom")
+    _emit_formid_list(lines, rec, "TCFU", "FollowUp")
+    emit_string(lines, "Prompt", get_subrecord(rec, "RNAM"))
 
     begin, end = info_result_scripts(rec)
     if begin:

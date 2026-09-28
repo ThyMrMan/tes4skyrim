@@ -11,6 +11,7 @@ Usage:
 """
 
 import os
+import struct
 import unittest
 
 # Determine Oblivion.esm path
@@ -773,6 +774,69 @@ class TestINFOResultScripts(unittest.TestCase):
         self.assertEqual(info_result_script(rec), 'set x to 1\nSetStage VCG01 85')
         self.assertEqual(info_result_script({'ResultScriptEnd': 'a'}), 'a')
         self.assertEqual(info_result_script({}), '')
+
+
+class TestFalloutPackageScripts(unittest.TestCase):
+    """FO3/FNV PACK sections: an idle, an embedded script and a topic each.
+
+    See docs/commentary/tes4_export_falloutnv.md#package-scripts.
+    """
+
+    def _lines(self, *subs):
+        """The package delta lines of a PACK built from (type, bytes) pairs."""
+        from tes4_export.tes4_reader import Record, Subrecord
+        from tes4_export.record_types.package_falloutnv import emit_package_deltas
+        rec = Record(type='PACK', data_size=0, flags=0, form_id=1,
+                     subrecords=[Subrecord(t, d) for t, d in subs])
+        lines = []
+        emit_package_deltas(lines, rec)
+        return lines
+
+    def test_each_section_keeps_its_own_script_refs_and_topic(self):
+        """The sections reuse INAM/SCTX/SCRO/TNAM, so stream order decides."""
+        lines = self._lines(
+            ('POBA', b''), ('INAM', b'\0' * 4), ('SCHR', b'\0' * 20),
+            ('SCTX', b'SetStage VCG02 30'), ('SCRO', struct.pack('<I', 0x10A21C)),
+            ('TNAM', b'\0' * 4),
+            ('POEA', b''), ('INAM', struct.pack('<I', 0x42)), ('SCHR', b'\0' * 20),
+            ('TNAM', struct.pack('<I', 0x118A5C)),
+            ('POCA', b''), ('INAM', b'\0' * 4), ('SCHR', b'\0' * 20), ('TNAM', b'\0' * 4))
+        self.assertEqual(lines, ['OnBegin.Script=SetStage VCG02 30',
+                                 'OnBegin.SCRO[0]=0010A21C',
+                                 'OnEnd.Idle=00000042', 'OnEnd.Topic=00118A5C'])
+
+    def test_dialogue_data_names_its_topic_and_kind(self):
+        """A Dialogue package's PKDD: its topic and Conversation/SayTo type."""
+        pkdd = struct.pack('<fIIIII', 30.0, 0x15B6CF, 0, 0, 1, 0)
+        lines = self._lines(('PKDD', pkdd))
+        self.assertIn('PKDD.Topic=0015B6CF', lines)
+        self.assertIn('PKDD.Type=SayTo', lines)
+
+
+class TestFalloutTopicLinks(unittest.TestCase):
+    """FO3/FNV DIAL flags and the INFO prompt are dumped.
+
+    See docs/commentary/tes5_import_dialogue.md#fallout-topic-links.
+    """
+
+    @staticmethod
+    def _record(sig, *subs):
+        """A Record built from (type, bytes) pairs."""
+        from tes4_export.tes4_reader import Record, Subrecord
+        return Record(type=sig, data_size=0, flags=0, form_id=1,
+                      subrecords=[Subrecord(t, d) for t, d in subs])
+
+    def test_dial_flags_follow_the_type(self):
+        """FO3/FNV DATA is Type + Flags; Oblivion's one byte has no Flags line."""
+        from tes4_export.record_types.dialog_misc import export_DIAL
+        self.assertIn('DATA.Flags=2', export_DIAL(self._record('DIAL', ('DATA', b'\x00\x02'))))
+        self.assertNotIn('DATA.Flags', ''.join(export_DIAL(self._record('DIAL', ('DATA', b'\x00')))))
+
+    def test_info_prompt(self):
+        """INFO RNAM becomes Prompt."""
+        from tes4_export.record_types.dialog_misc import export_INFO
+        lines = export_INFO(self._record('INFO', ('RNAM', b'Who rescued me?\0')))
+        self.assertIn('Prompt=Who rescued me?', lines)
 
 
 class TestFalloutTriggerPrimitive(unittest.TestCase):
