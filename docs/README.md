@@ -126,6 +126,7 @@ Designed, NOT yet built. Opens with `Status: PLAN`. Becomes commentary when buil
 | [vanilla_creature_swap.md](plans/vanilla_creature_swap.md) | Plan — "Vanilla Creature Swap" ESP generator + GUI |
 | [gui_overhaul.md](plans/gui_overhaul.md) | GUI overhaul: setup, MO2 integration and per-world launching |
 | [vanilla_item_swap.md](plans/vanilla_item_swap.md) | Plan — "Vanilla Item Swap" (ingredients, food, clutter) + preview renderer |
+| [bink_movies.md](plans/bink_movies.md) | Source-game Bink 1 movies (FNV intro, Oblivion outro) Skyrim's Bink 2 cannot play |
 
 ## `audits/`
 
@@ -137,6 +138,7 @@ A dated sweep over a corpus, with counts. Frozen once written; a re-audit is a N
 | [ck_warnings.md](audits/ck_warnings.md) | CK Warnings Audit — Oblivion.esm |
 | [edit_gate_refusals.md](audits/edit_gate_refusals.md) | What agents hit at the code-rules and shell gates, the four shell holes closed, and a replay of the fix |
 | [diagnosis_sources.md](audits/diagnosis_sources.md) | Which sources actually solved bugs, from 46 fixes across 35 sessions — the evidence for CLAUDE.md's source order |
+| [fallout_nv_quests.md](audits/fallout_nv_quests.md) | Quest completability audit of FalloutNV.esm: the walkthrough's Fallout fixes, and five bug classes with counts |
 | [fallout_nv_mesh_conversion.md](audits/fallout_nv_mesh_conversion.md) | Fallout NV / FO3 mesh conversion — what already works, and the particle-NIF defect |
 | [morroblivion_mesh_axis_rotation.md](audits/morroblivion_mesh_axis_rotation.md) | Morroblivion's hand-authored pitch and Z re-seat fixes, and which a dependent plugin must re-apply |
 | [morrowind_opcode_testplan.md](audits/morrowind_opcode_testplan.md) | The fewest TR_Mainland quests that exercise every MWScript opcode, with quest giver and `coc` target |
