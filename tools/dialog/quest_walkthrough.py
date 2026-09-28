@@ -37,7 +37,8 @@ sys.path.insert(0, str(Path(__file__).parent.parent.parent))
 
 from tools.esm.tes5_esm_reader import (TES5Record,
                                    _zstring)
-from tes5_import.base.text_reader import parse_export_file
+from asset_convert.game_paths import namespace_for, set_namespace
+from tes5_import.base.text_reader import info_result_script, parse_export_file
 
 # ── Skyrim CTDA function indices (project table, tools/esm/tes5_esm_reader.py) ──
 F_GETQUESTRUNNING = 56
@@ -254,6 +255,11 @@ _RE_PROP = re.compile(
 _RE_FUNC = re.compile(r'^\s*(?:Function|Event)\s+(\w+)\s*\(', re.IGNORECASE)
 _RE_ENDFUNC = re.compile(r'^\s*End(?:Function|Event)\b', re.IGNORECASE)
 _RE_SETSTAGE = re.compile(r'\b(\w+)\.SetStage\(\s*([^)]*?)\s*\)', re.IGNORECASE)
+#: The converter's own-script helpers, `X.TES4SetStage(Q as X, n)` and `X.TES4Start(Q as X)`.
+_RE_HELPER_SETSTAGE = re.compile(
+    r'\.TES4SetStage\(\s*\(?\s*(\w+)(?:\s+as\s+\w+)?\s*\)?\s*,\s*([^)]*?)\s*\)', re.IGNORECASE)
+_RE_HELPER_START = re.compile(
+    r'\.TES4Start\(\s*\(?\s*(\w+)(?:\s+as\s+\w+)?\s*\)?\s*\)', re.IGNORECASE)
 _RE_START = re.compile(r'\b(\w+)\.Start\(\s*\)', re.IGNORECASE)
 _RE_STOP = re.compile(r'\b(\w+)\.Stop\(\s*\)', re.IGNORECASE)
 _RE_COMPLETE = re.compile(r'\b(?:(\w+)\.)?CompleteQuest\(\s*\)', re.IGNORECASE)
@@ -321,14 +327,14 @@ def extract_actions(body: str):
       ('setglobal', prop, float_value)
     """
     acts = []
-    for m in _RE_SETSTAGE.finditer(body):
+    for m in (*_RE_SETSTAGE.finditer(body), *_RE_HELPER_SETSTAGE.finditer(body)):
         arg = m.group(2).strip()
         try:
             stage = int(float(arg))
         except ValueError:
             stage = None
         acts.append(('setstage', m.group(1).lower(), stage))
-    for m in _RE_START.finditer(body):
+    for m in (*_RE_START.finditer(body), *_RE_HELPER_START.finditer(body)):
         acts.append(('start', m.group(1).lower(), None))
     for m in _RE_STOP.finditer(body):
         acts.append(('stop', m.group(1).lower(), None))
@@ -385,7 +391,7 @@ class Tes4Data:
         scri_files = ('QUST', 'ACTI', 'ALCH', 'AMMO', 'APPA', 'ARMO', 'BOOK',
                       'CLOT', 'CONT', 'CREA', 'DOOR', 'FLOR', 'FURN', 'INGR',
                       'KEYM', 'LIGH', 'MISC', 'NPC_', 'SGST', 'SLGM', 'WEAP',
-                      'SPEL', 'ENCH')
+                      'SPEL', 'ENCH', 'TACT', 'TERM')
         for sig in scri_files:
             path = os.path.join(export_dir, f'{sig}.txt')
             if not os.path.isfile(path):
@@ -458,7 +464,7 @@ def build_tes4_edges(t4: Tes4Data):
 
     # INFO result scripts, gated by the INFO's own quest-state conditions
     for fid, rec in t4.infos.items():
-        script_edges(rec.get('ResultScript', ''), _t4_gate(rec), ('INFO', fid))
+        script_edges(info_result_script(rec), _t4_gate(rec), ('INFO', fid))
     # Quest stage result scripts, gated on reaching that stage
     for qfid, rec in t4.quests.items():
         i = 0
@@ -777,8 +783,11 @@ def main():
     ap.add_argument('--cache-dir', default='temp')
     ap.add_argument('--quest', default=None, help='single quest EditorID')
     ap.add_argument('--md', default=None, help='write markdown report here')
+    ap.add_argument('--start', action='append', default=[], metavar='EDID',
+                    help='a quest another plugin starts, e.g. TESGameSelect\'s opening (VCG00)')
     ap.add_argument('-v', '--verbose', action='store_true')
     args = ap.parse_args()
+    set_namespace(namespace_for(args.export))
 
     from tools.dialog.quest_walkthrough_tes5 import Tes5Data, Tes5Engine
     t0 = time.time()
@@ -789,24 +798,28 @@ def main():
     print('loading TES5 output...')
     d5 = Tes5Data(args.esm, args.scripts, args.seq, args.skyrim,
                   args.cache_dir)
-    eng = Tes5Engine(d5, verbose=args.verbose)
+    eng = Tes5Engine(d5, verbose=args.verbose, started=args.start)
     print(f'  {len(eng.edges)} converted stage-advancement edges')
     print('running walkthrough fixpoint...')
     results, _state = audit(t4, eng, only_quest=args.quest)
+    print_results(results, args.verbose)
+    if args.md:
+        write_md(args.md, results, eng)
 
+
+def print_results(results, verbose):
+    """The console report: totals, then every quest with an issue."""
     broken = [r for r in results if r['status'] in ('BROKEN', 'MISSING')]
     degraded = [r for r in results if r['status'] == 'DEGRADED']
     print(f'\n=== {len(results)} quests: {len(broken)} broken, '
           f'{len(degraded)} degraded ===')
     for r in results:
-        if r['status'] != 'OK' or r['issues'] or (args.verbose and r['warns']):
+        if r['status'] != 'OK' or r['issues'] or (verbose and r['warns']):
             print(f'\n[{r["status"]}] {r["edid"]} ({r["fid24"]:08X})')
             for i in r['issues'][:12]:
                 print(f'  ISSUE: {i}')
             for w in r['warns'][:6]:
                 print(f'  warn:  {w}')
-    if args.md:
-        write_md(args.md, results, eng)
 
 
 if __name__ == '__main__':

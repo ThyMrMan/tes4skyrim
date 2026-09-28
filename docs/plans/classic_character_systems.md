@@ -6,11 +6,27 @@ own branch (`feat/character-data`, `feat/character-runtime`,
 choice, rates following the class, a level-up at rest setting the player's
 level. Piece A's Fallout half is written (`feat/fallout-character-data`):
 the `AVIF`, `PERK`, `REPU` and Fallout `CLAS` export and Fallout's character
-data file. Piece E's XP leveling is written (`feat/fallout-xp-rules`), built
-for New Vegas and not yet played: experience from quest rewards, kills and
-picked locks by the formulas read from `Fallout3.exe`, and the level-up with
-skill points. Perks, karma, reputation and every other piece are
-unimplemented. Every
+data file. Piece E's XP leveling is written (`feat/fallout-xp-rules`) and was
+first played in New Vegas on 2026-09-27: experience from quest rewards, kills
+and picked locks by the formulas read from `Fallout3.exe`, and the level-up
+with skill points. Piece G's first part is written for Fallout: the tutorial's
+S.P.E.C.I.A.L. and tag-skill menus as message boxes
+([character creation](../commentary/character_rules.md#fallout-character-creation)).
+Perks and traits are written: Fallout's `PERK` records convert into the
+converted plugin
+([conversion](../commentary/tes5_import_character_data.md#fallout-perks)),
+converted scripts call Skyrim's perk natives, and the rules add the level-up
+perk and trait menus ([menus](../commentary/character_rules.md#fallout-perks));
+not yet played. Reputation and karma are written for scripts and conditions:
+each `REPU` is a FormList of fame, infamy and title globals that converted
+commands change and converted `GetReputationThreshold` conditions read, and
+karma is one global
+([reputation](../commentary/tes5_import_character_data.md#fallout-reputation));
+not yet played. The karma and infamy of kills and thefts are written in the
+rules as New Vegas's GOG exe does them
+([karma and infamy](../commentary/character_rules.md#fallout-karma-and-infamy)),
+not yet played. Every other piece is unimplemented.
+Every
 piece is meant to land as its own small PR, and every piece is off by
 default.
 
@@ -55,10 +71,10 @@ Each game loses the same things today, in parallel:
   grants the chosen sign's spells, and the class choice is saved in the GLOB
   `TES4ChargenClassChoice`, but the class has no effect
   (`script_convert/message_menus.py`).
-- **Fallout 3 / New Vegas**: `script_convert/constants_falloutnv.py` stubs
-  `RewardXP` ("Skyrim has no experience points"), `HasPerk` (read as 0), every
-  reputation command (read as 0) and Pip-Boy notes. `PERK`, `AVIF`, `RCPE` and
-  `CHAL` are not imported; `TERM` and `NOTE` become plain activators. The
+- **Fallout 3 / New Vegas**: reputation and karma commands and conditions
+  read and write globals, notes are books, and `RewardXP` and the perk
+  commands reach the rules and Skyrim's perk natives. `AVIF`, `RCPE` and
+  `CHAL` are not imported (`PERK` is); `TERM` becomes a plain activator. The
   condition remap already maps FNV `HasPerk` (449) onto Skyrim's (448)
   (`tes5_import/generated/ctda_fnv_remap.py`). Guns are handled by
   `FalloutRuntime`.
@@ -244,7 +260,8 @@ one, as the vanilla creature swap plan does
 ([vanilla_creature_swap.md](vanilla_creature_swap.md)):
 
 - mastery bonuses, birthsign and racial abilities as abilities or perks;
-- FO3/FNV `PERK` records converted to Skyrim perks. The record structure is
+- FO3/FNV `PERK` records converted to Skyrim perks, in the converted plugin
+  after all, since its dialogue conditions and scripts name them. The record structure is
   shared, but most entry points are not ([checked](#checked)): quest-stage and
   ability entries convert directly, entry points with a Skyrim counterpart
   convert through a name-keyed table, and the Fallout-only ones (action

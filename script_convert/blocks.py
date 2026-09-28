@@ -24,6 +24,8 @@ from script_convert.constants_falloutnv import (
     FALLOUT_BLOCK_MAP,
     FALLOUT_COMBAT_STATE_GUARDS,
 )
+from script_convert.say_to_done import BLOCK_TYPE as SAY_TO_DONE_BLOCK
+from script_convert.say_to_done import block_header as say_to_done_header
 
 BLOCK_MAP = {
     'gamemode':           ('Event OnUpdate()', 'EndEvent'),
@@ -90,6 +92,16 @@ BLOCK_FILTER_PARAM = {
 COMBAT_STATE_GUARDS = {'onalarm': 'aeCombatState != 0',
                        'onstartcombat': 'aeCombatState == 1',
                        **FALLOUT_COMBAT_STATE_GUARDS}
+
+
+def block_header(block) -> 'tuple | None':
+    """(opener, closer) a block becomes: SayToDone a function, else an event.
+
+    See: docs/commentary/script_convert.md#saytodone
+    """
+    if block.btype.lower() == SAY_TO_DONE_BLOCK:
+        return say_to_done_header(block)
+    return BLOCK_MAP.get(block.btype.lower())
 
 
 def _filter_property_type(param_type: str, rtype: str) -> 'str | None':

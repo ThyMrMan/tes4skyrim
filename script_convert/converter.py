@@ -101,6 +101,9 @@ class ScriptConverter:
     #: DIAL EditorID (lower) -> `TES4Unlock_<topic>` global, from build_unlock_plan.
     topic_unlock_globals: dict = {}
 
+    #: (quest EditorID lower, objective index) -> {state: mirror global}, from objective_script_globals.
+    objective_globals: dict = {}
+
     #: DIAL EditorID (lower) -> chain line count, from build_script_chain_map.
     conversation_chains: dict = {}
 
@@ -446,7 +449,9 @@ class ScriptConverter:
             '; thread on the box and its return lands in TES4_MsgButton.',
             'Int Function TES4_ShowMsg(Message TES4_akMsg)',
             '  TES4_MsgButton = -1',
-            '  Return TES4_akMsg.Show()',
+            '  TES4_MsgButton = TES4_akMsg.Show()',
+            *(['  TES4_MessageBoxClosed()'] if self.sc.msgbox_hook else []),
+            '  Return TES4_MsgButton',
             'EndFunction',
             '',
             'Int Function TES4_TakeMsgButton()',
@@ -784,87 +789,66 @@ class ScriptConverter:
             self._value_type = ''
 
     def _assign(self, stmt, target: str, extends: str) -> str:
+        """One `set`/`let`: a write Papyrus refuses, a value with its own form, else a typed write.
 
-        # `set <ref> to GetFirstRef <type>` opens an OBSE ref-walk: remember
-        # which variable it drives so the `Label` that follows emits the
-        # matching `While (<ref> != None)`.
+        `set <ref> to GetFirstRef` also names the variable the ref-walk's `While` tests.
+        """
         if _call_name(stmt.value) == 'getfirstref':
             self.sc.refwalk_var = target
+        value = _expr.emit(self, stmt.value, extends)
+        blocked = self._blocked_assign(stmt, target, value)
+        if blocked:
+            return blocked
+        value = _self_value(value, extends)
+        special = self._special_assign(stmt, target, value, extends)
+        if special is not None:
+            return special
+        return self._typed_assign(target, value, stmt.value, extends)
 
-        # A compound `let X += Y` expands to `X = X + Y`; Papyrus has none.
-        value_node = stmt.value
-        value = _expr.emit(self, value_node, extends)
+    def _blocked_assign(self, stmt, target: str, value: str) -> str:
+        """The write as an inert line when Papyrus cannot make it, else ''.
 
+        Self cannot be assigned; a cross-script write to a variable the owner
+        never declares is dangling in the original mod, and fails the whole
+        Papyrus file.
+        """
         if target in ('Self', 'GetTargetActor()', 'akSpeakerRef'):
             return f';{target} = {value}  ;cannot assign to Self in Papyrus'
-        # A cross-script write whose variable the owner script never declares
-        # is dangling in the ORIGINAL mod, not a conversion bug: three Nehrim
-        # scripts write `AutoSaveQuest.ReadyForAutosave`, which
-        # AutoSaveQuestScript does not define.  Oblivion ignored it; Papyrus
-        # fails the whole file ("field or property not found").
-        dangling = self._dangling_cross_script_target(
-            _expr.emit_source(stmt.target))
-        if dangling:
-            return f';{target} = {value}  ;{dangling}'
-        # In AME/TopicInfo scripts, Self is the target actor, not the script;
-        # akSpeakerRef is an ObjectReference and needs the cast.
-        if value == 'akSpeakerRef' and extends == 'TopicInfo':
-            value = '(akSpeakerRef as Actor)'
-        elif value == 'Self':
-            if extends == 'ActiveMagicEffect':
-                value = 'GetTargetActor()'
-            elif extends == 'TopicInfo':
-                value = '(akSpeakerRef as Actor)'
+        dangling = self._dangling_cross_script_target(_expr.emit_source(stmt.target))
+        return f';{target} = {value}  ;{dangling}' if dangling else ''
 
+    def _special_assign(self, stmt, target: str, value: str, extends: str) -> 'str | None':
+        """A TODO value, a compound `let`, Say's line length, AddPerk's rank, a global, or a quest delay.
+
+        TES4's Say returned the line's duration and Papyrus's returns nothing,
+        so it becomes the polyfill's measured call.
+        """
         if value.lstrip().startswith(';TODO:'):
-            ttype = self.type_of(target)
-            if ttype == 'GlobalVariable':
-                return f'{target}.SetValue(0)  {value}'
-            dflt = '0' if not ttype or ttype in PAPYRUS_VALUE_TYPES else 'None'
-            return f'{target} = {dflt}  {value}'
-
+            return self._todo_assign(target, value)
         if stmt.op:
-            joiner = value if not stmt.op else f'{target} {stmt.op} {value}'
             if self._is_global_target(target):
-                return (f'{target}.SetValue({self._global_read(target)} '
-                        f'{stmt.op} {value})')
-            return f'{target} = {joiner}'
-
-
-        # TES4 returned the LINE DURATION from Say; Papyrus returns nothing,
-        # so the assignment becomes the polyfill's measured call.  The tree
-        # already separates the Say call from any `+ 2` the author added to
-        # it, which is what 60 lines of balanced-paren scanning over the
-        # emitted text used to recover.
-        say, delay = _split_say(self, value_node, extends)
+                return f'{target}.SetValue({self._global_read(target)} {stmt.op} {value})'
+            return f'{target} = {target} {stmt.op} {value}'
+        say, delay = _split_say(self, stmt.value, extends)
         if say is not None:
             return self._emit_say_line(target, say, delay)
-
+        if _call_name(stmt.value) == 'addperk':
+            return _perk_rank_after(target, value)
         if self._is_global_target(target):
             clean = value.split(';TODO')[0].rstrip() if ';TODO' in value else value
             todo = '  ;TODO' + value.split(';TODO', 1)[1] if ';TODO' in value else ''
             return f'{target}.SetValue({clean}){todo}'
-
-        # `set X.fQuestDelayTime to N` kicks the OWNING quest script's poll.
-        # NEVER RegisterForUpdate here: that is a REPEATING zero-interval
-        # registration -- OnUpdate every frame until something unregisters it
-        # -- and it shipped in 45 scripts.  A single update is the TES4
-        # semantics anyway: the converted OnUpdate re-arms itself, and per the
-        # TES4 CS a delay of 0 means "revert to the DEFAULT 5s cadence".
         if target.endswith('.fQuestDelayTime'):
-            quest_ref = target.rsplit('.', 1)[0]
-            try:
-                fval = float(value.strip())
-            except ValueError:
-                return (f'{quest_ref}.RegisterForSingleUpdate({value.strip()})'
-                        f'  ;fQuestDelayTime')
-            if fval <= 0:
-                return (f'{quest_ref}.RegisterForSingleUpdate(5.0)'
-                        f'  ;fQuestDelayTime = 0 (TES4 default cadence)')
-            return (f'{quest_ref}.RegisterForSingleUpdate({fval:g})'
-                    f'  ;fQuestDelayTime')
+            return _quest_delay(target.rsplit('.', 1)[0], value.strip())
+        return None
 
-        return self._typed_assign(target, value, value_node, extends)
+    def _todo_assign(self, target: str, value: str) -> str:
+        """A value with no conversion: the target's zero, and the TODO kept beside it."""
+        ttype = self.type_of(target)
+        if ttype == 'GlobalVariable':
+            return f'{target}.SetValue(0)  {value}'
+        dflt = '0' if not ttype or ttype in PAPYRUS_VALUE_TYPES else 'None'
+        return f'{target} = {dflt}  {value}'
 
     def _typed_assign(self, target: str, value: str, value_node,
                       extends: str) -> str:
@@ -2435,6 +2419,38 @@ def _split_say(conv, node, extends: str):
     if _call_name(node) not in _SAY_COMMANDS:
         return None, ''
     return _expr.emit(conv, node, extends), delay
+
+
+def _self_value(value: str, extends: str) -> str:
+    """Self as a value: the target actor in an effect script, the speaker in a TopicInfo."""
+    if value == 'akSpeakerRef' and extends == 'TopicInfo':
+        return '(akSpeakerRef as Actor)'
+    if value == 'Self' and extends in ('ActiveMagicEffect', 'TopicInfo'):
+        return 'GetTargetActor()' if extends == 'ActiveMagicEffect' else '(akSpeakerRef as Actor)'
+    return value
+
+
+def _quest_delay(quest_ref: str, value: str) -> str:
+    """`set Q.fQuestDelayTime to N`: one update of the quest's poll after N seconds, 5 for 0 or less.
+
+    Never RegisterForUpdate: it repeats every frame until unregistered, and
+    shipped in 45 scripts. The converted OnUpdate re-arms itself.
+    """
+    try:
+        fval = float(value)
+    except ValueError:
+        return f'{quest_ref}.RegisterForSingleUpdate({value})  ;fQuestDelayTime'
+    if fval <= 0:
+        return f'{quest_ref}.RegisterForSingleUpdate(5.0)  ;fQuestDelayTime = 0 (TES4 default cadence)'
+    return f'{quest_ref}.RegisterForSingleUpdate({fval:g})  ;fQuestDelayTime'
+
+
+def _perk_rank_after(target: str, add_call: str) -> str:
+    """`set T to AddPerk P`: add the perk, then read back the rank Fallout returned.
+
+    See: docs/commentary/character_rules.md#fallout-perks
+    """
+    return f'{add_call}\n  {target} = {add_call.replace(".AddPerk(", ".HasPerk(")} as Int'
 
 
 #: TES4 commands that SPEAK and return the spoken line's length.

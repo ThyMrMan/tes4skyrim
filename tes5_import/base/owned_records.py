@@ -17,7 +17,7 @@ from ..packages.escort_when_near import (ESCORT_WHEN_NEAR_EDID,
 from .constants import AMBIENT_GMST_OVERRIDES, ENGINE_GLOBAL_FORMIDS
 from .equivalents import (CUSTOM_VTYP_EDIDS, SPELL_EQUIP_EITHER_HAND,
                           VTYP_EDID_BY_FID, set_voice_type)
-from .text_reader import get_str
+from .text_reader import get_formid, get_str
 from .writer import (
     PluginWriter,
     pack_obnd,
@@ -44,7 +44,7 @@ _OWNED_GLOBALS = (
     ('TES4ControlsDisabled', 's'),
 )
 
-def _emit_global(writer: PluginWriter, edid: str, type_char: str) -> int:
+def emit_global(writer: PluginWriter, edid: str, type_char: str) -> int:
     """Write one GlobalVariable, register it by name, and return its FormID."""
     fid = writer.derive_formid('GLOB', edid)
     subs = pack_string_subrecord('EDID', edid)
@@ -68,7 +68,7 @@ def create_tes4_special_records(writer: PluginWriter):
 
     See: docs/commentary/tes5_import_dialogue.md#the-conversion-owned-globals
     """
-    made = {edid: _emit_global(writer, edid, ch)
+    made = {edid: emit_global(writer, edid, ch)
             for (edid, ch) in _OWNED_GLOBALS}
     made[ESCORT_WHEN_NEAR_EDID] = _emit_escort_template(writer)
     print('  Created TES4 special records: '
@@ -281,7 +281,7 @@ def create_day_clock(writer: PluginWriter, by_type: dict, ctx=None) -> int:
             if master_index is not None else 0)
     if glob:
         return glob
-    glob = _emit_global(writer, DAY_CLOCK_GLOBAL, 's')
+    glob = emit_global(writer, DAY_CLOCK_GLOBAL, 's')
     quest = writer.derive_formid('SYNTH_QUST', DAY_CLOCK_QUEST)
     props = {'GameDaysPassed': ENGINE_GLOBAL_FORMIDS['gamedayspassed'],
              DAY_CLOCK_GLOBAL: glob}
@@ -329,19 +329,27 @@ def create_ambient_gmst_overrides(writer: PluginWriter, by_type: dict):
 #: FO3/FNV voice folder name (lowercased VTYP EditorID) -> VTYP FormID.
 FALLOUT_VTYP_BY_EDID: dict = {}
 
+#: FO3/FNV VTYP FormID (remapped, as a condition param reads) -> written FormID.
+FALLOUT_VTYP_BY_SOURCE: dict = {}
+
 
 def _emit_authored_vtyps(records: list, emit) -> None:
     """Write a FO3/FNV plugin's own VTYP records under their own EditorIDs.
 
     Gender comes from the EditorID prefix, which is how FNV names them
     (FemaleAdult01Default); anything else -- robots, creatures -- is male.
+    The written FormID is derived, not the source one, so each source id is
+    kept for the conditions that name it.
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
     """
     for rec in records:
         edid = (get_str(rec, 'EditorID') or '').strip()
         if not edid:
             continue
         gender = 'Female' if edid.lower().startswith('female') else 'Male'
-        FALLOUT_VTYP_BY_EDID[edid.lower()] = emit(edid, gender)
+        fid = emit(edid, gender)
+        FALLOUT_VTYP_BY_EDID[edid.lower()] = fid
+        FALLOUT_VTYP_BY_SOURCE[get_formid(rec, 'FormID')] = fid
     print(f"  Voice types: {len(FALLOUT_VTYP_BY_EDID)} authored VTYP records "
           f"kept under their own EditorIDs")
 

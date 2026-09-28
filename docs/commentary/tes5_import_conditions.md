@@ -20,6 +20,7 @@ Parameter remapping and the crash rule are in
 - [Engine-fixed FormID parameters](#engine-fixed-params)
 - [GameDaysPassed reads a whole-day copy](#whole-days)
 - [GetIsRace on a plugin-authored race becomes a faction test](#plugin-authored-races)
+- [GetIsVoiceType names the VTYP as written](#authored-voice-types)
 
 ## <a id="engine-fixed-params"></a>Engine-fixed FormID parameters
 
@@ -401,6 +402,70 @@ rating in Skyrim, and Heal Rate differs in units, so neither maps.
 With a source flagged Fallout, the same census comes out 773 kept and 708
 dropped for New Vegas, 35 kept and 834 dropped for Fallout 3, and no value
 maps to anything but its counterpart.
+
+### <a id="authored-voice-types"></a>GetIsVoiceType names the VTYP as written
+
+**Code:** `owned_records.py` `_emit_authored_vtyps` (fills
+`FALLOUT_VTYP_BY_SOURCE`), `conditions.py` `_convert_params` and
+`authors_voice_type`, `dialogue/groups.py` `_build_injected_ctdas`,
+`actors_falloutnv.py` `inherited_voice`, `creature_races.py`
+`patch_creature_voices`, and the exporter's `_emit_crea_deltas`.
+
+New Vegas authors `GetIsVoiceType` itself: 16,833 conditions on 2,880 INFOs,
+plus quest conditions (`GenericIdleChatter`). Most are generic lines
+(`FemaleAdult01`–`12`) and exclusion lists ("not these voices"). Four faults
+kept those lines from matching the voices actors actually carry:
+
+| Fault | Fix |
+|---|---|
+| VTYPs are written at derived FormIDs, and a condition's parameter was remapped like any FormID, landing on the source id: 32,224 dangling parameters. An exclusion naming a missing VTYP was also always true | the parameter goes through the source-to-written map; any other id keeps the plain remap |
+| The exporter never wrote a CREA's `VTCK`, so every robot and creature (`RobotProtectron`, `CreatureSmartSM`, Rex) fell back to a race voice, then to the generated `TES4Cr<folder>Voice` | `VTCK.Voice` exported for CREA (1,045 of 1,578); a creature naming an authored VTYP keeps it through `patch_creature_voices` |
+| 473 creature stubs take their voice from a template, but template flattening keys Traits on `RNAM.Race`, which no CREA has | `inherited_voice` walks the template chain for the voice map |
+| The importer's injected voice gate (voices of NPCs named elsewhere in the topic) was ANDed onto lines that state their own, e.g. children's lines gated to the adults' voices | no injected voice gate when the INFO, or the quest conditions it inherits, already tests `GetIsVoiceType` |
+
+Measured on FalloutNV.esm over the voice-only OR groups, against every voice
+type an NPC_ carries: INFOs no actor can speak went from 2,147 to 18, and
+creatures on a generated voice from 1,729 to 311, with no FormID moved
+(470,813 records). The 18 left are contradictions New Vegas authors itself:
+`GenericIdleChatter`'s `FemaleAdult07 == 1` and `== 0` (15 lines), and single
+lines such as `RobotEDE == 0` with `RobotEDE == 1`.
+
+Only the plugin's own VTYPs are in the map. A dependent plugin naming its
+master's voice types would need the master's map too; no Fallout DLC is
+converted yet.
+
+### <a id="fallout-objective-conditions"></a>Objective conditions read mirror globals
+
+**Code:** `base/objectives_falloutnv.py`, `conditions_falloutnv.py`
+`objective_ctda`, `script_convert/commands_falloutnv.py` `_objective_mirror`.
+
+FO3/FNV test quest objectives in conditions: `GetObjectiveCompleted` (420)
+and `GetObjectiveDisplayed` (421) appear 1,809 times in FalloutNV.esm (1,711
+INFO, 73 PACK, 25 QUST), on 623 objective states of 70 quests. Skyrim has
+functions of the same names, but they are script-only: in SkyrimSE.exe's
+script-function table the condition-routine slot is null for both (as for
+`SetObjectiveCompleted`), while `GetStage`, `GetIsID`, `GetQuestCompleted`
+and `GetVMQuestVariable` fill it. `dialog_engine_tables.json` lists a CTDA
+index for them only because the extractor derives one from every opcode.
+xEdit's TES5 table omits them.
+
+The conditions were dropped, which broke Doc Mitchell's farewell (VCG01):
+his "It's important that you're relaxed for this next test. Please, have a
+seat." greeting (a Goodbye line, 00107223) is gated on
+`GetObjectiveCompleted VCG01 40 == 0` and `bGiveTest == 0`. Without the
+objective test it passed again after the psych test, so at the door he
+repeated it and ended the conversation, and "Here. These are yours." never
+played.
+
+Each objective state a condition tests now gets a short global,
+`TES4ObjDone_<quest>_<n>` / `TES4ObjShown_<quest>_<n>`, and the condition
+becomes `GetGlobalValue` with the same comparison. The script converter
+follows every literal-index `SetObjectiveCompleted Q n f` with
+`TES4ObjDone_<quest>_<n>.SetValue(f)` (and `Shown` to 1 when `f` is non-zero), and
+`SetObjectiveDisplayed Q n f` with the `Shown` global, for exactly the pairs
+the conditions test, so the engine's objective state and the global move
+together. Only the plugin's own quests are mirrored; an objective set with a
+computed index, or a master's quest, keeps the old drop.
 
 ## <a id="convert-ctda-phases"></a>`convert_ctda`: the three phases and why each is shaped as it is
 

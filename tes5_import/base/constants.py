@@ -274,7 +274,7 @@ def map_lock_level(tes4_level: int, leveled: bool = False, requires_key: int = T
 #: FO3/FNV base objects Oblivion lacks -> the Skyrim type they reduce to; a missing one nulls its refs' base.
 FALLOUT_BASE_TYPES = {
     'MSTT': 'STAT', 'SCOL': 'STAT', 'PWAT': 'STAT', 'IDLM': 'STAT',
-    'ASPC': 'STAT', 'TERM': 'ACTI', 'NOTE': 'ACTI', 'TACT': 'ACTI',
+    'ASPC': 'STAT', 'TERM': 'ACTI', 'TACT': 'ACTI',
 }
 
 

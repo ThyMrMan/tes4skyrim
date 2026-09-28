@@ -49,10 +49,16 @@ from .templates import (
     T_SINGLEREF,
     T_TARGETSEL,
     USE_MAGIC,
-    Template,
+    Inputs,
+    location_payload,
+    null_location,
+    null_target,
+    target_payload,
 )
 from ..base.conditions import convert_ctda_list_with_strings
 from .interrupt_morrowind import morrowind_interrupt
+from .fragments_falloutnv import package_vmad
+from .types_falloutnv import FALLOUT_PICK_BY_TYPE, is_player_conversation
 from ..base.text_reader import (get_formid, get_int, get_str, remap_formid,
                           PLAYER_REF_FID, PLAYER_BASE_FID)
 
@@ -265,79 +271,9 @@ def _operate_target(rec: dict, ctx: 'PackContext') -> bool:
     return False
 
 
-def _f32(v: float) -> bytes:
-    return struct.pack('<f', float(v))
-
-
-def _u32(v: int) -> bytes:
-    return struct.pack('<I', int(v) & 0xFFFFFFFF)
-
-
 # ---------------------------------------------------------------------------
-# Data inputs
+# Locations and targets
 # ---------------------------------------------------------------------------
-
-class Inputs:
-    """Positional data-input values for one template instance.
-
-    Starts from the template's vanilla defaults so every slot the converter
-    does not drive still carries a value a real Skyrim package would carry.
-    """
-
-    def __init__(self, template: Template):
-        self.t = template
-        self.values = dict(template.defaults)
-
-    def set(self, name: str, value):
-        self.values[self.t.slot(name)] = value
-
-    def set_slot(self, idx: int, value):
-        self.values[idx] = value
-
-    def emit(self) -> bytes:
-        """ANAM(+CNAM/PLDT/PTDA) per slot, in the template's declared order."""
-        out = b''
-        for i, atype in enumerate(self.t.inputs):
-            out += pack_string_subrecord('ANAM', atype)
-            v = self.values.get(i)
-            if atype == T_LOCATION:
-                if isinstance(v, tuple):        # (type, target, radius)
-                    v = _location(*v)
-                out += pack_subrecord('PLDT', v if isinstance(v, bytes)
-                                      else _null_location())
-            elif atype in (T_SINGLEREF, T_TARGETSEL):
-                if isinstance(v, tuple):        # (type, target, count)
-                    v = _target(*v)
-                out += pack_subrecord('PTDA', v if isinstance(v, bytes)
-                                      else _null_target())
-            elif atype == T_TOPIC:
-                ptype, pval = v if isinstance(v, tuple) else (0, v)
-                out += pack_subrecord('PDTO', struct.pack('<II', ptype,
-                                                          int(pval or 0)))
-            elif atype == T_BOOL:
-                # Bool CNAM is a single byte (verified against vanilla).
-                out += pack_subrecord('CNAM', bytes([1 if v else 0]))
-            elif atype == T_FLOAT:
-                out += pack_subrecord('CNAM', _f32(v or 0.0))
-            else:  # T_INT, T_OBJECTLIST — u32
-                out += pack_subrecord('CNAM', _u32(v or 0))
-        # The UNAM index list and XNAM are the template's public-input
-        # signature: copied verbatim, not computed.
-        for idx in self.t.index_list:
-            out += pack_subrecord('UNAM', struct.pack('<b', idx))
-        out += pack_subrecord('XNAM', bytes([self.t.xnam]))
-        return out
-
-
-def _null_location() -> bytes:
-    # Type 3 = "near editor location", the harmless vanilla default.
-    return struct.pack('<iIi', 3, 0, 0)
-
-
-def _location(ltype: int, target: int, radius: int) -> bytes:
-    """A PLDT payload: (type u32, target/formid i32, radius i32)."""
-    return struct.pack('<iIi', ltype, target, radius)
-
 
 # wbObjectTypeEnum values used by vanilla PTDA type-2 ("Object Type") defaults.
 OBJTYPE_FOOD = 15
@@ -413,20 +349,6 @@ def object_criteria_kind(t_type: int, value: int, sig: str = '') -> str:
     return ''
 
 
-def _target(ttype: int, target: int, count: int) -> bytes:
-    """A PTDA payload: (type u32, target/formid i32, count i32)."""
-    return struct.pack('<iIi', ttype, target, count)
-
-
-def _null_target() -> bytes:
-    # Type 6 = Self — vanilla's own filler for a TargetSelector it doesn't
-    # point anywhere (PTDA hex 06000000 00000000 00000000 appears in
-    # Skyrim.esm). A type-0 "Specific Reference" with FormID 0 (our old
-    # default) is what triggered the CK's "Unable to find Package Target
-    # Reference (00000000)" warning.
-    return struct.pack('<iIi', 6, 0, 0)
-
-
 def build_object_type_target(obj_type: int) -> bytes:
     """PTDA type 2 = Object Type — 'any object of this kind', not a specific
     FormID.  This is what every vanilla Eat/Sleep instance uses for a
@@ -437,14 +359,15 @@ def build_object_type_target(obj_type: int) -> bytes:
 
 
 def build_location(loc_type: int, value: int, radius: int) -> bytes:
-    """TES4 PLDT -> TES5 PLDT.  Location types 0..5 are the same enum in both
-    games, and vanilla Skyrim uses every one we lean on (type 1 'in cell'
-    appears 448x), so this is a copy, not an approximation.  Type 5's payload
-    is an object-TYPE enum, and THAT enum differs between the games (see
-    TES4_TO_TES5_OBJECT_TYPE), so it is translated; the caller passes the raw
-    TES4 value."""
-    if loc_type < 0 or loc_type > 5:
-        return _null_location()
+    """TES4/FO3/FNV PLDT -> TES5 PLDT, a copy: types 0-7 are one enum in all three.
+
+    FO3/FNV adds 6 (near linked reference) and 7 (at package location), which
+    Skyrim keeps at the same numbers. Type 5's payload is an object-TYPE enum,
+    which differs between the games, so it is translated from the raw value.
+    See: docs/commentary/tes5_import_package.md#fallout-package-types
+    """
+    if loc_type < 0 or loc_type > 7:
+        return null_location()
     if loc_type == 5:
         value = TES4_TO_TES5_OBJECT_TYPE.get(int(value), 0)
     return struct.pack('<iIi', loc_type, value & 0xFFFFFFFF, radius)
@@ -470,7 +393,7 @@ def build_target(t_type: int, target: int) -> bytes:
     target type (0/1/2/3/4/6).  There is nothing to translate, so write 0.
     """
     if t_type < 0 or t_type > 2:
-        return _null_target()
+        return null_target()
     if t_type == 2:
         # An object TYPE, not a FormID: the TES4 enum value, translated (the
         # caller passes the raw TES4 value — see resolve_target).
@@ -690,6 +613,7 @@ class PackContext:
         # this actor walk there" — see location_reachable().
         self.ref_cell = ref_cell or {}
         self.pack_runner_cells = pack_runner_cells or {}
+        self.xref = None
 
     def base_sig_of(self, ref_fid: int) -> str:
         return self.ref_base_sig.get(ref_fid & 0x00FFFFFF, '')
@@ -748,8 +672,8 @@ class PackContext:
         if cell:
             return build_location(1, remap_formid(cell), 0)
         if radius > 0:
-            return _location(_SEARCH_NEAR_SELF[0], 0, radius)
-        return _location(*_SEARCH_NEAR_SELF)
+            return location_payload(_SEARCH_NEAR_SELF[0], 0, radius)
+        return location_payload(*_SEARCH_NEAR_SELF)
 
     def runner_origin(self, pack_fid: int):
         """The (x, y, z) the package's single runner stands at, else None."""
@@ -792,16 +716,15 @@ def resolve_target(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
     """TES4 PTDT -> PTDA, routing specific refs through a quest alias when the
     package belongs to a quest.
 
-    This is what makes escort/follow work: Skyrim resolves a package's actor
-    target through a quest reference alias (PTDA type 4), which is also how the
-    package outranks the actor's standing schedule.  A player target is
-    normalized to PlayerRef before the alias lookup, never left as the base
-    NPC_.
+    A quest alias (PTDA type 4) is how Skyrim lets escort/follow outrank the
+    actor's schedule. A player target becomes PlayerRef before the alias
+    lookup, never the base NPC_; an empty specific-reference slot is Self,
+    never a FormID-0 reference the CK reports as missing.
     See: docs/commentary/tes5_import_package.md#player-target-is-the-reference
     """
     t_type = get_int(rec, 'PTDT.Type', -1)
     if t_type < 0:
-        return _null_target()
+        return null_target()
     if t_type == 2:
         # export_PACK writes an Object-Type target as the DECIMAL enum value;
         # get_formid would read "12" as hex and then shift it into our
@@ -814,10 +737,7 @@ def resolve_target(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
 
     if t_type == 0:
         if not target:
-            # TES4 "specific reference" slot left empty (CastMagic-at-self
-            # packages) — a type-0 PTDA with FormID 0 is the CK's "Unable to
-            # find Package Target Reference (00000000)".
-            return _null_target()
+            return null_target()
         alias = ctx.alias_for(pack_fid, target)
         if alias is not None:
             return build_alias_target(alias)
@@ -825,9 +745,13 @@ def resolve_target(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
 
 
 def resolve_location(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
+    """The PLDT of a package's location: an alias for a quest-held reference.
+
+    An empty near-reference slot is the editor location, as an empty target is Self.
+    """
     loc_type = get_int(rec, 'PLDT.Type', -1)
     if loc_type < 0:
-        return _null_location()
+        return null_location()
     if loc_type == 5:
         # "Near any object of this TYPE".  Skyrim's engine does not resolve
         # type 4/5 locations (measured live 2026-08-18: a type-4 location
@@ -850,7 +774,7 @@ def resolve_location(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
             return ctx.search_ground(pack_fid, value, radius=radius)
     if loc_type == 0:
         if not value:
-            return _null_location()   # empty "near reference" slot (see resolve_target)
+            return null_location()
         alias = ctx.alias_for(pack_fid, value)
         if alias is not None:
             return build_alias_location(alias, radius)
@@ -983,8 +907,29 @@ def _sandbox(loc, **flags) -> Inputs:
     return i
 
 
+def _travel_seat(p: _Pick):
+    """The PTDA target a Travel ends seated at, or None.
+
+    A Travel to a specific furniture reference uses it on arrival in the
+    source engines; Skyrim's Travel only walks there.
+    See: docs/commentary/tes5_import_package.md#travel-to-furniture
+    """
+    ref = get_formid(p.rec, 'PLDT.Location')
+    if get_int(p.rec, 'PLDT.Type', -1) != 0 or not ref:
+        return None
+    if p.ctx.base_sig_of(ref) not in FURNITURE_SIGS:
+        return None
+    alias = p.ctx.alias_for(p.pack_fid, ref)
+    return build_alias_target(alias) if alias is not None else build_target(0, ref)
+
+
 def _pick_travel(p: _Pick) -> Inputs:
-    """Travel: exact."""
+    """Travel: exact, except that one ending at furniture sits in it."""
+    seat = _travel_seat(p)
+    if seat is not None:
+        i = Inputs(SIT_TARGET)
+        i.set('target', seat)
+        return i
     i = Inputs(TRAVEL)
     i.set('location', p.loc)
     if p.use_horse:
@@ -1076,10 +1021,10 @@ def force_greet_inputs(topic, radius: float = 0) -> Inputs:
     of talking.
     """
     i = Inputs(FORCE_GREET)
-    i.set('target', _target(0, PLAYER_FID, 0))
+    i.set('target', target_payload(0, PLAYER_FID, 0))
     i.set('topic', topic)
     if radius > 0:
-        i.set('forcegreet_distance', _location(0, PLAYER_FID, int(radius)))
+        i.set('forcegreet_distance', location_payload(0, PLAYER_FID, int(radius)))
     return i
 
 
@@ -1257,6 +1202,7 @@ _PICK_BY_TYPE = {
     T4_CASTMAGIC: _pick_cast,
     T4_USEITEMAT: _pick_use_item,
     T4_FIND: _pick_find,
+    **FALLOUT_PICK_BY_TYPE,
 }
 
 
@@ -1284,6 +1230,15 @@ def _choose(rec: dict, ctx: PackContext, pack_fid: int) -> Inputs:
 # Entry point
 # ---------------------------------------------------------------------------
 
+def _is_force_greet(rec: dict, ptype: int) -> bool:
+    """Whether a package walks over to the player so dialogue can fire.
+
+    See: docs/commentary/tes5_import_package.md#fallout-package-types
+    """
+    return ((ptype in (T4_AMBUSH, T4_FIND) and _targets_player(rec))
+            or is_player_conversation(rec))
+
+
 def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
     """TES4 PACK -> TES5 PACK (a Type-18 template instance).
 
@@ -1299,13 +1254,10 @@ def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
     edid = get_str(rec, 'EditorID')
     if edid:
         subs += pack_string_subrecord('EDID', edid)
+    subs += package_vmad(rec, ctx.xref)
 
     ptype = get_int(rec, 'PKDT.Type', -1)
-    # An Ambush aimed at the PLAYER is Oblivion's scripted-approach idiom, not
-    # a hostile ambush: the actor walks over so dialogue can fire.  Real
-    # ambushes wait on a location (no PTDT) or target another actor.
-    is_forcegreet = (ptype in (T4_AMBUSH, T4_FIND)
-                     and _targets_player(rec))
+    is_forcegreet = _is_force_greet(rec, ptype)
     hostile = not (is_forcegreet or _approaches_ref(rec, ptype))
     flags, speed = convert_flags(get_int(rec, 'PKDT.Flags'), ptype, hostile,
                                  quest_gated=ctx.quest_of(pack_fid) is not None)

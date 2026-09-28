@@ -16,9 +16,9 @@ Re-expression in Skyrim terms:
       - INFO Add-Topics data list / `AddTopic X` in its result script,
       - response text mentioning the gated topic's FULL name (whole word),
       - quest stage result scripts containing `AddTopic X`.
-    INFO fragments fire OnEnd — the unlock lands right when the line finishes,
-    before the topic menu refreshes, matching Oblivion's timing. Globals
-    persist in saves, matching AddTopic's permanent player-knowledge model.
+    INFO unlocks fire OnBegin, so a choice the line reveals is open before
+    its menu is built. Globals persist in saves, matching AddTopic's
+    permanent player-knowledge model.
 
 Gating is limited to topics that appear in an explicit Add-Topics data list or
 AddTopic command: those are the designer-controlled reveals. Topics only ever
@@ -45,6 +45,7 @@ from collections import defaultdict
 from ..base.conditions import read_getisid_fids
 from ..base.text_reader import info_result_script
 from ..overrides.adoption import generated_formid
+from .follow_up_marks_falloutnv import follow_up_marks
 
 _RE_ADDTOPIC = re.compile(r'\baddtopic[\s,]+(\w+)', re.IGNORECASE)
 
@@ -368,7 +369,10 @@ def build_unlock_plan(by_type: dict) -> dict:
       'info_reveals':  {info_fid24: sorted [global_name, ...]},
       'stage_reveals': {(quest_edid_lower, stage_index): sorted [global_name]},
       'script_added':  {topic_fid24, ...}  -- visibility only, never gated
+      'added':         {topic_fid24, ...}  -- every topic anything AddTopics
+      'follow_up_globals': {global_name, ...}  -- FO3/FNV follow-up chain marks
     }
+    See: docs/commentary/tes5_import_dialogue.md#fallout-follow-ups-resume
     """
     from .converter import should_skip_dial, classify_topic
     from .quest import quest_stage_fragments
@@ -399,18 +403,25 @@ def build_unlock_plan(by_type: dict) -> dict:
     stage_reveals = _build_stage_reveals(qusts, infos, gated, stage_addtopics,
                                          info_reveals, quest_stage_fragments)
     gated = _drop_orphan_gates(gated, info_reveals, stage_reveals)
+    marks = follow_up_marks(infos)
+    for fid, names in marks.items():
+        info_reveals[fid] = sorted(set(info_reveals.get(fid, ())) | set(names))
     return {'gated': gated, 'info_reveals': info_reveals,
-            'stage_reveals': stage_reveals, 'script_added': script_added}
+            'stage_reveals': stage_reveals, 'script_added': script_added,
+            'added': explicit | script_added,
+            'follow_up_globals': {n for names in marks.values() for n in names}}
 
 
 def create_unlock_globals(writer, plan: dict) -> dict:
-    """Create one GLOB (float, 0.0) per gated topic. Returns {name: formid}."""
+    """Create one GLOB (float, 0.0) per gated topic and follow-up mark. Returns {name: formid}."""
     import struct as _struct
     from ..record_types.common import (pack_record, pack_string_subrecord,
                                       pack_subrecord)
     name_to_fid = {}
-    for name in sorted(set(plan['gated'].values())):
-        fid = generated_formid(writer, 'GLOB', name, 'UNLOCK_GLOB', name)
+    marks = plan.get('follow_up_globals', set())
+    for name in sorted(set(plan['gated'].values()) | marks):
+        site = 'FOLLOWUP_MARK_GLOB' if name in marks else 'UNLOCK_GLOB'
+        fid = generated_formid(writer, 'GLOB', name, site, name)
         subs = pack_string_subrecord('EDID', name)
         subs += pack_subrecord('FNAM', b'f')
         subs += pack_subrecord('FLTV', _struct.pack('<f', 0.0))

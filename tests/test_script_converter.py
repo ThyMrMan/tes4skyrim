@@ -605,10 +605,14 @@ class TestFalloutActorValueNames:
         assert result.strip() == 'TES4Polyfill.SetTES4ActorValue(Game.GetPlayer(), "Charisma", 7)'
 
     def test_unmapped_read_is_inert(self, converter):
-        """Karma is no Skyrim actor value, so the read goes inert rather than naming it."""
-        result = conv_expr(converter, 'player.getav Karma < 0', 'Quest')
-        assert 'Karma"' not in result
-        assert any('Karma' in c for c in converter._line_comments)
+        """Medicine is no Skyrim actor value, so the read goes inert rather than naming it."""
+        result = conv_expr(converter, 'player.getav Medicine < 0', 'Quest')
+        assert 'Medicine"' not in result
+        assert any('Medicine' in c for c in converter._line_comments)
+
+    def test_karma_reads_its_global(self, converter):
+        """Karma lives in TES4Karma, which conditions read too."""
+        assert conv_expr(converter, 'player.getav Karma < 0', 'Quest') == 'TES4Karma.GetValue() < 0'
 
     def test_unmapped_write_is_dropped(self, converter):
         result = conv_line(converter, 'player.modav Medicine 10', 'Quest')
@@ -2340,7 +2344,7 @@ class TestInfoFragmentEmission:
     length, End runs the result and then the line-over hook LAST."""
 
     def _emit(self, tmp_path, rec, durations=None, quest_vars=None,
-              quest_names=None):
+              quest_names=None, begin_scripts=False):
         from script_convert import pipeline
         from script_convert.converter import ScriptConverter
         from script_convert.cross_ref import CrossRefGraph
@@ -2357,12 +2361,14 @@ class TestInfoFragmentEmission:
         ScriptConverter.say_topics = set(saved_topics) | {'000000AA'}
         pipeline._WORKER_CTX['quest_script_vars'] = quest_vars or {}
         pipeline._WORKER_CTX['quest_edid_by_fid'] = quest_names or {}
+        pipeline._WORKER_CTX['info_begin_scripts'] = begin_scripts
         stats = pipeline._new_stats()
         try:
             pipeline._info_batch([rec], str(tmp_path), CrossRefGraph(), stats)
         finally:
             ScriptConverter.say_durations = saved
             ScriptConverter.say_topics = saved_topics
+            pipeline._WORKER_CTX.pop('info_begin_scripts', None)
         assert not stats['errors'], stats['errors']
         return (tmp_path / f"TES4_TIF__{rec['FormID']}.psc").read_text()
 
@@ -2373,6 +2379,25 @@ class TestInfoFragmentEmission:
         end = psc.split('Function Fragment_0', 1)[1].split('EndFunction')[0]
         assert 'TES4Polyfill.LineBegan(akSpeakerRef, 12.62)' in begin
         assert 'TES4Polyfill.LineEnded(akSpeakerRef, 12.62)' in end
+
+    def test_fallout_begin_script_runs_when_the_line_starts(self, tmp_path):
+        """FO3/FNV: Begin goes in OnBegin, End in OnEnd (Doc Mitchell's psych test)."""
+        psc = self._emit(tmp_path, {'FormID': '0010558F',
+                                    'ResultScript': 'EnablePlayerControls',
+                                    'ResultScriptEnd': 'DisablePlayerControls'},
+                         begin_scripts=True)
+        begin = psc.split('Function Fragment_1', 1)[1].split('EndFunction')[0]
+        end = psc.split('Function Fragment_0', 1)[1].split('EndFunction')[0]
+        assert 'EnablePlayerControls' in begin and 'DisablePlayerControls' not in begin
+        assert 'DisablePlayerControls' in end and 'EnablePlayerControls' not in end
+
+    def test_tes4_result_script_stays_at_the_end(self, tmp_path):
+        """Oblivion ran its one result script when the line finished."""
+        psc = self._emit(tmp_path, {'FormID': '00000ABD',
+                                    'ResultScript': 'EnablePlayerControls'})
+        begin = psc.split('Function Fragment_1', 1)[1].split('EndFunction')[0]
+        end = psc.split('Function Fragment_0', 1)[1].split('EndFunction')[0]
+        assert 'EnablePlayerControls' in end and 'EnablePlayerControls' not in begin
 
     def test_unmeasured_line_reports_zero(self, tmp_path):
         psc = self._emit(tmp_path, {'FormID': '00000ABC'})
@@ -4542,6 +4567,17 @@ class TestInfoFragmentSkipping:
                           {'FormID': '00005555', 'ParentDIAL': '000000BB'},
                           info_reveals={0x005555: ['TES4Unlock_Topic']})
 
+    def test_an_unlock_lands_when_the_line_begins(self, tmp_path):
+        """The SetValue is in Fragment_1 (OnBegin), before the line's own choice menu.
+
+        See: docs/commentary/tes5_import_dialogue.md#unlocks-land-when-the-line-begins
+        """
+        self._emit(tmp_path, {'FormID': '00005555', 'ParentDIAL': '000000BB'},
+                   info_reveals={0x005555: ['TES4Unlock_Topic']})
+        text = (tmp_path / 'TES4_TIF__00005555.psc').read_text()
+        begin, end = text.split('Function Fragment_0')
+        assert 'TES4Unlock_Topic.SetValue(1)' in begin and 'SetValue' not in end
+
     def test_service_topic_keeps_its_fragment(self, tmp_path):
         assert self._emit(tmp_path,
                           {'FormID': '00006666', 'ParentDIAL': '000000CC'},
@@ -5280,6 +5316,20 @@ class TestFalloutObjectiveCommands:
                          'SetObjectiveCompleted MQ01 20 0', 'Quest')
         assert line == 'MQ01.SetObjectiveCompleted(20, 0)'
 
+    def test_set_completed_keeps_the_mirror_globals_in_step(self, converter_with_quests,
+                                                            monkeypatch):
+        """Completing a condition-tested objective sets its Done and Shown globals.
+
+        See docs/commentary/tes5_import_conditions.md#fallout-objective-conditions.
+        """
+        monkeypatch.setattr(ScriptConverter, 'objective_globals', {
+            ('mq01', 20): {'Done': 'TES4ObjDone_MQ01_20', 'Shown': 'TES4ObjShown_MQ01_20'}})
+        lines = conv_lines(converter_with_quests, 'SetObjectiveCompleted MQ01 20 1', 'Quest')
+        assert lines.splitlines() == ['MQ01.SetObjectiveCompleted(20, 1)',
+                                      'TES4ObjDone_MQ01_20.SetValue(1)',
+                                      'TES4ObjShown_MQ01_20.SetValue(1)']
+        assert converter_with_quests.sc.property_refs['TES4ObjDone_MQ01_20'] == 'GlobalVariable'
+
     def test_get_completed_reads_the_quest_native(self, converter_with_quests):
         """GetObjectiveCompleted is Quest.IsObjectiveCompleted."""
         expr = conv_expr(converter_with_quests,
@@ -5331,6 +5381,47 @@ class TestFalloutShowMessageMenus:
         assert 'nButton = TES4_TakeMsgButton()' in out
         assert 'Int Function TES4_ShowMsg(Message TES4_akMsg)' in out
         assert 'Message Property VCG01ChooseSexMessage Auto' in out
+
+    HOWITZER = """scn FortHowitzerScript
+short Button
+begin OnActivate
+  if IsActionRef player
+    ShowMessage FortHowitzerMsg
+  endif
+end
+begin MenuMode 1001
+  set Button to GetButtonPressed
+  if Button == 1
+    SetStage VMS32 30
+  endif
+end
+"""
+
+    def _howitzer(self, converter, shows_box=True):
+        """The converted VMS32 howitzer script, with or without its own box."""
+        src = self.HOWITZER if shows_box else self.HOWITZER.replace('ShowMessage FortHowitzerMsg', '')
+        records = ({'EditorID': 'FortHowitzerScript', 'SCTX': src},
+                   {'EditorID': 'FortHowitzerMsg', 'DNAM': '1',
+                    'Button[0].Text': 'Leave', 'Button[1].Text': 'Repair'})
+        converter.message_menus = build_message_plan(*[[r] for r in records])
+        return converter.convert_standalone('FortHowitzerScript', src, 'ObjectReference',
+                                            'FortHowitzerScript')
+
+    def test_message_box_block_runs_as_the_box_closes(self, converter):
+        """`begin MenuMode 1001` runs once Show() returns, with the button in hand."""
+        out = self._howitzer(converter)
+        hook = out.split('Function TES4_MessageBoxClosed()', 1)[1].split('EndFunction', 1)[0]
+        assert 'Button = TES4_TakeMsgButton()' in hook
+        assert 'VMS32' in hook and '30)' in hook
+        show = out.split('Int Function TES4_ShowMsg', 1)[1].split('EndFunction', 1)[0]
+        assert show.index('Show()') < show.index('TES4_MessageBoxClosed()')
+        assert 'NOT executed' not in out
+
+    def test_message_box_block_without_its_own_box_stays_a_comment(self, converter):
+        """No box of its own to wait on: nothing would ever read a button."""
+        out = self._howitzer(converter, shows_box=False)
+        assert 'TES4_MessageBoxClosed' not in out
+        assert 'NOT executed' in out
 
     def test_importer_writes_no_record_for_an_authored_site(self):
         """The MESG record is converted by convert_MESG; a synthesized twin
@@ -5493,3 +5584,162 @@ class TestGameModeStepsAreRates:
         body = body[:body.index('EndFunction')]
         assert 'akRef.SendModEvent("TES4Track", aiAxis as String, afValue)' in body
         assert '!(akRef as Actor)' in body
+
+
+class TestSayToDone:
+    """`begin SayToDone <topic>` runs on the speaker's script as its line ends.
+
+    See docs/commentary/script_convert.md#saytodone.
+    """
+
+    LILY = """scn LilyScript
+begin SayToDone LilyToDoctorHenry03 ; "Awww... I liked having it on."
+  SetStage VMS41 60
+end
+begin OnLoad
+  set x to 1
+end
+"""
+    ALARM = """scn L38Alarmwoman
+begin SayToDone
+  say vDialogueMrHouseRoomBreach
+end
+"""
+
+    def _by_type(self):
+        """SCPT and DIAL records for Lily's chain and the looping alarm."""
+        return {'SCPT': [{'EditorID': 'LilyScript', 'SCTX': self.LILY},
+                         {'EditorID': 'L38Alarmwoman', 'SCTX': self.ALARM}],
+                'DIAL': [{'EditorID': 'LilyToDoctorHenry03', 'FormID': '0013ef9a'},
+                         {'EditorID': 'vDialogueMrHouseRoomBreach', 'FormID': '0015AAAA'}]}
+
+    def test_the_block_becomes_a_function_named_for_its_topic(self, converter):
+        """The body is kept whole; Skyrim has no event to hang it on."""
+        out = converter.convert_standalone('LilyScript', self.LILY, 'ObjectReference',
+                                           'LilyScript')
+        hook = out.split('Function TES4_SayToDone_lilytodoctorhenry03()', 1)[1]
+        assert 'VMS41' in hook.split('EndFunction', 1)[0]
+
+    def test_each_topic_names_the_scripts_waiting_on_it(self):
+        """Keyed like INFO.ParentDIAL; the topic-less block hooks what it names."""
+        from script_convert.constants import papyrus_script_name
+        from script_convert.say_to_done import say_to_done_hooks
+        hooks = say_to_done_hooks(self._by_type())
+        lily = papyrus_script_name('LilyScript')
+        alarm = papyrus_script_name('L38Alarmwoman')
+        assert hooks['0013EF9A'] == [(lily, 'TES4_SayToDone_lilytodoctorhenry03')]
+        assert hooks['0015AAAA'] == [(alarm, 'TES4_SayToDone')]
+
+    def test_a_waited_on_topic_is_script_driven(self):
+        """Its lines need an End fragment even when nothing Says them."""
+        from script_convert.pipeline import scan_say_topics
+        assert 'lilytodoctorhenry03' in scan_say_topics(self._by_type())
+
+    def test_the_end_fragment_calls_the_speakers_script_last(self):
+        """After LineEnded, so a follow-up SayTo does not wait on this line."""
+        from script_convert.pipeline import _info_end_fragment
+        from script_convert.say_to_done import fragment_calls
+        lines = _info_end_fragment([], '', '', 2.0, fragment_calls(
+            [('X_LilyScript', 'TES4_SayToDone_lilytodoctorhenry03')]))
+        text = '\n'.join(lines)
+        assert 'X_LilyScript TES4_Done0 = akSpeakerRef as X_LilyScript' in text
+        assert text.index('LineEnded') < text.index('TES4_Done0.TES4_SayToDone_')
+
+
+class TestPackageFragments:
+    """FO3/FNV package sections run as the Skyrim package's fragments.
+
+    See docs/commentary/script_convert.md#package-fragments.
+    """
+
+    @staticmethod
+    def _rec():
+        """A package setting a stage on begin and saying a topic on change."""
+        return {'FormID': '0010A21B', 'EditorID': 'VCG02SunnyTravelToWell1',
+                'OnBegin.Script': 'SetStage VCG02 30',
+                'OnEnd.Script': '; only a comment\n',
+                'OnChange.Topic': '00118A5C'}
+
+    def _xref(self):
+        """A graph naming the section topic, so its Say resolves."""
+        xref = CrossRefGraph()
+        xref.formid_to_edid['00118A5C'] = 'VFSOrrisCursesThug'
+        xref.edid_to_formid['vfsorriscursesthug'] = '00118A5C'
+        xref.record_type['00118A5C'] = 'DIAL'
+        return xref
+
+    def test_a_section_needs_code_or_a_topic(self):
+        """A comment-only script is no fragment; a topic alone is one."""
+        from tes5_import.packages.scripts_falloutnv import package_flags, package_sections
+        assert [s for s, _f in package_sections(self._rec())] == ['OnBegin', 'OnChange']
+        assert package_flags(self._rec()) == 0x05
+
+    def test_fragments_follow_the_sections_in_order(self):
+        """Fragment_N is the Nth section the package has, run on its actor."""
+        from script_convert.package_fragments import package_psc
+        psc = package_psc(self._rec(), self._xref())
+        begin = psc.split('Function Fragment_0(Actor akActor)', 1)[1].split('EndFunction')[0]
+        change = psc.split('Function Fragment_1(Actor akActor)', 1)[1].split('EndFunction')[0]
+        assert 'ObjectReference akSpeakerRef = akActor' in begin
+        assert 'VCG02' in begin and '30)' in begin
+        assert 'VFSOrrisCursesThug' in change
+        assert 'Fragment_2' not in psc
+
+    def test_the_vmad_names_one_fragment_per_section(self):
+        """Flags OnBegin|OnChange, then two entries in that order."""
+        from script_convert.pipeline import build_vmad_package_fragment
+        vmad = build_vmad_package_fragment('X_PF__1', flags=0x05)
+        assert vmad.count(b'Fragment_') == 2
+        assert vmad.index(b'Fragment_0') < vmad.index(b'Fragment_1')
+        assert b'\x02\x05' in vmad
+
+    def test_no_section_no_vmad(self):
+        """A package whose scripts are all comments carries no fragment."""
+        from tes5_import.packages.fragments_falloutnv import package_vmad
+        assert package_vmad({'FormID': '1', 'OnEnd.Script': ';x'}, self._xref()) == b''
+
+    def test_a_topic_only_a_package_says_is_script_driven(self):
+        """Its lines keep the fragments the Say depends on, and are not dropped."""
+        from script_convert.pipeline import scan_say_topics
+        by_type = {'DIAL': [{'FormID': '00118A5C', 'EditorID': 'VFSOrrisCursesThug'}],
+                   'PACK': [self._rec()]}
+        assert 'vfsorriscursesthug' in scan_say_topics(by_type)
+
+    def test_the_importer_keeps_a_package_topic(self):
+        """The importer's own scan sees the section, so the topic is not dropped."""
+        from tes5_import.dialogue.say_topics import build_say_topic_dispositions
+        by_type = {'DIAL': [{'FormID': '00118A5C', 'EditorID': 'VFSOrrisCursesThug'}],
+                   'PACK': [self._rec()]}
+        assert 0x118A5C in build_say_topic_dispositions(by_type)
+
+    def test_a_bare_call_in_a_fragment_acts_on_the_actor(self, converter):
+        """`.disable`, MarkForDelete and PlayGroup name the actor, never Self."""
+        out = converter.convert_fragment('.disable\nMarkForDelete\nplaygroup aim 1\n', 'TopicInfo')
+        assert out == ['  akSpeakerRef.Disable()', '  akSpeakerRef.Delete()',
+                       '  Debug.SendAnimationEvent(akSpeakerRef, "aim")']
+
+
+def test_fallout_barter_opens_the_speakers_menu():
+    """A dialogue line's ShowBarterMenu opens the speaker's barter; Skyrim has no price argument.
+
+    See: docs/commentary/script_convert.md#fallout-barter
+    """
+    src = 'scn T\nbegin GameMode\n  ShowBarterMenu 75\n  GSChetRef.ShowBarterMenu\nend\n'
+    out = ScriptConverter(CrossRefGraph()).convert_standalone('T', src, 'TopicInfo', 'T')
+    assert '(akSpeakerRef as Actor).ShowBarterMenu()' in out
+    assert 'GSChetRef.ShowBarterMenu()' in out
+
+
+def test_fallout_quest_completed_reads_the_quest_not_nothing():
+    """GetQuestCompleted, GetQC and GetQR become Quest natives: left out of an && chain, ED-E's
+    completion reward paid 100 XP on a new game.
+
+    See: docs/commentary/script_convert.md#fallout-quest-completed
+    """
+    src = ('scn T\nshort b\nbegin GameMode\n'
+           '  if GetQuestCompleted vDialogueEDE == 1 && GetStage vDialogueEDE < 100 && b == 0\n'
+           '    set b to 1\n  endif\n  set b to GetQC vDialogueEDE\n  if GetQR VMS55\n    set b to 3\n  endif\nend\n')
+    out = ScriptConverter(CrossRefGraph()).convert_standalone('T', src, 'Quest', 'T')
+    assert 'If vDialogueEDE.IsCompleted() && vDialogueEDE.GetStage() < 100 && b == 0' in out
+    assert 'b = vDialogueEDE.IsCompleted() as Int' in out
+    assert 'If VMS55.IsRunning()' in out

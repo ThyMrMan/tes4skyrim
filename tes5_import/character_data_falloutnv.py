@@ -26,7 +26,7 @@ AV_BLOCKS = ((0x3E8, 7, 5), (0x44C, 20, 12), (0x4B0, 14, 32), (0x514, 5, 0), (0x
 #: The S.P.E.C.I.A.L. block and the skill block, as (first FormID, count).
 SPECIAL_BLOCK, SKILL_BLOCK = (0x3E8, 7), (0x4B0, 14)
 
-#: Skill AVIF EditorID -> governing S.P.E.C.I.A.L.; in no record, read from Fallout3.exe (docs: fallout-governing-stats).
+#: Skill AVIF EditorID -> governing S.P.E.C.I.A.L.; in no record, read from both exes (docs: fallout-governing-stats).
 GOVERNING = {'AVBarter': 'Charisma', 'AVBigGuns': 'Endurance', 'AVEnergyWeapons': 'Perception',
              'AVExplosives': 'Perception', 'AVLockpick': 'Perception', 'AVMedicine': 'Intelligence',
              'AVMeleeWeapons': 'Strength', 'AVRepair': 'Intelligence', 'AVScience': 'Intelligence',
@@ -52,9 +52,21 @@ XP_SETTINGS = (
     'fAVDSkillPrimaryBonusMult', 'fAVDSkillLuckBonusMult', 'fBookPerkBonus',
     'iTraitMenuMaxNumTraits', 'fAVDHealthEnduranceMult', 'fAVDHealthEnduranceOffset',
     'fAVDHealthLevelMult', 'fAVDCarryWeightsBase', 'fAVDCarryWeightMult',
-    'fAVDActionPointsBase', 'fAVDActionPointsMult', 'fAlignEvilMaxKarma',
-    'fAlignGoodMinKarma')
-_XP_PREFIXES = ('iXPReward', 'iXPLevel', 'fAVDSkill')
+    'fAVDActionPointsBase', 'fAVDActionPointsMult')
+_XP_PREFIXES = ('iXPReward', 'iXPLevel', 'fAVDSkill', 'fAlign', 'fKarmaMod', 'fReputation')
+
+#: FACT DATA byte 0, bit 1: the faction is evil; byte 1, bit 0: it tracks crime.
+_EVIL, _TRACK_CRIME = 0x2, 0x1
+
+#: ACBS template flag 0x0001: an actor takes its traits, karma among them, from its template.
+_USE_TRAITS = 0x1
+
+#: Templates and leveled lists followed at most this deep.
+_TEMPLATE_DEPTH = 8
+
+#: Each alignment and the setting bounding it, in the order Fallout3.exe tests them (0x6e65b0).
+ALIGNMENTS = (('very_evil', 'fAlignVeryEvilMaxKarma', -1), ('evil', 'fAlignEvilMaxKarma', -1),
+              ('very_good', 'fAlignVeryGoodMinKarma', 1), ('good', 'fAlignGoodMinKarma', 1))
 
 #: The player's NPC_ record, whose class carries the S.P.E.C.I.A.L. a new character starts with.
 _PLAYER = 0x000007
@@ -174,7 +186,7 @@ def _perks(records: list, masters: list, plugin: str) -> list:
         while f'Condition[{len(requirements)}].Raw' in rec:
             requirements.append(rec[f'Condition[{len(requirements)}].Raw'])
         rows.append({'id': get_str(rec, 'EditorID'), 'name': get_str(rec, 'FULL'),
-                     'form': _form(rec['FormID'], masters, plugin),
+                     'text': get_str(rec, 'DESC'), 'form': _form(rec['FormID'], masters, plugin),
                      'trait': bool(get_int(rec, 'DATA.Trait')), 'level': get_int(rec, 'DATA.MinLevel'),
                      'ranks': get_int(rec, 'DATA.Ranks', 1), 'playable': bool(get_int(rec, 'DATA.Playable')),
                      'hidden': bool(get_int(rec, 'DATA.Hidden')), 'requirements': requirements,
@@ -187,6 +199,64 @@ def _reputations(records: list, masters: list, plugin: str) -> list:
     return [{'id': get_str(rec, 'EditorID'), 'name': get_str(rec, 'FULL'),
              'form': _form(rec['FormID'], masters, plugin),
              'value': round(get_float(rec, 'DATA.Value'), 6)} for rec in records]
+
+
+def _factions(records: list, masters: list, plugin: str) -> list:
+    """Each FACT that is evil, tracks crime or names a New Vegas reputation (WMI1).
+
+    See: docs/commentary/tes5_import_character_data.md#fallout-kill-karma
+    """
+    rows = []
+    for rec in records:
+        rep = int(rec.get('WMI1.Reputation', '0'), 16)
+        crime = bool(get_int(rec, 'DATA.Flags2') & _TRACK_CRIME)
+        evil = bool(get_int(rec, 'DATA.Flags') & _EVIL)
+        if crime or rep or evil:
+            rows.append({'form': _form(rec['FormID'], masters, plugin), 'crime': crime, 'evil': evil,
+                         'reputation': _form(rec['WMI1.Reputation'], masters, plugin) if rep else None})
+    return rows
+
+
+def _karma(fid: int, actors: dict, lists: dict, depth: int = 0):
+    """An actor's karma through its trait templates; a leveled list's when every entry agrees."""
+    if depth > _TEMPLATE_DEPTH:
+        return None
+    rec = actors.get(fid)
+    if rec is None:
+        values = {_karma(entry, actors, lists, depth + 1) for entry in lists.get(fid, ())}
+        return values.pop() if len(values) == 1 else None
+    template = int(rec.get('TPLT.Template', '0'), 16)
+    if template and get_int(rec, 'ACBS.TemplateFlags') & _USE_TRAITS:
+        return _karma(template, actors, lists, depth + 1)
+    return get_float(rec, 'ACBS.Karma')
+
+
+def alignment_of(karma: float, settings: dict):
+    """The alignment Fallout sorts a karma into, or None for neutral."""
+    for name, setting, sign in ALIGNMENTS:
+        if (karma - settings[setting]) * sign >= 0:
+            return name
+    return None
+
+
+def _alignments(by_type: dict, settings: dict, masters: list, plugin: str) -> dict:
+    """The actors of each alignment other than neutral, by their resolved karma.
+
+    See: docs/commentary/tes5_import_character_data.md#fallout-kill-karma
+    """
+    actors = {int(r['FormID'], 16): r for sig in ('NPC_', 'CREA') for r in by_type.get(sig, [])}
+    lists = {int(r['FormID'], 16): [int(r[f'Entry[{i}].FormID'], 16) for i in range(get_int(r, 'EntryCount'))
+                                    if r.get(f'Entry[{i}].FormID')]
+             for sig in ('LVLN', 'LVLC') for r in by_type.get(sig, [])}
+    if not all(setting in settings for _, setting, _ in ALIGNMENTS):
+        return {}
+    out = {name: [] for name, _, _ in ALIGNMENTS}
+    for fid, rec in sorted(actors.items()):
+        karma = _karma(fid, actors, lists)
+        name = None if karma is None else alignment_of(karma, settings)
+        if name:
+            out[name].append(_form(rec['FormID'], masters, plugin))
+    return {name: forms for name, forms in out.items() if forms}
 
 
 def _player(npcs: list, masters: list, plugin: str) -> dict:
@@ -225,12 +295,15 @@ def character_data(by_type: dict, masters: list, plugin: str, game: str,
     special = _special(known)
     skills = _skills(avifs, game, masters, plugin)
     skill_names = {row['av']: row['name'] for row in _skills(known, game, masters, plugin)}
+    settings = _settings(by_type.get('GMST', []), game, not masters)
     doc = {'skills': skills,
            'classes': _classes(by_type.get('CLAS', []), skill_names, special, masters, plugin),
            'races': _races(by_type.get('RACE', []), skill_names, masters, plugin),
            'perks': _perks(by_type.get('PERK', []), masters, plugin),
            'reputations': _reputations(by_type.get('REPU', []), masters, plugin),
-           'settings': _settings(by_type.get('GMST', []), game, not masters),
+           'factions': _factions(by_type.get('FACT', []), masters, plugin),
+           'alignments': _alignments(by_type, settings, masters, plugin),
+           'settings': settings,
            'player': _player(by_type.get('NPC_', []), masters, plugin)}
     doc = {key: value for key, value in doc.items() if value}
     if not doc:

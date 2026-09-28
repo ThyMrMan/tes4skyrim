@@ -13,6 +13,7 @@ from collections import defaultdict
 from ..base.text_reader import get_formid_index_offset, info_result_script
 from .quest import (bark_choice_gate_bytes, compute_quest_priorities,
                     has_quest_state_condition, quest_state_ctdas)
+from ..base.tes5_reader import subrecords
 from ..base.writer import pack_group
 from .arrest import force_greet_topic
 from .barks_morrowind import bark_voice_types
@@ -26,6 +27,7 @@ from ..base.conditions import (
     FUNC_GET_IS_VOICE_TYPE,
     FUNC_GET_OFFERS_SERVICES_NOW,
     FUNC_GET_QUEST_RUNNING,
+    authors_voice_type,
     build_ctda,
     build_or_chain,
     convert_ctda,
@@ -49,6 +51,9 @@ from .converter import (DIAL_TYPE_CONVERSATION, SERVICE_MENU_SCRIPTS,
 from .say_topics import (FORCE_GREET_SLOTS, SAY_TOPIC_DISPOSITIONS,
                          build_say_topic_dispositions)
 from .speak_as import SCENE_QUEST_EDID, scene_quest_fid, speaker_subrecords
+from .topics_falloutnv import has_topic_flags, is_top_level
+from .follow_ups_falloutnv import (FOLLOW_UP_TOPICS, blocking_branch, build_follow_up_topics,
+                                   capture_follow_up, opens_with_follow_up, plan_follow_ups)
 
 
 def _scan_startable_quests(by_type: dict) -> set:
@@ -144,18 +149,24 @@ def _branch_is_linked(dial_rec, dial_fid, tclt_targets, bark_choice_targets,
                       unlock_plan) -> bool:
     """True when this topic's DLBR must be a Normal (non-top-level) branch.
 
-    A TCLT target or a StartConversation force-greet topic never explicitly
-    AddTopic'd stays off the menu; a TCLT target reached from a bark/greeting
-    choice does not.  Script-driven Conversation topics are forced Normal.
+    A reply (a TCLT target; in FO3/FNV, a topic without Top-level) or a
+    StartConversation force-greet topic never AddTopic'd stays off the menu;
+    a reply reached from a bark/greeting choice does not.  Script-driven
+    Conversation topics are forced Normal.
 
     See: docs/commentary/tes5_import_dialogue.md#branches-views-topic-ownership
+    See: docs/commentary/tes5_import_dialogue.md#fallout-topic-links
     """
     fid24 = dial_fid & 0xFFFFFF
-    never_added = (fid24 not in unlock_plan['gated']
-                   and fid24 not in unlock_plan.get('script_added', ()))
+    if has_topic_flags(dial_rec):
+        never_added = fid24 not in unlock_plan.get('added', ())
+        reply = not is_top_level(dial_rec)
+    else:
+        never_added = (fid24 not in unlock_plan['gated']
+                       and fid24 not in unlock_plan.get('script_added', ()))
+        reply = dial_fid in tclt_targets
     forced = get_str(dial_rec, 'EditorID', '').lower() in FORCE_GREET_SLOTS
-    return ((never_added and (forced or (dial_fid in tclt_targets
-                                         and dial_fid not in bark_choice_targets)))
+    return ((never_added and (forced or (reply and dial_fid not in bark_choice_targets)))
             or _is_script_topic(dial_rec, dial_fid))
 
 
@@ -411,6 +422,7 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
 
     skipped_fids = {get_formid(d, 'FormID') for d in dials if should_skip_dial(d)}
     _strip_dead_tclt(infos, skipped_fids)
+    print(f"    follow-up topics: {plan_follow_ups(infos, writer, skipped_fids)}")
     n_conv = sum(1 for d in dials if is_npc_to_npc_conversation(d))
     n_chains = len(conv_plan['chains']) if conv_plan else 0
     print(f"    NPC-to-NPC conversation topics dropped: {n_conv}; "
@@ -513,6 +525,9 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
         bark_dials, info_by_dial, writer,
         bark_generic_quests, bark_ctx)
     all_dial_content += bark_content
+    follow_up_content, follow_up_branches = build_follow_up_topics(writer, unlock_globals)
+    all_dial_content += follow_up_content
+    all_dlbr += follow_up_branches + b''.join(bark_ctx.get('blocking_branches', ()))
 
     # --- NPC-conversation driver quest (all topic FormIDs now known) ---
     if conv_plan and conv_plan['chains']:
@@ -893,7 +908,9 @@ def _convert_topic_infos(child_infos, owner_qfid, ctx):
                                 if ctx['is_bark'] else None),
                 menu_topic_fids=ctx.get('menu_topic_fids', ()),
                 script_vars=ctx.get('script_vars'),
-                speaker=speaker_subrecords(info_rec, ctx['offset']))
+                speaker=speaker_subrecords(info_rec, ctx['offset']),
+                follow_up=FOLLOW_UP_TOPICS.get(get_formid(info_rec, 'FormID'), 0))
+            capture_follow_up(get_formid(info_rec, 'FormID'), owner_qfid, info_bytes)
             topic_children += info_bytes
             child_count += 1
             ctx['stats']['infos'] += 1
@@ -1087,9 +1104,14 @@ def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
         g['infos'], owner_qfid, _bark_group_ctx(ctx, g, edid))
     if not count:
         return b''
+    shape, branch = (g['cat'], subtype, g['snam']), 0
+    if opens_with_follow_up(g['infos']):
+        shape = (0, 0, b'CUST')
+        branch, dlbr = blocking_branch(writer, key, edid, owner_qfid, dial_fid)
+        ctx.setdefault('blocking_branches', []).append(dlbr)
     content = convert_DIAL(
-        g['src'], info_count=count, dlbr_fid=0, quest_fid=owner_qfid,
-        category=g['cat'], subtype=subtype, snam=g['snam'],
+        g['src'], info_count=count, dlbr_fid=branch, quest_fid=owner_qfid,
+        category=shape[0], subtype=shape[1], snam=shape[2],
         edid_override=edid, formid_override=dial_fid)
     content += pack_group(7, struct.pack('<I', dial_fid), children)
     ctx['stats']['bark_topics'] = ctx['stats'].get('bark_topics', 0) + 1
@@ -1237,6 +1259,16 @@ def _drop_non_actor_speaker_ctdas(cond_bytes: bytes) -> bytes:
                     for sig, data in kept)
 
 
+def _tests_voice_type(ctda_bytes: bytes) -> bool:
+    """True if packed CTDA subrecords already test GetIsVoiceType.
+
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
+    """
+    return any(tag == b'CTDA'
+               and struct.unpack_from('<H', data, 8)[0] == FUNC_GET_IS_VOICE_TYPE
+               for tag, data in subrecords(ctda_bytes))
+
+
 def _build_injected_ctdas(info_rec, is_bark, npc_to_vtyp, topic_vtyps,
                           topic_npc_fids, quest_gate_bytes, unlock_gate_bytes,
                           offset, stats, sibling_factions=None,
@@ -1258,7 +1290,8 @@ def _build_injected_ctdas(info_rec, is_bark, npc_to_vtyp, topic_vtyps,
     # lines he speaks himself.  See talking_activators.py.
     from ..base.conditions import is_speak_as_record
     _speak_as_info = is_speak_as_record(info_rec)
-    if _speak_as_info:
+    if (_speak_as_info or authors_voice_type(info_rec)
+            or _tests_voice_type(quest_gate_bytes)):
         vtyps = set()
     elif own_npcs or bark_voice_types(info_rec):
         vtyps = ({npc_to_vtyp[n] for n in own_npcs if n in npc_to_vtyp}

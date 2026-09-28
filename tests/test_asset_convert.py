@@ -4595,6 +4595,50 @@ class TestCollisionWindingRepair:
         assert checked, 'expected a mesh collision shape in seisland.nif'
 
 
+class TestFaceUnderAFloorFacesUp:
+    """A flat collision face just under a walkable render skin faces up.
+
+    The saloon porch case: one quad, one half wound down, sitting inside the
+    plank between its top skin and its underside.
+    See: docs/commentary/asset_convert_collision.md#round-4d-a-face-under-a-floor-faces-up
+    """
+
+    _QUAD = (((0.0, 0.0, 0.0), (4.0, 0.0, 0.0), (0.0, 4.0, 0.0)),
+             ((4.0, 0.0, 0.0), (0.0, 4.0, 0.0), (4.0, 4.0, 0.0)))
+
+    def _skin(self, z, up):
+        """A render quad at height z facing up or down."""
+        a, b, c, d = (0.0, 0.0, z), (4.0, 0.0, z), (0.0, 4.0, z), (4.0, 4.0, z)
+        tris = [(a, b, c), (b, d, c)]
+        return tris if up else [(p, r, q) for p, q, r in tris]
+
+    def _repair(self, visual, monkeypatch):
+        """Run the gated repair on the half-inverted quad; normal z of each face."""
+        from asset_convert.collision import collision_winding as W
+        monkeypatch.setenv('TESCONV_COLLISION_WINDING_FIX', '1')
+        out, _n = W.repair_inverted_floors(list(self._QUAD), visual, None, None)
+        return [round(W.face_normal(t)[2]) for t in out]
+
+    def test_face_inside_a_plank_turns_up(self, monkeypatch):
+        """Top skin above, underside below: both halves end up walkable."""
+        visual = self._skin(0.3, True) + self._skin(-0.3, False)
+        assert self._repair(visual, monkeypatch) == [1, 1]
+
+    def test_face_under_a_top_skin_alone_turns_up(self, monkeypatch):
+        """A floor modeled with no underside is still stood on from above."""
+        assert self._repair(self._skin(0.3, True), monkeypatch) == [1, 1]
+
+    def test_a_ceiling_keeps_facing_down(self, monkeypatch):
+        """A down-facing skin alone is a ceiling; the far floor keeps it an oracle."""
+        visual = self._skin(0.0, False) + self._skin(-50.0, True)
+        assert self._repair(visual, monkeypatch) == [-1, -1]
+
+    def test_a_skin_beyond_a_plank_does_not_decide(self, monkeypatch):
+        """An up skin further than a plank's thickness is another surface."""
+        out = self._repair(self._skin(3.0, True), monkeypatch)
+        assert out[0] == 1 and out[1] == -1
+
+
 class TestWindingRepairNeverRemovesFloor:
     r"""A mesh solid at source must stay solid: the repair may add standable
     surface, never take it away.

@@ -276,16 +276,7 @@ def export_FACT(rec: Record) -> list:
     emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
     emit_string(lines, "FULL", get_subrecord(rec, "FULL"))
 
-    # XNAM - inter-faction relations
-    xnams = get_all_subrecords(rec, "XNAM")
-    if xnams:
-        lines.append(f"RelationCount={len(xnams)}")
-        for i, xnam in enumerate(xnams):
-            if len(xnam.data) >= 8:
-                fid = struct.unpack_from("<I", xnam.data, 0)[0]
-                disp = struct.unpack_from("<i", xnam.data, 4)[0]
-                lines.append(f"Relation[{i}].Faction={get_formid_str(fid)}")
-                lines.append(f"Relation[{i}].Disposition={disp}")
+    _emit_relations(lines, rec)
 
     # TES4 FACT DATA is a single U8 (xEdit wbDefinitionsTES4: Hidden from
     # Player / Evil / Special Combat) — measured at exactly 1 byte in all 204
@@ -295,6 +286,9 @@ def export_FACT(rec: Record) -> list:
     data = get_subrecord(rec, "DATA")
     if data and len(data.data) >= 1:
         lines.append(f"DATA.Flags={data.data[0]}")
+    if data and len(data.data) >= 2:
+        lines.append(f"DATA.Flags2={data.data[1]}")
+    emit_formid(lines, "WMI1.Reputation", get_subrecord(rec, "WMI1"))
 
     # CNAM - Crime Gold Multiplier
     emit_float(lines, "CNAM.CrimeGold", get_subrecord(rec, "CNAM"))
@@ -310,104 +304,108 @@ def export_FACT(rec: Record) -> list:
     return lines
 
 
+def _emit_relations(lines: list, rec: Record):
+    """XNAM relations: faction and disposition, and FO3/FNV's authored group combat reaction.
+
+    See: docs/commentary/tes5_import_actors.md#faction-relations
+    """
+    xnams = get_all_subrecords(rec, "XNAM")
+    if not xnams:
+        return
+    lines.append(f"RelationCount={len(xnams)}")
+    for i, xnam in enumerate(xnams):
+        if len(xnam.data) < 8:
+            continue
+        fid, disp = struct.unpack_from("<Ii", xnam.data, 0)
+        lines.append(f"Relation[{i}].Faction={get_formid_str(fid)}")
+        lines.append(f"Relation[{i}].Disposition={disp}")
+        if len(xnam.data) >= 12:
+            lines.append(f"Relation[{i}].CombatReaction={struct.unpack_from('<I', xnam.data, 8)[0]}")
+
+
 def export_RACE(rec: Record) -> list:
+    """A RACE: identity, spells, relations, stats, defaults, attributes, hair and eyes, parts and FaceGen."""
     lines = []
     emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
     emit_string(lines, "FULL", get_subrecord(rec, "FULL"))
     emit_string(lines, "DESC", get_subrecord(rec, "DESC"))
     _emit_spells(lines, rec)
+    _emit_relations(lines, rec)
+    _emit_race_data(lines, rec)
+    _emit_race_defaults(lines, rec)
+    _emit_race_attributes(lines, rec)
+    _emit_formid_list(lines, rec, "HNAM", "Hair")
+    _emit_formid_list(lines, rec, "ENAM", "Eyes")
+    _emit_race_parts(lines, rec)
+    _emit_race_facegen(lines, rec)
+    return lines
 
-    # XNAM - faction relations
-    xnams = get_all_subrecords(rec, "XNAM")
-    if xnams:
-        lines.append(f"RelationCount={len(xnams)}")
-        for i, xnam in enumerate(xnams):
-            if len(xnam.data) >= 8:
-                fid = struct.unpack_from("<I", xnam.data, 0)[0]
-                disp = struct.unpack_from("<i", xnam.data, 4)[0]
-                lines.append(f"Relation[{i}].Faction={get_formid_str(fid)}")
-                lines.append(f"Relation[{i}].Disposition={disp}")
 
-    # DATA - Race stats
+def _emit_race_data(lines: list, rec: Record):
+    """DATA: seven skill boosts (skill, bonus), heights, weights and flags."""
     data = get_subrecord(rec, "DATA")
-    if data and len(data.data) >= 36:
-        d = data.data
-        # 8 skill boosts (2 bytes each: skill + bonus)
-        for i in range(7):
-            lines.append(f"DATA.SkillBoost[{i}].Skill={d[i*2]}")
-            lines.append(f"DATA.SkillBoost[{i}].Bonus={d[i*2+1]}")
-        lines.append(f"DATA.MaleHeight={struct.unpack_from('<f', d, 16)[0]}")
-        lines.append(f"DATA.FemaleHeight={struct.unpack_from('<f', d, 20)[0]}")
-        lines.append(f"DATA.MaleWeight={struct.unpack_from('<f', d, 24)[0]}")
-        lines.append(f"DATA.FemaleWeight={struct.unpack_from('<f', d, 28)[0]}")
-        lines.append(f"DATA.Flags={struct.unpack_from('<I', d, 32)[0]}")
+    if not data or len(data.data) < 36:
+        return
+    d = data.data
+    for i in range(7):
+        lines.append(f"DATA.SkillBoost[{i}].Skill={d[i*2]}")
+        lines.append(f"DATA.SkillBoost[{i}].Bonus={d[i*2+1]}")
+    for key, offset in (("MaleHeight", 16), ("FemaleHeight", 20), ("MaleWeight", 24), ("FemaleWeight", 28)):
+        lines.append(f"DATA.{key}={struct.unpack_from('<f', d, offset)[0]}")
+    lines.append(f"DATA.Flags={struct.unpack_from('<I', d, 32)[0]}")
 
-    # VNAM - Voices (male/female)
-    vnam = get_subrecord(rec, "VNAM")
-    if vnam and len(vnam.data) >= 8:
-        lines.append(f"VNAM.MaleVoice={get_formid_str(struct.unpack_from('<I', vnam.data, 0)[0])}")
-        lines.append(f"VNAM.FemaleVoice={get_formid_str(struct.unpack_from('<I', vnam.data, 4)[0])}")
 
-    # DNAM - Default Hair
-    dnam = get_subrecord(rec, "DNAM")
-    if dnam and len(dnam.data) >= 8:
-        lines.append(f"DNAM.MaleHair={get_formid_str(struct.unpack_from('<I', dnam.data, 0)[0])}")
-        lines.append(f"DNAM.FemaleHair={get_formid_str(struct.unpack_from('<I', dnam.data, 4)[0])}")
-
-    # CNAM - Default Hair Color
+def _emit_race_defaults(lines: list, rec: Record):
+    """VNAM voices and DNAM hair (male, female), CNAM hair color, PNAM/UNAM FaceGen clamps."""
+    for sig, key in (("VNAM", "Voice"), ("DNAM", "Hair")):
+        sub = get_subrecord(rec, sig)
+        if sub and len(sub.data) >= 8:
+            male, female = struct.unpack_from('<II', sub.data, 0)
+            lines.append(f"{sig}.Male{key}={get_formid_str(male)}")
+            lines.append(f"{sig}.Female{key}={get_formid_str(female)}")
     cnam = get_subrecord(rec, "CNAM")
     if cnam and len(cnam.data) >= 1:
         lines.append(f"CNAM.DefaultHairColor={cnam.data[0]}")
+    for sig, key in (("PNAM", "FaceGenMainClamp"), ("UNAM", "FaceGenFaceClamp")):
+        sub = get_subrecord(rec, sig)
+        if sub and len(sub.data) >= 4:
+            lines.append(f"{sig}.{key}={struct.unpack_from('<f', sub.data, 0)[0]}")
 
-    # PNAM - FaceGen Main/Tint Clamps
-    pnam = get_subrecord(rec, "PNAM")
-    if pnam and len(pnam.data) >= 4:
-        lines.append(f"PNAM.FaceGenMainClamp={struct.unpack_from('<f', pnam.data, 0)[0]}")
-    unam = get_subrecord(rec, "UNAM")
-    if unam and len(unam.data) >= 4:
-        lines.append(f"UNAM.FaceGenFaceClamp={struct.unpack_from('<f', unam.data, 0)[0]}")
 
-    # ATTR - Attributes (male 8 + female 8)
+#: A TES4 race's ATTR bytes: male then female, in this order.
+_RACE_ATTRIBUTES = ("Strength", "Intelligence", "Willpower", "Agility",
+                    "Speed", "Endurance", "Personality", "Luck")
+
+
+def _emit_race_attributes(lines: list, rec: Record):
+    """ATTR: eight male then eight female attribute bytes."""
     attr = get_subrecord(rec, "ATTR")
-    if attr and len(attr.data) >= 16:
-        attr_names = ["Strength", "Intelligence", "Willpower", "Agility",
-                      "Speed", "Endurance", "Personality", "Luck"]
-        for i, name in enumerate(attr_names):
-            lines.append(f"ATTR.Male.{name}={attr.data[i]}")
-        for i, name in enumerate(attr_names):
-            lines.append(f"ATTR.Female.{name}={attr.data[8+i]}")
+    if not attr or len(attr.data) < 16:
+        return
+    for sex, base in (("Male", 0), ("Female", 8)):
+        for i, name in enumerate(_RACE_ATTRIBUTES):
+            lines.append(f"ATTR.{sex}.{name}={attr.data[base + i]}")
 
-    # HNAM - Hair list
-    hnams = get_all_subrecords(rec, "HNAM")
-    for hnam in hnams:
-        count = len(hnam.data) // 4
+
+def _emit_formid_list(lines: list, rec: Record, sig: str, key: str):
+    """A packed FormID list subrecord (HNAM hair, ENAM eyes) as <key>Count and <key>[i]."""
+    for sub in get_all_subrecords(rec, sig):
+        count = len(sub.data) // 4
         if count > 0:
-            lines.append(f"HairCount={count}")
+            lines.append(f"{key}Count={count}")
             for i in range(count):
-                lines.append(f"Hair[{i}]={get_formid_str(struct.unpack_from('<I', hnam.data, i*4)[0])}")
+                lines.append(f"{key}[{i}]={get_formid_str(struct.unpack_from('<I', sub.data, i*4)[0])}")
 
-    # ENAM - Eyes list
-    enams = get_all_subrecords(rec, "ENAM")
-    for enam in enams:
-        count = len(enam.data) // 4
-        if count > 0:
-            lines.append(f"EyesCount={count}")
-            for i in range(count):
-                lines.append(f"Eyes[{i}]={get_formid_str(struct.unpack_from('<I', enam.data, i*4)[0])}")
 
-    _emit_race_parts(lines, rec)
+def _emit_race_facegen(lines: list, rec: Record):
+    """FGGS/FGGA/FGTS: the race-level FaceGen vectors, which carry a shared-texture race's skin tone.
 
-    # FGGS/FGGA/FGTS - race-level FaceGen vectors.  A race either ships its
-    # own skin textures (FGTS all zero) or shares another race's textures and
-    # recolors them with a non-zero FGTS.  This is the authored source for
-    # the skin tone of every shared-texture race (High Elf gold, Redguard
-    # brown, Nord pale...), so it must survive export.
+    See: docs/commentary/asset_convert_facegen.md#where-color-actually-lives
+    """
     for sig in ("FGGS", "FGGA", "FGTS"):
         sub = get_subrecord(rec, sig)
         if sub and sub.data:
             lines.append(f"{sig}={sub.data.hex()}")
-
-    return lines
 
 
 def _emit_race_parts(lines: list, rec: Record):

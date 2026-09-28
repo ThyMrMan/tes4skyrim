@@ -1,4 +1,4 @@
-"""A TES4 corpse (base health 0) is placed with the ACHR Starts Dead flag.
+"""A corpse (TES4: base health 0; FO3/FNV: the base's dead flag) is placed with the ACHR Starts Dead flag.
 
 See: docs/commentary/tes5_import_actors.md#corpses-start-dead
 """
@@ -8,6 +8,7 @@ import struct
 import pytest
 
 from tes5_import.actors import starts_dead as sd
+from tes5_import.record_types import world_falloutnv
 from tes5_import.record_types.world import convert_ACHR
 
 
@@ -76,3 +77,20 @@ def test_master_owned_corpse_base(by_type):
     by_type['ACHR'].append(_achr('001A928C', '00000D40'))
     sd.index_starts_dead(by_type, master)
     assert sd.starts_dead('001A928C')
+
+
+def test_fallout_corpse_is_dead_by_its_base_flag():
+    """FO3/FNV mark a corpse on its base record (flag bit 19); its health says nothing.
+
+    See: docs/commentary/tes5_import_actors.md#fallout-starts-dead
+    """
+    corpse = dict(_npc('00153158', 'SLGoodspringsCave02DEAD', 50), RecordFlags=str(0x80000 | 0x40000))
+    living = dict(_npc('00153159', 'Wastelander', 50), RecordFlags=str(0x40000))
+    fnv = {'NPC_': [corpse, living], 'ACHR': [_achr('001531F7', '00153158'), _achr('001531F8', '00153159')]}
+    world_falloutnv.register_fallout_source({'TERM': [1]})
+    try:
+        sd.index_starts_dead(fnv, {})
+        assert [_flags(ref) for ref in fnv['ACHR']] == [1024 | sd.STARTS_DEAD_FLAG, 1024]
+    finally:
+        world_falloutnv._IS_FALLOUT_SOURCE.clear()
+        sd._STARTS_DEAD.clear()

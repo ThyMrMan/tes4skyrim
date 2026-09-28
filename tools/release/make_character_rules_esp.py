@@ -227,7 +227,7 @@ def build(plugin: str, outdir: str, export_root: str, output_root: str,
           compile_psc: bool = True) -> bool:
     """Build the Data folder into `outdir`; True when it is shippable."""
     if is_fallout_export(str(record_dir(export_root, plugin))):
-        return build_fallout(plugin, outdir, export_root, compile_psc)
+        return build_fallout(plugin, outdir, export_root, output_root, compile_psc)
     doc, masters, class_choice = load_inputs(plugin, export_root, output_root)
     game_id = GAME_IDS.get(plugin.lower())
     if game_id is None:

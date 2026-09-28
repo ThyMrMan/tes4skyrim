@@ -526,7 +526,39 @@ not existing.
 Two reductions cover the model-shaped ones. `export_STATIC_BASE` (MSTT, SCOL,
 PWAT, IDLM, ASPC) keeps model plus bounds; without it the 10,000+ REFRs those
 base is null and the engine faults promoting them into their location.
-`export_ACTIVATOR_BASE` (TERM, NOTE, TACT) adds a display name and the script.
+`export_ACTIVATOR_BASE` (TERM, TACT) adds a display name and the script.
+
+<a id="notes-are-items"></a>**NOTE is an item, not an activator.** A Pip-Boy
+note (894 in FalloutNV.esm: text, image, sound or voice) was exported as an
+activator and imported as an ACTI, and the script converter read `GetHasNote`
+as 0 and dropped `AddNote`/`RemoveNote` (70, 78 and 34 sites). So no quest
+could see that the player had a note: picking up Deputy Beagle's journal
+(`VMQ01BeagleJournalNote`) never advanced They Went That-a-Way, whose quest
+script tests `GetHasNote VMQ01BeagleJournalNote`. `export_NOTE` now dumps the
+whole record (xEdit `wbRecord(NOTE)`): `DATA.Type`; `TNAM.Text` for a text,
+sound or image note, `TNAM.Topic` for a voice note; `SNAM` (a sound, or the
+speaking actor); `XNAM` (an image note's texture); and every `ONAM` quest as
+`Quest[i]`. The importer (`note_falloutnv.convert_NOTE`) writes a BOOK at the
+note's own FormID, weightless and worthless, reading as its text, or as its name
+for any other kind, through `convert_BOOK`. The commands become item operations
+on the player: `GetHasNote X` is `Game.GetPlayer().GetItemCount(X)` (an Int, so
+it stands in conditions, comparisons and assignments alike), `AddNote X`
+`AddItem(X, 1, False)`, which shows the pickup message, and `RemoveNote X` a
+silent `RemoveItem`. A NOTE property is typed `Book`.
+
+<a id="voice-notes-play-when-read"></a>**A voice note plays when read.** A
+voice note (34 in FalloutNV.esm) plays a topic, and that topic's line carries
+the result script: Beagle's journal line `001618B7` completes VMQ01 objectives
+30, 34, 36 and 38 and shows 40. So the BOOK of a voice note gets the static
+`TES4_VoiceNote` script, whose `OnRead` has the player `Say` the topic in their
+head, spoken as the note's speaker. The speaker must be a reference: the line's
+conditions (`GetIsID`, the voice type) and its audio folder are the speaker's.
+`SNAM` names an actor base, so the importer binds its one placed reference: 5
+notes, Beagle's among them. 4 speakers are never placed, 1 is placed 4 times,
+and 24 notes name none; those play as the player, whose conditions fail.
+
+Not converted: a sound note does not play its sound, and an image note shows
+its name, not its image.
 
 ### MESG — the record a converted `ShowMessage` binds to
 <a id="mesg-export"></a>
@@ -777,7 +809,9 @@ FNV needs no race->voice mapping: the folder name IS the VTYP EditorID
 same id from `NPC_.VTCK`, so the two sides agree by construction. That is why
 the exporter now emits `VTCK.Voice` -- Oblivion resolves voice through the RACE
 record's VNAM chain and never needed it, but in FNV it is the only authored
-link between an actor and its recordings.
+link between an actor and its recordings. CREA carries it too (1,045 of
+FalloutNV.esm's 1,578; the rest inherit it from a template), and was missing
+it until the [voice-type fix](tes5_import_conditions.md#authored-voice-types).
 
 Gender is read off the folder prefix only for callers that still want it.
 Robot and creature voices (`robotvictor`, `creatureferalghoul`) match neither
@@ -1000,6 +1034,18 @@ VCG01 hung on this — `VCG01VigorTesterTriggerSCRIPT` sets stage 60 from
 `onTriggerEnter`, and the tester's `OnActivate` only advances at stage 60.
 The raw subrecord now round-trips as `XPRM.Raw`.
 
+A primitive on an activator also gets `XTRI = 12` (L_TRIGGER,
+`world_falloutnv.trigger_layer`). Neither game authors XTRI on these (0 of
+FalloutNV's 5,677 primitives), and vanilla leaves it off 3,205 activator
+primitives, but it writes 12 on 53 of them. In game the player walked into an invisible
+wall in front of the Prospector Saloon, under the light beam `0016B5EB`;
+nothing there has collision except the saloon (409 collision triangles, all
+matching FNV) and the exterior `GSSaloonExitTrigger` box `00172FC4` (about
+234 x 160 x 120, 27-147 units above the ground). Naming the layer rules the
+box out whatever Skyrim's default is. Not yet confirmed in game to be the
+cause. Engine-marker primitives (room, portal, plane, collision markers) and
+acoustic spaces keep no XTRI.
+
 ## <a id="character-records"></a>Character records: AVIF, PERK, REPU and the Fallout CLAS
 
 **Code:** `tes4_export/record_types/character_falloutnv.py`.
@@ -1019,3 +1065,33 @@ for these four types):
 A `PERK` is read in subrecord order: conditions before the perk's own `DATA`
 are its requirements, each `PRKE` opens an effect whose `DATA` follows, each
 `PRKC` opens one of its condition tabs, and `PRKF` closes it.
+
+## <a id="package-scripts"></a>Package scripts and dialogue data
+
+**Code:** `tes4_export/record_types/package_falloutnv.py`.
+
+A FO3/FNV `PACK` ends with three sections, OnBegin, OnEnd and OnChange. Each
+is a marker (`POBA`, `POEA`, `POCA`), an idle (`INAM`), an embedded script
+(`SCHR` `SCDA` `SCTX`, locals, `SCRO`/`SCRV`) and a topic (`TNAM`), in xEdit's
+order. Oblivion's `PACK` has none of it, so the shared exporter wrote nothing,
+and FalloutNV.esm's 480 package scripts were lost. 171 of them advance a quest
+and 27 speak a line; the topics they speak looked unreferenced, so the importer
+dropped them as NPC-to-NPC chatter.
+
+Each section is written as `OnBegin.Idle`, `OnBegin.Script`,
+`OnBegin.SCRO[i]` and `OnBegin.Topic` (likewise `OnEnd.` and `OnChange.`),
+walked in stream order because the three sections reuse the same subrecord
+names. A Dialogue package's `PKDD` adds `PKDD.FOV`, `PKDD.Topic` and
+`PKDD.Type` (`Conversation` or `SayTo`).
+
+## <a id="patrol-points"></a>Patrol points
+
+**Code:** `tes4_export/record_types/package_falloutnv.py` `emit_patrol_data`.
+
+A FO3/FNV REFR, ACHR or ACRE on a patrol route carries Patrol Data: an idle
+time (`XPRD`), the Patrol Script Marker (`XPPA`), then an idle (`INAM`), an
+embedded script and a topic (`TNAM`), the shape of a package section. It is
+written as `Patrol.IdleTime`, `Patrol.Idle`, `Patrol.Script`,
+`Patrol.SCRO[i]` and `Patrol.Topic` by the same stream walk the package
+sections use, keyed on `XPPA`. The actors' linked references (`XLKR`), the
+chain a patrol walks, are written for ACHR and ACRE too.

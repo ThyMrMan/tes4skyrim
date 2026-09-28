@@ -4,6 +4,7 @@ Tests for TES5 import - verifies binary output is correctly structured.
 Tests the writer, record converters, and group hierarchy.
 """
 
+import math
 import os
 import struct
 import tempfile
@@ -17,6 +18,7 @@ from tes5_import.record_types.npc import convert_NPC_
 from tes5_import.record_types.common import _convert_biped_flags
 from tes5_import.record_types.equipment import armo_slots
 from asset_convert.character.morrowind_coverage import part_slots
+from asset_convert.nif.furniture_markers import cluster_seats
 from tes5_import.record_types.equipment import (
     convert_ARMO,
     convert_BOOK,
@@ -983,6 +985,27 @@ class TestConverters:
         assert self._get_subrecord_data(result, 'XPRM') == bytes.fromhex(raw)
         assert result.index(b'NAME') < result.index(b'XPRM') < result.index(b'DATA')
 
+    def test_trigger_primitive_on_an_activator_is_on_the_trigger_layer(self):
+        """A primitive placed on an activator carries XTRI 12 (L_TRIGGER); a marker's does not.
+
+        See docs/commentary/tes4_export_falloutnv.md#trigger-primitives.
+        """
+        from tes5_import.record_types import world_falloutnv
+        raw = '0000804200008042000080420000803F000000000000803F9A99193E01000000'
+        world_falloutnv.register_trigger_bases({'ACTI': [{'FormID': '00012345'}]})
+        try:
+            def refr(base):
+                """A primitive REFR on `base`."""
+                return {'Signature': 'REFR', 'FormID': '00001000', 'RecordFlags': '0',
+                        'NAME': base, 'XPRM.Raw': raw, 'PosX': '0.0', 'PosY': '0.0',
+                        'PosZ': '0.0', 'RotX': '0.0', 'RotY': '0.0', 'RotZ': '0.0'}
+            trigger = convert_REFR(refr('00012345'))
+            portal = convert_REFR(refr('00000020'))
+        finally:
+            world_falloutnv.register_trigger_bases({})
+        assert self._get_subrecord_data(trigger, 'XTRI') == struct.pack('<I', 12)
+        assert b'XTRI' not in portal
+
     def test_land(self):
         # Minimal LAND record
         vhgt = b'\x00' * 1093  # Standard VHGT size
@@ -1865,6 +1888,26 @@ class TestFurnConversion:
                 pytest.fail('No BSFurnitureMarkerNode in converted NIF')
 
 
+def _stool_entry(index, x, y, theta):
+    """A FO3/FNV stool entry (ref 15) as extract_entries builds it."""
+    t = theta / 1000.0
+    return {'index': index, 'p': (x, y, 0.0), 'd': (math.sin(t), math.cos(t)),
+            'heading': t % (2 * math.pi), 'sleep': False, 'ref': 15}
+
+
+def test_fallout_stool_entries_seat_the_sitter_on_the_stool():
+    """stool01's entry puts the seat at the stool's centre; the blackjack table's four land on theirs.
+
+    See: docs/commentary/asset_convert_falloutnv.md#stool-entries
+    """
+    stool, = cluster_seats([_stool_entry(0, 20.5, -41.0, 0)], lambda: (0.0, 0.0))
+    assert (round(stool['x'], 1), round(stool['y'], 1), stool['heading']) == (0.0, 0.0, 0.0)
+    table = [(-109.7, -67.6, 1311), (-120.1, 21.8, 1797), (-80.4, 111.9, 2417), (-55.4, -139.7, 785)]
+    stools = [(-70.5, -36.0), (-73.4, 31.8), (-36.1, 92.3), (-36.0, -92.6)]
+    seats = cluster_seats([_stool_entry(i, *row) for i, row in enumerate(table)], lambda: (0.0, 0.0))
+    assert all(math.hypot(s['x'] - cx, s['y'] - cy) < 8.0 for s, (cx, cy) in zip(seats, stools))
+
+
 class TestServiceConversion:
     """Barter/training services: trainer CLAS clones, vendor gold, dialogue."""
 
@@ -2230,6 +2273,41 @@ class TestServiceConversion:
                                    b'DLBR', None, snam=0x000000D7)
         assert branch is not None and struct.unpack(
             '<I', self._subrecords(branch)['DNAM'][0][:4])[0] == 1
+
+    def test_greeting_with_a_reply_choice_keeps_its_menu_choices_too(self):
+        """A FNV greeting choosing a reply-only topic and a top-level one links both: its links
+        replace the menu, so dropping the top-level one left Sunny with only "Until next time."."""
+        from tes5_import.dialogue.groups import build_dialog_groups
+        from tes5_import.base.text_reader import set_formid_index_offset
+        set_formid_index_offset(0)
+        writer = PluginWriter(masters=['Skyrim.esm'])
+        qust = {'Signature': 'QUST', 'FormID': '00104C66', 'EditorID': 'VFreeformGoodsprings',
+                'DATA.Flags': '1', 'DATA.Priority': '30', 'StageCount': '0'}
+        dial = {'Signature': 'DIAL', 'DATA.Type': '0', 'QuestCount': '1', 'Quest[0]': '00104C66'}
+        greeting = dict(dial, FormID='000000C8', EditorID='GREETING', FULL='GREETING')
+        ask = dict(dial, FormID='001055D4', EditorID='SunnyAsk', FULL='Can I ask you something?',
+                   **{'DATA.Flags': '2'})
+        bye = dict(dial, FormID='00104E61', EditorID='SunnyBye', FULL='Bye.', **{'DATA.Flags': '0'})
+        line = {'Signature': 'INFO', 'RecordFlags': '0', 'DATA.Flags': '0',
+                'QSTI.Quest': '00104C66', 'ResponseCount': '1',
+                'Response[0].EmotionType': '0', 'Response[0].EmotionValue': '50',
+                'Response[0].ResponseNumber': '1'}
+        greet_info = dict(line, FormID='00104E7E', ParentDIAL='000000C8', ChoiceCount='2',
+                          **{'Choice[0]': '001055D4', 'Choice[1]': '00104E61',
+                             'Response[0].ResponseText': 'Cheyenne, stay.'})
+        ask_info = dict(line, FormID='001055D5', ParentDIAL='001055D4',
+                        **{'Response[0].ResponseText': 'Sure.'})
+        bye_info = dict(line, FormID='00104E7B', ParentDIAL='00104E61',
+                        **{'Response[0].ResponseText': 'Until next time.'})
+        build_dialog_groups({'QUST': [qust], 'DIAL': [greeting, ask, bye],
+                             'INFO': [greet_info, ask_info, bye_info]},
+                            writer, npc_to_vtyp={},
+                            unlock_plan={'gated': {}, 'info_reveals': {},
+                                         'stage_reveals': {}, 'script_added': set()})
+        dial_group = b''.join(writer._top_groups.get('DIAL', []))
+        greet_rec = self._find_record(dial_group, b'INFO', 0x00104E7E)
+        links = [struct.unpack('<I', v[:4])[0] for v in self._subrecords(greet_rec).get('TCLT', [])]
+        assert links == [0x001055D4, 0x00104E61]
 
     def test_greeting_choice_reaches_response_topic(self):
         """A greeting Choice's response topic gets a gated TOP-LEVEL branch, so
@@ -2901,8 +2979,8 @@ class TestCKWarningFixes:
 
     def test_null_package_target_is_self(self):
         """A null package target becomes type 6 (Self), vanilla's filler."""
-        from tes5_import.packages.converter import _null_target
-        assert struct.unpack('<iIi', _null_target())[0] == 6
+        from tes5_import.packages.templates import null_target
+        assert struct.unpack('<iIi', null_target())[0] == 6
 
     def test_player_ambush_becomes_forcegreet(self):
         """A player-targeted TES4 Ambush is a FORCE GREET.
@@ -6796,6 +6874,16 @@ class TestFactionRelationReaction:
         rel = self._fact(self.BLADES_CG, [(self.MYTHIC_DAWN_CG, 100)])
         assert rel[self.MYTHIC_DAWN_CG][1] == 3
 
+    def test_a_fallout_combat_reaction_is_taken_as_authored(self):
+        """FNV writes the reaction itself (RaiderFaction: modifier 0, Ally to itself); it is not guessed from 0."""
+        from tes5_import.record_types.actor_common import convert_FACT
+        rec = {'FormID': '00021476', 'EditorID': 'RaiderFaction', 'RelationCount': '1',
+               'Relation[0].Faction': '00021476', 'Relation[0].Disposition': '0',
+               'Relation[0].CombatReaction': '2'}
+        raw = convert_FACT(rec)
+        at = raw.index(b'XNAM')
+        assert struct.unpack_from('<IiI', raw, at + 6)[2] == 2
+
     def test_chargen_guards_do_not_ally_with_the_assassins(self):
         """The regression itself: BladesCG must not be Ally to MythicDawnCG."""
         rel = self._fact(self.BLADES_CG, [
@@ -7290,13 +7378,14 @@ class TestFalloutActorTemplates:
         assert stub['Model.MODL'] == r'Creatures\Radscorpion\Skeleton.nif'
         assert stub['NIFZ[0]'] == 'Radscorpion.NIF'
 
-    def test_an_owned_model_is_never_overwritten(self):
+    def test_a_claimed_model_replaces_the_stubs_own(self):
+        """A set Template Flag is final: the engine ignores the stub's own model."""
         from tes5_import.record_types.actors_falloutnv import (
             flatten_actor_templates)
         stub, by_type = self._chain()
         stub['Model.MODL'] = r'Creatures\Own\Skeleton.nif'
         flatten_actor_templates(by_type)
-        assert stub['Model.MODL'] == r'Creatures\Own\Skeleton.nif'
+        assert stub['Model.MODL'] == r'Creatures\Radscorpion\Skeleton.nif'
 
     def test_model_flag_clear_means_no_inheritance(self):
         """Only the categories Template Flags claims are copied down."""
@@ -7320,28 +7409,29 @@ class TestFalloutActorTemplates:
         assert 'Model.MODL' not in a
 
     def test_stub_inherits_its_name_and_ai_data(self):
-        """Base Data carries FULL and AI Data carries AIDT, like Model does."""
+        """Base Data carries FULL and AI Data carries AIDT, from the first actor defining each."""
         from tes5_import.record_types.actors_falloutnv import (
             flatten_actor_templates)
         stub, by_type = self._chain()
-        root = by_type['CREA'][-1]
-        root['FULL'] = 'Giant Radscorpion'
-        root['AIDT.Aggression'] = '2'
-        root['AIDT.Confidence'] = '4'
+        mid = by_type['CREA'][1]
+        mid['FULL'] = 'Giant Radscorpion'
+        mid['AIDT.Aggression'] = '2'
+        mid['AIDT.Confidence'] = '4'
+        stub['AIDT.Aggression'] = '0'
         flatten_actor_templates(by_type)
         assert stub['FULL'] == 'Giant Radscorpion'
         assert stub['AIDT.Aggression'] == '2'
         assert stub['AIDT.Confidence'] == '4'
 
-    def test_a_stub_that_owns_its_name_keeps_it(self):
-        """An overridden category is never replaced by the template's."""
+    def test_a_claimed_level_replaces_the_stubs_placeholder(self):
+        """ACBS.Level is always written, so a Use Stats stub carries a placeholder the template replaces."""
         from tes5_import.record_types.actors_falloutnv import (
             flatten_actor_templates)
         stub, by_type = self._chain()
-        by_type['CREA'][-1]['FULL'] = 'Giant Radscorpion'
-        stub['FULL'] = 'Its Own Name'
+        stub['ACBS.Level'] = '1'
+        by_type['CREA'][1]['ACBS.Level'] = '3'
         flatten_actor_templates(by_type)
-        assert stub['FULL'] == 'Its Own Name'
+        assert stub['ACBS.Level'] == '3'
 
     def test_the_chain_resolves_through_an_lvln(self):
         """FO3/FNV points spawn stubs at LVLN as often as at LVLC."""
@@ -7650,8 +7740,8 @@ class TestFalloutTemplateCategories:
         assert stub['FactionCount'] == '1'
         assert stub['Faction[0].Rank'] == '2'
 
-    def test_a_stub_with_its_own_items_keeps_them(self):
-        """A stub that overrides a category must not take the donor's."""
+    def test_claimed_items_replace_the_stubs_own(self):
+        """With Use Inventory set the engine carries the template's items, not the stub's."""
         from tes5_import.record_types.actors_falloutnv import (
             flatten_actor_templates)
         by_type, stub = self._pair(1 << 8, {
@@ -7661,7 +7751,7 @@ class TestFalloutTemplateCategories:
         stub['Item[0].FormID'] = '000000FF'
         stub['Item[0].Count'] = '9'
         flatten_actor_templates(by_type)
-        assert stub['Item[0].FormID'] == '000000FF'
+        assert (stub['Item[0].FormID'], stub['Item[0].Count']) == ('0000000A', '1')
 
     def test_a_category_the_flags_do_not_claim_is_not_copied(self):
         """Only the categories the Template Flags name are inherited."""
@@ -7711,3 +7801,38 @@ class TestFalloutTemplateCategories:
         flatten_actor_templates({'NPC_': [stub, real], 'LVLN': [lvln]})
         assert stub['ItemCount'] == '1'
         assert stub['Item[0].FormID'] == '0000000A'
+
+
+class TestFalloutCreatureVoice:
+    """A creature's authored voice type reaches the voice map, template or not.
+
+    See docs/commentary/tes5_import_conditions.md#authored-voice-types.
+    """
+
+    def _creatures(self, flags):
+        """A Use-Traits-able CREA stub on a robot template naming its VTYP."""
+        stub = {'Signature': 'CREA', 'FormID': '00145CFC', 'EditorID': 'Stub',
+                'ACBS.TemplateFlags': str(flags), 'TPLT.Template': '001543DF'}
+        robot = {'Signature': 'CREA', 'FormID': '001543DF',
+                 'EditorID': 'Protectron', 'VTCK.Voice': '0001B0E7'}
+        return {'CREA': [stub, robot], 'VTYP': [
+            {'Signature': 'VTYP', 'FormID': '0001B0E7',
+             'EditorID': 'RobotProtectron'}]}
+
+    def _voice_map(self, by_type, monkeypatch):
+        """The NPC->VTYP map, with RobotProtectron written at 0x01ABCDEF."""
+        from tes5_import.base import owned_records
+        from tes5_import.dialogue.converter import build_npc_to_vtyp_map
+        monkeypatch.setitem(owned_records.FALLOUT_VTYP_BY_EDID,
+                            'robotprotectron', 0x01ABCDEF)
+        return build_npc_to_vtyp_map(by_type, 0)
+
+    def test_a_stub_takes_its_templates_voice(self, monkeypatch):
+        """Flattening keys Traits on RNAM.Race, which no CREA owns."""
+        voices = self._voice_map(self._creatures(1), monkeypatch)
+        assert voices[0x00145CFC] == 0x01ABCDEF
+        assert voices[0x001543DF] == 0x01ABCDEF
+
+    def test_a_stub_without_use_traits_keeps_the_fallback(self, monkeypatch):
+        voices = self._voice_map(self._creatures(1 << 6), monkeypatch)
+        assert voices.get(0x00145CFC) != 0x01ABCDEF

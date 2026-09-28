@@ -27,6 +27,9 @@ PARAM_TYPES = {
     'additemhealthpercent': {1: 'Int'},
     'addspell': {0: 'Spell'},
     'removespell': {0: 'Spell'},
+    'addperk': {0: 'Perk'},
+    'removeperk': {0: 'Perk'},
+    'hasperk': {0: 'Perk'},
     'isinfaction': {0: 'Faction'},
     'addtofaction': {0: 'Faction'},
     'removefromfaction': {0: 'Faction'},
@@ -551,7 +554,7 @@ COMMAND_ROWS = {
     'isenabled': Cmd('IsEnabled', MAP, flags='bare_bool cmp_bool'),
     'activate': Cmd('Activate', MAP, flags='objref_self'),
     'delete': Cmd('Delete', MAP, flags='objref_self'),
-    'markfordelete': Cmd('Delete', MAP, flags='zero_arg'),
+    'markfordelete': Cmd('Delete', MAP, flags='zero_arg objref_self'),
     'placeatme': Cmd('PlaceAtMe', MAP, flags='actor_only objref_shared'),
     #: Native SetDestroyed (4300/0x10CC) has NO reader, so the polyfill mirrors every write into TES4DestroyedRefs.
 
@@ -607,6 +610,9 @@ COMMAND_ROWS = {
     'stopquest': Cmd('Stop', MAP, bare=True),
     'getquestrunning': Cmd('IsRunning', MAP, bare=True, flags='cmp_bool'),
     'isquestcompleted': Cmd('IsCompleted', MAP, bare=True),
+    'getquestcompleted': Cmd('IsCompleted', MAP, bare=True, flags='cmp_bool'),
+    'getqc': Cmd('IsCompleted', MAP, bare=True, flags='cmp_bool'),
+    'getqr': Cmd('IsRunning', MAP, bare=True, flags='cmp_bool'),
     'completequest': Cmd('CompleteQuest', MAP, bare=True),
 
     #: --- UI / Messages ---

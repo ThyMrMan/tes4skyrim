@@ -60,6 +60,95 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
 
 - **DLBR (Dialog Branch)**: EDID + QNAM(quest FID) + TNAM(0=Player) + DNAM(0=Normal or 1=TopLevel) + SNAM(starting DIAL FID). Created for ALL non-bark DIAL topics. Top-level topics get DNAM=1 (appear in dialog menu). TCLT chain topics get DNAM=0 (only reachable via TCLT choice links, not shown in menu).
 - **DLVW (Dialog View)**: EDID + QNAM(quest) + BNAM[](branch FIDs) + TNAM[](topic FIDs) + ENAM(view type) + DNAM(show all text). CK UI metadata, one per quest.
+- <a id="fallout-topic-links"></a>**FO3/FNV topics: Top-level and the prompt** (`topics_falloutnv.py`).
+  A FO3/FNV DIAL's DATA carries a Flags byte after the type (Rumors 0x01,
+  Top-level 0x02; xEdit `wbDefinitionsFNV`). A Top-level topic is listed
+  whenever its conditions pass; any other topic is a reply (an INFO's Choice
+  list) or is listed once something AddTopics it (`MannyVargasWhoAreYou`,
+  added by Manny's greeting). In FalloutNV.esm 14,067 of 16,349 Topic-type
+  topics lack the flag. The exporter dropped the byte, so all of them were
+  top-level branches, including the tutorial's script-spoken
+  `PLAYERFIREWEAPON` family and quest replies such as
+  `VCG01DocMitchellTopic076` "<Doc Outro>" on Doc Mitchell. For a DIAL that
+  carries the flags, the branch now follows them: Top-level, or named by any
+  AddTopic (the unlock plan's `added`, gated or not), is listed; the rest get a
+  Normal branch. Oblivion's rule (Choice targets never AddTopic'd go Normal)
+  is unchanged.
+  `LinkFrom` (INFO TCLF, 645 INFOs) is not read. 625 of its 1,008 topic pairs
+  repeat a Choice link; the rest name NPC-to-NPC HELLO chains, radio
+  segments and the engine's `ANY` topic. Only one reply-only topic is reached
+  through LinkFrom alone, while folding it into choices adds 34,285 links
+  (1,074 HELLO lines times each linking INFO).
+  The INFO's `RNAM` prompt, the player's line shown in the menu instead of
+  the topic's name, is exported as `Prompt` and written to Skyrim's `RNAM`
+  (same field in both games; 1,411 FalloutNV INFOs). FalloutNV names topics
+  with editor placeholders such as `VCG01DocMitchellWhoRescued` and puts the
+  real text in the prompt.
+- <a id="fallout-brace-notes"></a>**FO3/FNV `{notes}` are never shown** (`topics_falloutnv.py` `shown_text`).
+  Fallout's writers left notes in braces inside dialogue text: acting
+  directions (`{narrating}` 134, `{beat}`, `{emph}`), pronunciation
+  (`{KAI-zar}` 117), and tags such as `{Evil 2+}` or `{Speech >= 65}`. The
+  Fallout engine hides them; Skyrim shows text as written, so the first played
+  run showed `{Evil 2+}` in conversation. For a Fallout source the notes are
+  removed from spoken lines (5,634 in FalloutNV.esm), topic text (125) and
+  prompts (none carry one). 81 topic texts are nothing but a note; they are
+  left empty, and their INFOs carry the prompt the menu shows. Oblivion's
+  dialogue has no braces.
+- <a id="fallout-follow-ups"></a>**FO3/FNV Follow Up: the speaker goes on unasked** (`follow_ups_falloutnv.py`).
+  A FO3/FNV INFO's Follow Up list (TCFU, xEdit "Follow Up", INFO FormIDs)
+  names the lines its speaker continues with, the first whose conditions
+  pass, with no player choice. FalloutNV.esm has 1,107 such INFOs (1,760
+  links; 1,092 with no choices, 66 on GREETING). Doc Mitchell's whole farewell is
+  one chain: the greeting "Here. These are yours." follows up with the Pip-Boy
+  line, which follows up with the vault suit line (two INFOs, one per sex),
+  and so on to "talk to Sunny Smiles", whose End script lets the player out
+  and ends VCG01. The exporter never wrote TCFU, so the chain stopped after
+  the greeting. Skyrim links topics, not INFOs, but vanilla continues a line
+  unasked with ENAM Invisible Continue (0x40) and one TCLT (965 of its 1,003
+  such lines). So each INFO with follow-ups gets a hidden topic
+  (`TES4FollowUp_<source INFO>`, Normal branch, owned by the follow-ups'
+  quest) holding shared copies (DNAM, as the arrest force greet does) of
+  exactly its follow-up INFOs in order. Each copy keeps its target's
+  conditions, fragment and further follow-ups, and speaks its voice.
+  A GREETING line cannot continue from Hello: of 5,287 vanilla Hello INFOs,
+  6 carry a TCLT and none Invisible Continue, while vanilla's 712 Blocking
+  branches (said instead of Hello when dialogue starts, force greets
+  included) hold 85 Invisible Continue lines. In game, Doc said "Here. These
+  are yours." and stopped, so the door stayed locked. A quest's GREETING group
+  holding a line with follow-ups is therefore written as a Blocking `CUST`
+  topic (same FormID and EditorID, so voice paths and the force greet's PDTO
+  are unchanged; lines keep their order, so the first passing one still wins).
+- <a id="fallout-follow-ups-resume"></a>**A follow-up chain the player walked
+  away from resumes** (`follow_up_marks_falloutnv.py`). FO3/FNV could not
+  leave a conversation mid-line; Skyrim can, and then the Invisible Continue
+  never happens. Sunny's "[END TUTORIAL]" reply follows up with the lines that
+  set VCG02's "talk to Trudy" objective and enable Trudy; a run closed the
+  talk 1 s into the reply (her exit bark played), and no later greeting of
+  hers offers those lines again, so Back in the Saddle and everything that
+  needs Trudy stalled. In a chain where some follow-up, directly or down its
+  own follow-ups, runs a result script, each source line sets
+  `TES4FollowUpFrom_<source>` and each follow-up `TES4FollowUpSaid_<target>`
+  as it begins, through the unlock plan's revealer fragments (OnBegin, see
+  [unlocks land when the line begins](#unlocks-land-when-the-line-begins)).
+  Beside each follow-up topic, a Blocking `TES4FollowUpResume_<source>` topic
+  holds the same shared copies, each led by From == 1 and every one of the
+  source's Said == 0: when the chain broke, the speaker resumes it the next
+  time the player talks to them. A second pass through the same source does
+  not resume once a follow-up was said. Played: Sunny finished her reply,
+  then the talk closed with no follow-up, and on the next talk her own
+  Blocking greeting ("Everything all right?") won over the resume topic,
+  which sat in the same quest. So the resume topics belong to their own
+  start-enabled quest, `TES4FollowUpResume`, at the top priority (100), and
+  every follow-up copy drops ENAM Say Once, the one flag that set Sunny's copy
+  apart from the follow-ups that played (Doc Mitchell's), its "Cheyenne is
+  alive" `GetDead` on a loaded reference being vanilla-legal. Unconfirmed:
+  vanilla has 37 shared Say Once lines in continued topics, so Say Once is a
+  suspect, not a proven cause. FalloutNV.esm: 610 of 1,107 sources
+  lead to a scripted line, giving 983 globals and 610 resume topics. The
+  globals (`FOLLOWUP_MARK_GLOB`) and resume branches (`FOLLOWUP_RESUME_DLBR`)
+  hash on their own sites: sharing `UNLOCK_GLOB` and `BLOCKING_DLBR` took the
+  ids of a SNDR, an OTFT and a DLBR allocated later. On their own sites 2
+  DLBRs still moved (approved), since the first claim on an id keeps it.
 - **Service-menu gate (`_service_gate`)**: Barter/Training topics carry two ANDed CTDAs — who offers the service (merchant marker / trainer faction, `GetInFaction`) AND `GetOffersServicesNow` (func 255). Faction membership is permanent, so the faction condition alone left shopkeepers offering "What have you got for sale?" in the street at any hour; TES4 gated this implicitly through its service menu, which has no converted equivalent. Only ONE faction condition either way: an OR-chain over every vendor faction put 25-30 CTDAs on each INFO (vanilla max 22, max OR-run 20) and the engine silently dropped every gated line. Func 255 is vanilla-legal and measured — 165 vanilla Skyrim INFO CTDAs use it, all with run-on 0, operator `==`, params 0. The gate is prepended per-INFO, so it covers all 57 Barter and 10 Training INFOs from one site. Repair/Recharge/Travel remain dropped upstream in `SERVICE_MENU_TOPICS` (26 more INFOs); each needs its own Papyrus menu fragment and Skyrim has no direct Travel equivalent.
 
 ## Voice types and conditions
@@ -145,11 +234,11 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
 - **Conversion stats**: 3817 DIAL topics (851 barks, 2966 conversation), 19278 INFOs, 954 DLBR branches, 1 DLVW view, 2908 quest-owned conversation topics, 27 fallback greetings
 - **Dialog filtering stats**: 18,761 INFOs with conditions, 20 conditionless (down from 958 before voice type fallback fix). 17,784 INFOs with GetIsVoiceType. 3,704 GetInCell CTDAs (preserved for location gating). 3,169 DLBR branches (555 Type 1 chain topics excluded). 9,365 INFOs quest-gated with GetQuestRunning (non-SGE QSTI quests).
 - **Quest running gating (QSTI restoration, 2026-07 design)**: In Oblivion, each INFO only shows while its OWN `QSTI.Quest` is running. Single-quest topics get this natively via quest ownership. For shared topics (owned by TES4DialogueGeneric), `_build_one_topic()` injects `GetQuestRunning(info's own QSTI.Quest)==1.0` as the FIRST CTDA on each INFO whose quest is non-SGE and ≠ the topic owner. **Gate by the INFO's OWN quest, never the DIAL's Quest[0]** — gating all of GREETING's children by one arbitrary Quest[0] blocks ALL greetings (a hard-won earlier lesson). SGE quests are exempt (running from new game via the .seq file).
-- **AddTopic unlock system (2026-07)**: Oblivion's CENTRAL visibility mechanic — a topic only appears once ADDED via an INFO's Add-Topics data list (export: `AddTopic[i]=` FormIDs, 1044 INFOs), an `AddTopic X` result-script command, a quest-stage script, or automatically when a spoken line's text mentions the topic's FULL name (Oblivion highlights + auto-adds mentioned names). Skyrim has no AddTopic → re-expressed via `tes5_import/dialogue/unlocks.py`: one GLOB `TES4Unlock_<topic>` per gated topic (206); every INFO of a gated topic gets `GetGlobalValue(GLOB)==1` (func 74, same both games); every reveal event sets the global from a Papyrus fragment (INFO fragments fire OnEnd; reveal-only INFOs get a generated TIF fragment with just the SetValue call). The plan is built identically by the importer (GLOBs, conditions, VMAD property bindings) and script_convert/pipeline (fragment .psc bodies) — keys are low-24 FormIDs so it's load-order-offset independent. Gating rules (each violation caused a real in-game bug):
+- **AddTopic unlock system (2026-07)**: Oblivion's CENTRAL visibility mechanic — a topic only appears once ADDED via an INFO's Add-Topics data list (export: `AddTopic[i]=` FormIDs, 1044 INFOs), an `AddTopic X` result-script command, a quest-stage script, or automatically when a spoken line's text mentions the topic's FULL name (Oblivion highlights + auto-adds mentioned names). Skyrim has no AddTopic → re-expressed via `tes5_import/dialogue/unlocks.py`: one GLOB `TES4Unlock_<topic>` per gated topic (206); every INFO of a gated topic gets `GetGlobalValue(GLOB)==1` (func 74, same both games); every reveal event sets the global from a Papyrus fragment (INFO unlocks fire OnBegin, see [unlocks land when the line begins](#unlocks-land-when-the-line-begins); reveal-only INFOs get a generated TIF fragment with just the SetValue call). The plan is built identically by the importer (GLOBs, conditions, VMAD property bindings) and script_convert/pipeline (fragment .psc bodies) — keys are low-24 FormIDs so it's load-order-offset independent. Gating rules (each violation caused a real in-game bug):
   - Gate ONLY topics explicitly added somewhere; mention-only topics stay ungated (name-match miss = dead content).
   - **Topics revealed by BARK lines (GREETING/HELLO) are NOT gated when every speaker of the topic says a revealing bark** (see [the bark-ungating exception](#the-bark-ungating-exception)) — the bark fires on first contact, so in Oblivion they're effectively visible on first talk (Azzan's "Join the Fighters Guild" via his FG-ad greeting). Gating them makes topics go missing (fragment races the menu / a different greeting plays). 409 of 615 explicit targets are bark-revealed → 206 gated.
   - Gated TCLT targets keep the gate; their TCLT-parent INFOs are added as revealers.
-  - Example that must stay gated: contract INFO (0003571C) lists AddTopic[0]=ratsTOPIC → TES4_TIF__0003571C sets TES4Unlock_ratsTOPIC OnEnd → "Rats" appears only after the contract line. Quest-running does NOT hide it — FGC01Rats starts at guild join (FGD00JoinFG stage 100 `StartQuest` → `.Start()` fragment).
+  - Example that must stay gated: contract INFO (0003571C) lists AddTopic[0]=ratsTOPIC → TES4_TIF__0003571C sets TES4Unlock_ratsTOPIC OnBegin → "Rats" appears only after the contract line. Quest-running does NOT hide it — FGC01Rats starts at guild join (FGD00JoinFG stage 100 `StartQuest` → `.Start()` fragment).
 - **'AnswerStatus' and 'TRANSITION'** are Oblivion NPC-to-NPC conversation system topics — classify as barks (IDLE/88/cat 7) or they leak into player topic menus.
 - **Barter/Training services (2026-07)**: Skyrim opens the barter menu via a Papyrus fragment (`akSpeaker.ShowBarterMenu()` — there is NO Barter DIAL subtype, only BarterExit) and the training menu via `Game.ShowTrainingMenu(trainer)` (the Training subtype exists in the enum but even vanilla never uses it — zero `TRAI` SNAMs in Skyrim.esm). Vanilla contracts (decoded from Skyrim.esm): vendors = `OfferServicesTopic` (Custom, quest DialogueGeneric) with INFOs gated `GetInFaction(JobMerchantFaction)==1 + GetOffersServicesNow(func 255)==1` + TIF fragment calling ShowBarterMenu; trainers = `OffersTrainingTopic` (Custom, quest DialogueTrainers) with per-trainer INFOs gated `GetIsID + GetBaseActorValue(skill)<cap RunOn=Target` + TIF fragment, NPC in JobTrainerFaction + JobTrainer<Skill>Faction, and the menu's skill/cap read from the trainer's **CLAS** (DATA Teaches/MaxTrainingLevel). Our conversion (`dialog_converter.SERVICE_MENU_TOPICS`): the Oblivion Service-type topics `Barter` (57 voiced per-merchant lines) and `Training` (10 generic voiced lines) — previously dropped with all type-5 topics — convert to Custom player topics with synthesized prompts ("What have you got for sale?" / "I would like some training."); every INFO gets an injected service gate (barter: `GetInFaction` OR-chain over the synthesized vendor factions; training: `GetInFaction(TES4JobTrainerFaction)`) and a menu-opening fragment: script-less INFOs share the static scripts `TES4_ShowBarterMenu`/`TES4_ShowTrainingMenu` (in script_convert/static_scripts, auto-deployed + compiled with the generated scripts), while INFOs WITH result scripts (10 TG fence lines) get the menu call appended to their per-INFO TES4_TIF__ fragment by script_convert (same ParentDIAL classification on both sides). A synthetic text-only catch-all INFO ("Take a look." / "Let's begin.") is appended last so every vendor/trainer offers the topic even when no original line's conditions match. Service topics are EXCLUDED from identity/voice-gate inheritance and from the quest-NPC prescan (their 57 merchant GetIsIDs would pollute sibling-topic identity gating). Other Service topics (ServiceRefusal, BarterExit, Repair, Recharge, Travel, ...) stay skipped — no Skyrim mechanic fires them.
 - **Trainer data source (2026-07)**: Oblivion stores trainer skill/cap per-NPC in **AIDT** (Teaches S8 @8, MaxTraining U8 @9), NOT the class — 92 of 114 vanilla trainers disagree with their CLAS values (classes are mostly 0/0; even the dedicated Trainer* classes have max=0). Skyrim reads them from the NPC's CLAS, so Phase 0c (`actors.create_trainer_records`) clones each trainer's class with Teaches/MaxTraining replaced from AIDT (deduped per class+skill+cap), points the trainer's CNAM at the clone, and adds the NPC to `TES4JobTrainerFaction`. Trainers of dead skills (Athletics/Acrobatics) or cap 0 are not converted. Vendor buying power: TES5 has no ACBS.BarterGold — a chest-less vendor trades from its own inventory, so barter gold becomes carried Gold001 in CNTO (kept OUT of the DOFT outfit item list).
@@ -193,7 +282,7 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
   1. **`fid_to_edid` was built from `all_records` — this plugin's OWN export only.** An override plugin's SCROs point into its MASTERS as freely as its own (`Tutorials` and `Charactergen` exist only in Oblivion.esm), and a master-owned FormID with no EditorID is silently dropped by `_collect_scro_properties`. Fixed by walking `ctx.master_export` FIRST then `all_records` — the exact precedence (and comment) `CrossRefGraph` already used ten lines below; the two MUST agree or the importer resolves a different property set than the .psc was generated against. `remap_formid` already shifts master indices correctly, so `000C47C0` → `010C47C0` = the converted master's record.
   2. **A plugin WITH TES4 masters skips `_create_tes4_special_records`,** so its well-known registry was EMPTY while its scripts still declared `TES4ControlsDisabled`. The master's conversion already emitted those records, so `_adopt_master_special_records` now looks each up via `master_index.find_by_edid` (they have no TES4 source FormID, so the companion manifest cannot name them — find_by_edid exists for exactly this) instead of duplicating them.
   Also: `_WELL_KNOWN_PROPERTIES` is module-global and `convert.py` imports several plugins in ONE process, so it is now cleared at the top of `import_plugin` — otherwise a previous plugin's FormIDs get adopted by the next, pointing properties at records in the wrong file. **Diagnostic**: `Cannot call X() on a None object` naming a converted script is ALWAYS this class; diff the .psc's `Property` declarations against the record's VMAD property names. Still open from this sweep: `GREETING` (a Topic property the converter synthesizes for `startconversation`, with no SCRO to resolve) is unbound on stage 100.
-- **The well-known-property registry is a LOOKUP TABLE, never a payload (2026-08-05)**: `_WELL_KNOWN_PROPERTIES` (import_main) maps name→FormID for records that exist only in the OUTPUT — `TES4Unlock_*` (1,770 on Morroblivion), `TES4Msg_*`, TES4Fame/Infamy/GoldFenced/ControlsDisabled/CyrodiilCrimeFaction — because `resolve_property_formid` reads the TES4 export and cannot see them. `convert_INFO` and `convert_QUST` used to `prop_vals.update(well_known_props)`, splicing all ~1,880 entries into EVERY scripted INFO/QUST VMAD. Measured on Morroblivion: 4,985 of 19,393 INFOs carried a ~70 KB VMAD, the chargen QUST 72,989 bytes, and the ESM was **633 MB → 203 MB after the fix** (a third of a gigabyte of properties no script declares). The engine logs each one as `Property <X> on script <Y> ... cannot be initialized because the script no longer contains that property`. Correct pattern (already used by `object_scripts.py`): iterate the properties the generated .psc actually DECLARES and look each up in the registry. INFO does this inside `_build_info_script_properties`; QUST via `_quest_well_known_refs`, which re-runs `ScriptConverter.convert_fragment` over the stage result scripts (it deliberately preserves `_property_refs` across calls, exactly as the QF_ generator accumulates them) and needs the real `xref` — with `xref=None` conversion aborts mid-line and the ref set is silently incomplete. The dedicated `reveal_props`/`timer_props`/`stage_reveals` paths still bind the specific unlock globals a fragment genuinely writes, so nothing is lost. Note a plugin WITH TES4 masters skips `_create_tes4_special_records` entirely, so its TES4ControlsDisabled etc. legitimately come from the master's conversion, not its own registry.
+- <a id="well-known-registry"></a>**The well-known-property registry is a LOOKUP TABLE, never a payload (2026-08-05)**: `_WELL_KNOWN_PROPERTIES` (import_main) maps name→FormID for records that exist only in the OUTPUT — `TES4Unlock_*` (1,770 on Morroblivion), `TES4Msg_*`, TES4Fame/Infamy/GoldFenced/ControlsDisabled/CyrodiilCrimeFaction — because `resolve_property_formid` reads the TES4 export and cannot see them. `convert_INFO` and `convert_QUST` used to `prop_vals.update(well_known_props)`, splicing all ~1,880 entries into EVERY scripted INFO/QUST VMAD. Measured on Morroblivion: 4,985 of 19,393 INFOs carried a ~70 KB VMAD, the chargen QUST 72,989 bytes, and the ESM was **633 MB → 203 MB after the fix** (a third of a gigabyte of properties no script declares). The engine logs each one as `Property <X> on script <Y> ... cannot be initialized because the script no longer contains that property`. Correct pattern (already used by `object_scripts.py`): iterate the properties the generated .psc actually DECLARES and look each up in the registry. INFO and FO3/FNV package fragments do this in `fragment_script_properties`; QUST via `_quest_well_known_refs`, which re-runs `ScriptConverter.convert_fragment` over the stage result scripts (it deliberately preserves `_property_refs` across calls, exactly as the QF_ generator accumulates them) and needs the real `xref` — with `xref=None` conversion aborts mid-line and the ref set is silently incomplete. The dedicated `reveal_props`/`timer_props`/`stage_reveals` paths still bind the specific unlock globals a fragment genuinely writes, so nothing is lost. Note a plugin WITH TES4 masters skips `_create_tes4_special_records` entirely, so its TES4ControlsDisabled etc. legitimately come from the master's conversion, not its own registry.
 - **GLOB records are converted again (2026-07-11)**: scripts bind GlobalVariable properties to TES4 globals (TES4Fame, quest counters), which read None if the records don't exist. Only the engine-time globals (GameHour/GameDay/GameDaysPassed/GameMonth/GameYear/TimeScale) are dropped by convert_GLOB — script references to those are canonicalized to the vanilla forms.
 - **Alias fill still unexplained (2026-07-11, OPEN)**: new-game test with byte-level vanilla-conformant QUST (verified against live Skyrim.esm records, not just xEdit defs): quest runs at stage 10, QF script instantiates (its vars appear in sqv), persistent refs resolve via prid from unloaded cells, vanilla DBSideContract03 fills on the same save — yet all four forced-ref aliases stay NONE, and stopquest/startquest does NOT fill them. A wrong-sounding (negative) sting plays at quest start instead of the quest-started sound. `tools/make_alias_test_esp.py` (removed 2026-08-25) built TestAlias.esp (4 SGE quests: minimal+vanilla target / minimal+Oblivion.esm target / FGC01Rats clone without VMAD / clone with VMAD) + seq file to factorize writer vs target vs structure vs VMAD in one in-game sqv sweep.
 - **Alias-fill ROOT CAUSE (2026-07-11): QF quest-script property typed as an Actor-derived TES4_* script but VMAD-bound to an NPC_ BASE record is UNBINDABLE** → Papyrus aborts the quest script's whole init → the quest never finishes initialising → aliases never fill AND the QF stage fragments (SetObjectiveDisplayed) never run → objective has no live target → no compass/map marker. Confirmed by: a byte-identical clone of the QUST record (verified VMAD equal, 1333/1333 bytes) FILLS its aliases while the real quest doesn't; the clone's scripts don't attach (no sqv vars) but the real quest's do — script-attach correlates with fill-failure. `setstage <quest> 10` from a bare console (no connected quests) still fails, proving it's intrinsic to what's attached, not the start path. Vanilla rule: a ref-script-typed quest property is always bound to a REFERENCE whose base has the script (RikkeRef/GalmarRef/MercerFreyRef — 93 vanilla cases), NEVER to a base. Source of the bad typing: `SetEssential QuillWeave 0` (base semantics) — the converter's SetEssential handler, when the base NPC had an attached script, kept the property as the Actor-script type instead of ActorBase. FIX: a SetEssential arg that is a base (NPC_/CREA/unresolved) is ALWAYS typed **ActorBase** with a direct `target.SetEssential(v)` call; ActorBase wins over any reference/script type in the pipeline merge and can't be clobbered by a later SCRO preload (`_add_scro_ref` guard). Only genuine ACHR/ACRE/REFR args go through the `(x as Actor).GetActorBase()` cast. GENERALISABLE: any converted script property BOUND to a base record must be typed to a base Papyrus class; a reference type on a base = unbindable = silent whole-script-init abort. A blanket coercion in `get_property_refs` was tried and REVERTED — it broke 20 scripts whose bodies genuinely use the prop as Actor/ObjectReference (StartCombat, Enable/MoveTo, ==Actor); the correct fix for THOSE is to bind to a placed reference, not downgrade the type. Item bases legitimately carry their own object script (59 vanilla cases) — never coerce those.
@@ -1614,6 +1703,18 @@ conversation lines or quest stages (e.g. "Rats" after Azzan's contract line).
 Only an EXPLICIT bark reveal (AddTopic/Choice) counts; a prose mention rides the
 bark line's own conditions and keeps the gate.
 
+### <a id="unlocks-land-when-the-line-begins"></a>Unlocks land when the line begins
+
+A revealer INFO's `SetValue` calls run in its OnBegin fragment, not OnEnd.
+Papyrus fragments run queued, not in step with the menu, so an unlock set as
+the line ends can miss the choice list the engine builds at that moment. 210
+FalloutNV lines offer, as a choice, a gated topic they unlock themselves. One
+is Johnson Nash's "Do you know where I can find the courier office?", which
+offers "I'm a courier with the Mojave Express", the only way into the
+"One of those men shot me" line that completes VMQ01 objective 30. A user run
+reported that none of Nash's options advanced the quest. An OnBegin unlock has
+the whole spoken line to land.
+
 ### Why quest stages are the robust anchor
 
 A dialogue reveal is only as reliable as the line firing again, and an INFO's
@@ -1731,6 +1832,16 @@ HELO lines = 53%), 2730=1h, 10922=4h, 32767=12h, 65535=24h.
 SAY-ONCE lines (flag 0x04) are already permanently locked after one play, so a
 reset would only weaken them; they keep 0.
 
+**FO3/FNV author the lockout, so they keep theirs.** A Fallout INFO's DATA has
+a fourth byte, Flags 2, whose bit 0 is Say Once a Day (xEdit
+`wbDefinitionsFNV`); the exporter writes it as `DATA.Flags2`. A Fallout line
+gets a day's reset when that bit is set and none otherwise. The half hour did
+real harm there: New Vegas gives most characters one repeatable greeting
+beside a Say Once first meeting, and its generic civilian greetings ("Hey
+there.", quest `vDialogueMojaveCivilian`) carry Goodbye. Once Chet's "You
+looking to buy some supplies?" had played, every activation for the next half
+hour picked the civilian line and closed the conversation at once.
+
 ## <a id="info-tclt-choice-filter"></a>INFO TCLT: which choice links survive
 
 **Code:** `tes5_import/dialogue/converter.py:_info_tclt`
@@ -1759,6 +1870,16 @@ offered "Rumors" and nothing else. A target that already has a top-level branch
 (Rumors, or a greeting-reached response promoted with its inherited timing gate)
 is in the menu anyway, so the TCLT did nothing but hide the other topics. A
 target whose branch is Normal keeps the TCLT, because that is its only way in.
+
+**Once one choice must stay a link, all of them stay.** The links replace the
+menu, so a greeting that kept only its Normal targets lost its top-level ones.
+Oblivion promotes every greeting-reached target to top-level, so this never
+arose there. New Vegas keeps its own Top-level flags
+([topic links](#fallout-topic-links)) and mixes both kinds: Sunny Smiles's
+first greeting offers ten choices, nine of them top-level, and kept only the
+tenth ("Until next time."), so the first conversation offered nothing else.
+A bark now keeps every choice when any one targets a topic with no top-level
+branch, and none when all are menu topics.
 
 ## <a id="bark-pass"></a>The bark pass: one topic per quest and subtype
 

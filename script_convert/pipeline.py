@@ -30,14 +30,19 @@ from script_convert.context_setup import (
 from script_convert.message_menus import build_message_plan
 from script_convert.commands_falloutnv import (quest_objective_indices,
                                                set_quest_objectives)
+from script_convert.package_fragments import package_fragment_name, package_psc
+from script_convert.patrol_scripts import patrol_psc, patrol_script_name
 from script_convert.poll_interval import quest_script_delays
 from script_convert.quest_fragments import (quest_fragment_psc,
                                             scripted_count, stage_fragments)
 from script_convert.say_durations import scan_voice_durations
+from script_convert.say_to_done import (fragment_calls, say_to_done_hooks,
+                                        say_to_done_topics)
 from script_convert.scro_refs import (preload_scro_refs, resolve_scro_aliases,
                                       scro_list)
 from script_convert.symbols import property_declarations, IMPLICIT_NAMES
 from script_convert.tes5.blocks import Kind, classify
+from tes5_import.base.objectives_falloutnv import objective_script_globals
 from tes5_import.base.text_reader import info_result_script
 from tes5_import.dialogue.conversations import (build_conversation_plan,
                                                 build_script_chain_map,
@@ -46,6 +51,11 @@ from tes5_import.dialogue.converter import (DIAL_TYPE_SERVICE,
                                             SERVICE_MENU_TOPICS)
 from tes5_import.dialogue.say_topics import build_force_greet_slots
 from tes5_import.dialogue.unlocks import build_unlock_plan
+from tes5_import.packages.patrol_falloutnv import (has_patrol_script, is_patrol_point,
+                                                   load_patrol_points, patrol_scan_source)
+from tes5_import.packages.scripts_falloutnv import (package_sections, package_source,
+                                                    edids_by_formid)
+from tes5_import.record_types.world_falloutnv import export_is_fallout
 
 
 # ===========================================================================
@@ -60,11 +70,16 @@ from tes5_import.dialogue.unlocks import build_unlock_plan
 _WORKER_CTX: dict = {}
 
 
+# ---------------------------------------------------------------------------
+# Worker setup, stats and chunking
+# ---------------------------------------------------------------------------
+
 def _new_stats() -> dict:
     return {
         'scpt_total': 0, 'scpt_ok': 0, 'scpt_err': 0,
         'info_total': 0, 'info_ok': 0, 'info_err': 0,
         'qust_total': 0, 'qust_ok': 0, 'qust_err': 0,
+        'pack_ok': 0, 'pack_err': 0, 'patrol_ok': 0, 'patrol_err': 0,
         'todo_count': 0, 'errors': [],
         # script name (lower) -> OBSE user-function parameter types, in order.
         # Collected AS each script converts, so the cross-script cast pass is
@@ -128,7 +143,9 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
                         chargen_menus=None, say_topics=None,
                         music_cues=None, namespace=None,
                         quest_delays=None, quest_objectives=None,
-                        conversation_chains=None, force_greet_slots=None):
+                        conversation_chains=None, force_greet_slots=None,
+                        info_begin_scripts=False, say_to_done=None,
+                        objective_globals=None):
     """Seed one worker with the parent state that spawning does not carry.
 
     `namespace` is installed FIRST: the generated-script prefix derives from
@@ -153,7 +170,9 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
                        stage_reveals=stage_reveals,
                        quest_script_vars=quest_script_vars or {},
                        quest_edid_by_fid=quest_edid_by_fid or {},
-                       quest_delays=quest_delays or {})
+                       quest_delays=quest_delays or {},
+                       info_begin_scripts=info_begin_scripts,
+                       say_to_done=say_to_done or {})
     if quest_objectives:
         set_quest_objectives(quest_objectives)
     # Class-level, so every ScriptConverter a worker builds sees the measured
@@ -168,6 +187,7 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
     # DIAL EditorID -> unlock global, so a script `AddTopic X` opens the same
     # gate the INFO/QUST fragments do.
     ScriptConverter.topic_unlock_globals = topic_unlock_globals or {}
+    ScriptConverter.objective_globals = objective_globals or {}
     ScriptConverter.conversation_chains = conversation_chains or {}
     ScriptConverter.force_greet_slots = force_greet_slots or {}
     # script EditorID -> button-MessageBox MESG plan; the importer writes the
@@ -185,17 +205,18 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
 
 
 def _script_worker_run(job):
+    """Convert one (kind, records) chunk in this worker; returns its stats."""
     kind, records = job
     ctx = _WORKER_CTX
     stats = _new_stats()
-    if kind == 'scpt':
-        _scpt_batch(records, ctx['output_dir'], ctx['xref'], stats)
-    elif kind == 'info':
-        _info_batch(records, ctx['output_dir'], ctx['xref'], stats,
-                    ctx['info_reveals'], ctx['service_topics'])
-    elif kind == 'qust':
-        _qust_batch(records, ctx['output_dir'], ctx['xref'], stats,
-                    ctx['stage_reveals'])
+    batch, extra = {
+        'scpt': (_scpt_batch, ()),
+        'info': (_info_batch, (ctx['info_reveals'], ctx['service_topics'])),
+        'qust': (_qust_batch, (ctx['stage_reveals'],)),
+        'pack': (_pack_batch, ()),
+        'patrol': (_patrol_batch, ()),
+    }[kind]
+    batch(records, ctx['output_dir'], ctx['xref'], stats, *extra)
     return stats
 
 
@@ -231,7 +252,7 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
     deploy_static_scripts(export_dir, output_dir)
     xref = build_xref(export_dir)
     by_type = load_records(export_dir, ('DIAL', 'INFO', 'QUST', 'SCPT', 'NPC_',
-                                        'MESG'))
+                                        'MESG', 'PACK'))
     unlock_plan = build_unlock_plan(by_type)
     print(f'    AddTopic unlocks: {len(unlock_plan["gated"])} gated topics, '
           f'{len(unlock_plan["info_reveals"])} revealer INFOs')
@@ -240,6 +261,9 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
     scpt_work = [r for r in by_type['SCPT'] if r.get('SCTX', '').strip()]
     info_work = [r for r in by_type['INFO'] if r.get('FormID')]
     qust_work = [r for r in by_type['QUST'] if r.get('EditorID', '')]
+    pack_work = [r for r in by_type.get('PACK', ()) if package_sections(r)]
+    by_type['REFR'] = load_patrol_points(export_dir) if export_is_fallout(export_dir) else []
+    patrol_work = [r for r in by_type['REFR'] if has_patrol_script(r)]
     print(f'  Converting {len(scpt_work)} SCPT / {len(info_work)} INFO / '
           f'{len(qust_work)} QUST scripts...')
     say_durations = scan_voice_durations(export_dir)
@@ -267,9 +291,12 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
                 quest_script_delays(by_type),
                 quest_objective_indices(by_type),
                 build_script_chain_map(by_type),
-                build_force_greet_slots(by_type))
+                build_force_greet_slots(by_type),
+                export_is_fallout(export_dir), say_to_done_hooks(by_type),
+                objective_script_globals(by_type) if export_is_fallout(export_dir) else {})
     return {'initargs': initargs, 'scpt_work': scpt_work,
-            'info_work': info_work, 'qust_work': qust_work, 'stats': stats}
+            'info_work': info_work, 'qust_work': qust_work,
+            'pack_work': pack_work, 'patrol_work': patrol_work, 'stats': stats}
 
 
 def _write_conversation_driver(export_dir: str, output_dir: str,
@@ -316,7 +343,9 @@ def convert_all_scripts(export_dir: str, output_dir: str, workers: int = None) -
                                        ctx['qust_work'])
     jobs = ([('scpt', c) for c in _chunk(scpt_work, 48)]
             + [('info', c) for c in _chunk(info_work, 128)]
-            + [('qust', c) for c in _chunk(qust_work, 8)])
+            + [('qust', c) for c in _chunk(qust_work, 8)]
+            + [('pack', c) for c in _chunk(ctx['pack_work'], 48)]
+            + [('patrol', c) for c in _chunk(ctx['patrol_work'], 48)])
     if workers <= 1 or len(jobs) <= 2:
         _script_worker_init(*initargs)
         for job in jobs:
@@ -333,12 +362,14 @@ def convert_all_scripts(export_dir: str, output_dir: str, workers: int = None) -
     _fix_udf_call_arg_types(output_dir, stats['udf_sigs'],
                             stats['udf_callers'])
 
-    total = stats['scpt_ok'] + stats['info_ok'] + stats['qust_ok']
-    errs = stats['scpt_err'] + stats['info_err'] + stats['qust_err']
+    total = sum(stats[k] for k in ('scpt_ok', 'info_ok', 'qust_ok', 'pack_ok', 'patrol_ok'))
+    errs = sum(stats[k] for k in ('scpt_err', 'info_err', 'qust_err', 'pack_err', 'patrol_err'))
     print('\n  Script conversion complete:')
     print(f'    SCPT: {stats["scpt_ok"]}/{stats["scpt_total"]} converted')
     print(f'    INFO: {stats["info_ok"]}/{stats["info_total"]} fragments')
     print(f'    QUST: {stats["qust_ok"]}/{stats["qust_total"]} stage scripts')
+    print(f'    PACK: {stats["pack_ok"]}/{len(ctx["pack_work"])} package fragments')
+    print(f'    Patrol markers: {stats["patrol_ok"]}/{len(ctx["patrol_work"])} scripts')
     print(f'    Total: {total} converted, {errs} errors, {stats["todo_count"]} TODOs')
     if stats['errors']:
         # One line per DISTINCT failure, with a count and an example: 2,393
@@ -575,14 +606,16 @@ def build_quest_script_vars(by_type: dict) -> dict:
 
 
 
-def _info_begin_fragment(body_lines: list, seq_gate: str,
-                         length: float) -> list:
-    """Fragment_1 (OnBegin): report the line, then hand the turn over.
+def _info_begin_fragment(body_lines: list, seq_gate: str, length: float,
+                         begin_lines: list = (), reveals=()) -> list:
+    """Fragment_1 (OnBegin): report the line, unlock topics, run a Begin script, hand over.
 
-    The handoff belongs here rather than in OnEnd because TES4's synchronous
-    Say let the result script hand over in the frame the line STARTED. Only a
-    body that steps the gate's own counter is a sequencer and gets one.
+    Unlocks land here so a choice the line reveals is open before its menu is
+    built. The handoff belongs here because TES4's synchronous Say let the
+    result script hand over in the frame the line STARTED.
+    See: docs/commentary/tes5_import_dialogue.md#unlocks-land-when-the-line-begins
     See: docs/commentary/script_convert.md#turn-handoff
+    See: docs/commentary/script_convert.md#fallout-begin-scripts
     """
     handoff = []
     if seq_gate and body_lines:
@@ -592,6 +625,8 @@ def _info_begin_fragment(body_lines: list, seq_gate: str,
             handoff, _ = split_turn_handoff(counter_step, gated_rest)
     out = ['Function Fragment_1(ObjectReference akSpeakerRef)',
            f'  TES4Polyfill.LineBegan(akSpeakerRef, {length:g})']
+    out += [f'  {gname}.SetValue(1)' for gname in reveals]
+    out.extend(begin_lines)
     if handoff:
         out.append(f"  If {seq_gate}  ; still this line's turn")
         out.extend('  ' + b for b in handoff)
@@ -599,18 +634,18 @@ def _info_begin_fragment(body_lines: list, seq_gate: str,
     return out + ['EndFunction', '']
 
 
-def _info_end_fragment(body_lines: list, seq_gate: str, reveals,
-                       service_kind, length: float) -> list:
-    """Fragment_0 (OnEnd): unlocks, the TES4 result, then LineEnded LAST.
+def _info_end_fragment(body_lines: list, seq_gate: str,
+                       service_kind, length: float, done_calls=()) -> list:
+    """Fragment_0 (OnEnd): the TES4 result, LineEnded, then SayToDone.
 
     A poll waiting on this speaker must see the result's state writes before
     it can issue the next line. The body is gated only when it owns the
     handoff; when the QUEST SCRIPT advances the counter instead, the value has
     already moved on and gating here would discard the whole body.
     See: docs/commentary/script_convert.md#sequenced-fragment-surgery
+    See: docs/commentary/script_convert.md#saytodone
     """
     out = ['Function Fragment_0(ObjectReference akSpeakerRef)']
-    out += [f'  {gname}.SetValue(1)' for gname in reveals]
     body_lines = state_writes_before_setstage(body_lines)
     counter_step, rest_body = split_counter_step(body_lines, seq_gate)
     if seq_gate and body_lines and counter_step:
@@ -627,126 +662,130 @@ def _info_end_fragment(body_lines: list, seq_gate: str, reveals,
     if service_kind:
         out.append(SERVICE_MENU_CALL[service_kind])
     out.append(f'  TES4Polyfill.LineEnded(akSpeakerRef, {length:g})')
-    return out + ['EndFunction', '']
+    return out + list(done_calls) + ['EndFunction', '']
+
+
+def _info_bodies(rec: dict, xref: CrossRefGraph, result_script: str) -> tuple:
+    """(Begin lines, End lines, converter) for one scripted INFO.
+
+    A TES4 result script runs when the line finishes, so all of it is End; an
+    FO3/FNV INFO's Begin script runs when the line starts.
+    See: docs/commentary/script_convert.md#fallout-begin-scripts
+    """
+    conv = ScriptConverter(xref)
+    preload_scro_refs(conv, rec, xref)
+    conv.set_scro_aliases(resolve_scro_aliases(result_script, scro_list(rec), xref))
+    if not _WORKER_CTX.get('info_begin_scripts'):
+        return [], conv.convert_fragment(result_script, 'TopicInfo'), conv
+    begin, end = rec.get('ResultScript') or '', rec.get('ResultScriptEnd') or ''
+    begin_lines = conv.convert_fragment(begin, 'TopicInfo') if begin.strip() else []
+    end_lines = conv.convert_fragment(end, 'TopicInfo') if end.strip() else []
+    return begin_lines, end_lines, conv
+
+
+def _info_psc(rec: dict, xref: CrossRefGraph, reveals: list, service_kind: str,
+              length: float) -> tuple:
+    """(script name, Papyrus) of one INFO's TopicInfo fragment script.
+
+    See: docs/commentary/script_convert.md#info-fragment-scripts
+    """
+    result_script = info_result_script(rec)
+    begin_lines, body_lines, conv = [], [], None
+    if result_script.strip():
+        begin_lines, body_lines, conv = _info_bodies(rec, xref, result_script)
+    seq_gate = sequence_gate(rec, _WORKER_CTX.get('quest_script_vars') or {},
+                             _WORKER_CTX.get('quest_edid_by_fid') or {})
+    script_name = f'{script_prefix("_TIF__")}{rec["FormID"]}'
+    out_lines = [f'ScriptName {script_name} extends TopicInfo Hidden', '']
+    declared = {gname.lower() for gname in reveals}
+    out_lines += [f'GlobalVariable Property {gname} Auto' for gname in reveals]
+    if conv and conv.sc.property_refs:
+        out_lines += property_declarations(dict(conv.sc.property_refs), declared)
+    if declared:
+        out_lines.append('')
+    out_lines += _info_begin_fragment(body_lines, seq_gate, length, begin_lines, reveals)
+    done = (_WORKER_CTX.get('say_to_done') or {}).get((rec.get('ParentDIAL') or '').upper(), ())
+    out_lines += _info_end_fragment(body_lines, seq_gate, service_kind, length,
+                                    fragment_calls(done))
+    if conv:
+        out_lines.extend(conv.get_cell_family_helpers())
+    return script_name, '\n'.join(out_lines)
+
+
+def _info_length(formid: str) -> float:
+    """The line's measured voice length, or 0 when it has no voice file."""
+    try:
+        return float((ScriptConverter.say_durations or {}).get(f'info:{formid.upper()}') or 0.0)
+    except (TypeError, ValueError):
+        return 0.0
 
 
 def _info_batch(records: list, output_dir: str, xref: CrossRefGraph,
                 stats: dict, info_reveals: dict = None,
                 service_topics: dict = None):
-    """Convert a batch of INFO records into TopicInfo fragment .psc files.
+    """Write the TopicInfo fragment script of every INFO that needs one.
 
-    EVERY INFO gets a fragment script `TES4_TIF__<fid>` (the importer writes
-    the matching VMAD on every INFO — build_vmad_info_fragment, flags 0x03):
-
-        Fragment_1 (OnBegin)  TES4Polyfill.LineBegan(akSpeakerRef, <length>)
-        Fragment_0 (OnEnd)    [unlock globals] [TES4 result script]
-                              [service menu]  TES4Polyfill.LineEnded(akSpeakerRef)
-
-    The Begin/End hooks are how a converted `set T to Say topic` learns that
-    the engine has started the line and how long it is (see
-    TES4Polyfill.SayLine); they carry the speaker only, so no property is
-    bound and no INFO can be missed.  The TES4 result script stays in the End
-    fragment: Oblivion ran an INFO's result when the line FINISHED (the CS
-    wiki's own scripted-conversation recipe writes `set Q.convTimer to <pause>`
-    in results as an after-line pause, which only works at end).
-
-    info_reveals ({info_fid24: [unlock global names]}) marks AddTopic revealer
-    INFOs: their End fragment sets the unlock globals. Must stay in sync with
-    the VMADs the importer writes (same unlock plan).
-
-    service_topics ({dial_formid_str: 'barter'|'training'}) marks the service-
-    menu topics; fragments for their INFOs also open the corresponding menu.
+    `info_reveals` marks AddTopic revealer INFOs, `service_topics` the
+    barter/training topics; both must match the VMADs the importer writes.
+    See: docs/commentary/script_convert.md#info-fragment-scripts
+    See: docs/commentary/script_convert.md#info-fragment-stutter
     """
     info_reveals = info_reveals or {}
     service_topics = service_topics or {}
-    say_durations = ScriptConverter.say_durations or {}
-
     for rec in records:
-        result_script = info_result_script(rec)
-        has_script = bool(result_script.strip())
         formid = rec.get('FormID', '')
         if not formid:
             continue
-        try:
-            fid24 = int(formid, 16) & 0xFFFFFF
-        except (TypeError, ValueError):
-            fid24 = 0
-        reveals = info_reveals.get(fid24, [])
-        service_kind = service_topics.get(rec.get('ParentDIAL', ''), '')
-        # Skip INFOs whose fragment would do nothing.  The engine BINDS an
-        # INFO's fragment script when it selects that line -- loading and
-        # linking the .pex before a word is spoken -- so a fragment with no
-        # behaviour is a per-line cost paid on the dialogue path.  Must stay
-        # in lockstep with the importer's VMAD writer: both call this.
+        scripted = bool(info_result_script(rec).strip())
         if not info_needs_fragment(rec, info_reveals, service_topics):
             stats['info_total'] += 1
             stats['info_ok'] += 1
             continue
-        # This line's own measured length (all of its responses, played back
-        # to back).  0 when the line has no voice file: SayLine then falls
-        # back to the topic's longest line.
+        stats['info_total'] += scripted
         try:
-            length = float(say_durations.get(f'info:{formid.upper()}') or 0.0)
+            reveals = info_reveals.get(int(formid, 16) & 0xFFFFFF, [])
         except (TypeError, ValueError):
-            length = 0.0
-        seq_gate = sequence_gate(rec, _WORKER_CTX.get('quest_script_vars') or {},
-                             _WORKER_CTX.get('quest_edid_by_fid') or {})
-
-        if has_script:
-            stats['info_total'] += 1
-
+            reveals = []
         try:
-            body_lines = []
-            prop_refs = {}
-            if has_script:
-                conv = ScriptConverter(xref)
-                preload_scro_refs(conv, rec, xref)
-                conv.set_scro_aliases(resolve_scro_aliases(
-                    result_script, scro_list(rec), xref))
-                body_lines = conv.convert_fragment(result_script, 'TopicInfo')
-                prop_refs = dict(conv.sc.property_refs)
-
-            script_name = f'{script_prefix("_TIF__")}{formid}'
-            out_lines = [
-                f'ScriptName {script_name} extends TopicInfo Hidden',
-                '',
-            ]
-            declared = set()
-            for gname in reveals:
-                declared.add(gname.lower())
-                out_lines.append(f'GlobalVariable Property {gname} Auto')
-            if prop_refs:
-                # Merge case-variant keys, most specific type wins — the same
-                # rule the QUST-stage and standalone emitters already apply.
-                # Without it this site declared whichever spelling sorted first:
-                # _preload_scro_refs types a QUST SCRO as the generic `Quest`,
-                # then _convert_ref adds the specific TES4_<script> type, and if
-                # the two EditorID spellings differ in case they land under
-                # different keys.  The generic one won and every cross-script
-                # variable read through it failed ("field or property StartTimer
-                # not found" on a plain Quest).
-                out_lines += property_declarations(prop_refs,
-                                                   declared)
-            if declared:
-                out_lines.append('')
-
-            out_lines += _info_begin_fragment(body_lines, seq_gate, length)
-            out_lines += _info_end_fragment(body_lines, seq_gate, reveals,
-                                            service_kind, length)
-
-            # GetInCell prefix-family helpers the fragment body calls by name.
-            # Only a scripted INFO has a converter (and therefore a body).
-            if has_script:
-                out_lines.extend(conv.get_cell_family_helpers())
-
-            papyrus = '\n'.join(out_lines)
+            script_name, papyrus = _info_psc(
+                rec, xref, reveals,
+                service_topics.get(rec.get('ParentDIAL', ''), ''),
+                _info_length(formid))
             write_psc(output_dir, script_name, papyrus)
-            if has_script:
-                stats['info_ok'] += 1
+            stats['info_ok'] += scripted
             stats['todo_count'] += papyrus.count(';TODO')
         except Exception as e:
             stats['info_err'] += 1
             stats['errors'].append(f'INFO {formid}: {e}')
+
+
+def _pack_batch(records: list, output_dir: str, xref: CrossRefGraph, stats: dict):
+    """Write the PF_ fragment script of every package with a section to run.
+
+    See: docs/commentary/script_convert.md#package-fragments
+    """
+    for rec in records:
+        try:
+            write_psc(output_dir, package_fragment_name(rec['FormID']),
+                      package_psc(rec, xref))
+            stats['pack_ok'] += 1
+        except Exception as e:
+            stats['pack_err'] += 1
+            stats['errors'].append(f'PACK {rec.get("FormID")}: {e}')
+
+
+def _patrol_batch(records: list, output_dir: str, xref: CrossRefGraph, stats: dict):
+    """Write the PM_ script of every patrol marker whose embedded script does something.
+
+    See: docs/commentary/tes5_import_package.md#patrol-points
+    """
+    for rec in records:
+        try:
+            write_psc(output_dir, patrol_script_name(rec['FormID']), patrol_psc(rec, xref))
+            stats['patrol_ok'] += 1
+        except Exception as e:
+            stats['patrol_err'] += 1
+            stats['errors'].append(f'REFR {rec.get("FormID")}: {e}')
 
 
 def _qust_batch(records: list, output_dir: str, xref: CrossRefGraph,
@@ -911,13 +950,13 @@ def scan_say_topic_fids(by_type: dict) -> set:
 
 
 def scan_say_topics(by_type: dict) -> set:
-    """Topic EditorIDs (lowercase) that a TES4 script drives via Say/SayTo.
+    """Topic EditorIDs (lowercase) that a TES4 script drives via Say/SayTo or waits on.
 
     Computed once, before the worker pool starts: the fragment emitter and
     the VMAD writer run in different processes.  A candidate must name a real
-    DIAL, which drops the prose the regex also matches (Oblivion.esm: 98 raw
-    candidates -> 31 topics).  Every script field the export uses is read on
-    every record (SCTX, ResultScript, ResultScriptEnd, ScriptText).
+    DIAL (Oblivion.esm: 98 raw candidates -> 31 topics); SayTo names its target
+    first.  Read: SCTX, ResultScript, ResultScriptEnd, ScriptText, and every
+    FO3/FNV package section's script and topic.
     """
     dial_edids = {(r.get('EditorID') or '').strip().lower()
                   for r in by_type.get('DIAL', [])}
@@ -925,25 +964,24 @@ def scan_say_topics(by_type: dict) -> set:
     if not dial_edids:
         return set()
 
+    texts = [rec.get(field) or '' for kind in ('SCPT', 'INFO', 'QUST')
+             for rec in by_type.get(kind, [])
+             for field in ('SCTX', 'ResultScript', 'ResultScriptEnd', 'ScriptText')]
+    edid_by_fid = edids_by_formid(by_type)
+    texts += [package_source(rec, edid_by_fid) for rec in by_type.get('PACK', [])]
+    texts += [patrol_scan_source(rec, edid_by_fid) for rec in by_type.get('REFR', [])
+              if is_patrol_point(rec)]
     topics = set()
-    for kind in ('SCPT', 'INFO', 'QUST'):
-        for rec in by_type.get(kind, []):
-            for field in ('SCTX', 'ResultScript', 'ResultScriptEnd',
-                          'ScriptText'):
-                text = rec.get(field) or ''
-                if not text:
-                    continue
-                for raw in text.splitlines():
-                    line = raw.split(';', 1)[0]
-                    for m in _TES4_SAY_RE.finditer(line):
-                        is_to = bool(m.group(1))
-                        first, second = m.group(2), m.group(3)
-                        # SayTo names the TARGET first, then the topic.
-                        for cand in ((second, first) if is_to else (first,)):
-                            if cand and cand.lower() in dial_edids:
-                                topics.add(cand.lower())
-                                break
-    return topics
+    for raw in (line for text in texts for line in text.splitlines()):
+        line = raw.split(';', 1)[0]
+        for m in _TES4_SAY_RE.finditer(line):
+            is_to = bool(m.group(1))
+            first, second = m.group(2), m.group(3)
+            for cand in ((second, first) if is_to else (first,)):
+                if cand and cand.lower() in dial_edids:
+                    topics.add(cand.lower())
+                    break
+    return topics | say_to_done_topics(by_type.get('SCPT', []), dial_edids)
 
 
 def info_needs_fragment(rec: dict, info_reveals: dict = None,
@@ -1056,17 +1094,21 @@ def build_vmad_info_fragment(info_formid: str, property_values: dict = None,
     return bytes(buf)
 
 
-def build_vmad_package_fragment(script_name: str,
-                                value_props: dict = None) -> bytes:
-    """VMAD attaching `script_name` to a PACK, whose `Fragment_0` runs OnEnd.
+def build_vmad_package_fragment(script_name: str, value_props: dict = None,
+                                object_props: dict = None,
+                                flags: int = 0x02) -> bytes:
+    """VMAD attaching `script_name` to a PACK: Fragment_N for the Nth set flag bit.
 
     xEdit wbVMADFragmentedPACK: the script block, then bind version 2, flags
-    (bit1 = OnEnd), FileName, and one entry per set flag bit.
+    (bit0 OnBegin, bit1 OnEnd, bit2 OnChange), FileName, and one entry per set
+    bit in that order. The default is the one OnEnd fragment.
     """
-    buf = build_vmad_object_script(script_name, value_props=value_props)
-    buf += struct.pack('<bB', 2, 0x02) + _pack_wstring(script_name)
-    buf += struct.pack('<B', 1) + _pack_wstring(script_name)
-    return buf + _pack_wstring('Fragment_0')
+    buf = build_vmad_object_script(script_name, object_props, value_props)
+    buf += struct.pack('<bB', 2, flags) + _pack_wstring(script_name)
+    for i in range(bin(flags).count('1')):
+        buf += (struct.pack('<B', 1) + _pack_wstring(script_name)
+                + _pack_wstring(f'Fragment_{i}'))
+    return buf
 
 
 # Papyrus property object-type codes for the VMAD property record (objectFormat 2).
@@ -1075,6 +1117,7 @@ _VMAD_PROP_OBJECT = 1
 _VMAD_PROP_INT = 3
 _VMAD_PROP_FLOAT = 4
 _VMAD_PROP_BOOL = 5
+_VMAD_PROP_OBJECT_ARRAY = 11
 
 
 def build_vmad_object_script(script_name: str,
@@ -1082,51 +1125,13 @@ def build_vmad_object_script(script_name: str,
                              value_props: dict = None) -> bytes:
     """Build VMAD binary attaching a single Papyrus script to an object record.
 
-    Unlike QUST/INFO VMADs this has NO fragment section — plain object scripts
-    (ACTI/CONT/DOOR/FLOR/… on their placed instances or, as here, on the base
-    record) run their own event handlers (OnActivate, OnLoad, …) directly.
-
-    Args:
-        script_name: full Papyrus script name (e.g. 'TES4_SE07AltarScript').
-        object_props: {property_name: formid_int} — Object-typed properties
-            bound to a record FormID (records/spells/quests/globals/actors).
-        value_props: {property_name: (kind, value)} — literal-valued properties
-            where kind is 'int' | 'float' | 'bool'.  Optional; usually the
-            script's non-ref locals stay unbound and default to 0.
-
+    Unlike QUST/INFO VMADs this has NO fragment section -- plain object scripts
+    run their own event handlers directly.  `object_props` maps a property to a
+    record FormID; `value_props` maps one to (kind, value), kind 'int',
+    'float', 'bool' or 'objects' (a list of FormIDs, a Papyrus Form array).
     Returns VMAD binary data (version 5, objectFormat 2).
     """
-    object_props = object_props or {}
-    value_props = value_props or {}
-    buf = bytearray()
-
-    # VMAD header
-    buf += struct.pack('<HH', 5, 2)   # version=5, objectFormat=2
-
-    # Attached scripts: exactly 1
-    buf += struct.pack('<H', 1)
-    buf += _pack_wstring(script_name)
-    buf += struct.pack('<B', 0)       # flags=0
-
-    total_props = len(object_props) + len(value_props)
-    buf += struct.pack('<H', total_props)
-    for pname, fid in object_props.items():
-        buf += _pack_wstring(pname)
-        buf += struct.pack('<BB', _VMAD_PROP_OBJECT, 1)   # type=Object, status=Edited
-        buf += struct.pack('<HhI', 0, -1, fid)            # unused=0, alias=-1, FormID
-    for pname, (kind, value) in value_props.items():
-        buf += _pack_wstring(pname)
-        if kind == 'float':
-            buf += struct.pack('<BB', _VMAD_PROP_FLOAT, 1)
-            buf += struct.pack('<f', float(value))
-        elif kind == 'bool':
-            buf += struct.pack('<BB', _VMAD_PROP_BOOL, 1)
-            buf += struct.pack('<B', 1 if value else 0)
-        else:  # int
-            buf += struct.pack('<BB', _VMAD_PROP_INT, 1)
-            buf += struct.pack('<i', int(value))
-
-    return bytes(buf)
+    return struct.pack('<HHH', 5, 2, 1) + _script_entry(script_name, object_props, value_props)
 
 
 def append_vmad_object_script(existing: bytes, script_name: str,
@@ -1134,50 +1139,41 @@ def append_vmad_object_script(existing: bytes, script_name: str,
                               value_props: dict = None) -> bytes:
     """Add one more attached script to an already-built object VMAD.
 
-    build_vmad_object_script writes a fixed "attached scripts = 1" count, so a
-    record that needs TWO scripts (a converted TES4 creature SCRI *and* the
-    generated TES4_GhostDissolve) has to have the count bumped and the second
-    script's entry concatenated.  `existing` may be empty, in which case this
-    is just build_vmad_object_script.
-
-    Both scripts then run side by side, which is what Skyrim does natively --
-    a record's VMAD is a list, and each attached script gets its own event
-    handlers.  Layout is otherwise identical (version 5, objectFormat 2), and
-    the entries after the count are a flat sequence, so appending is safe
-    without reparsing the first script's properties.
+    A record's VMAD is a script list, and each attached script gets its own
+    event handlers; the entries after the count are a flat sequence, so the
+    count is bumped and the new entry appended without reparsing the first.
+    `existing` may be empty, in which case this is build_vmad_object_script.
     """
     if not existing:
-        return build_vmad_object_script(script_name, object_props,
-                                        value_props)
-
-    # header is <H version><H objectFormat><H scriptCount>
+        return build_vmad_object_script(script_name, object_props, value_props)
     version, obj_format, count = struct.unpack_from('<HHH', existing, 0)
-    body = existing[6:]
+    return (struct.pack('<HHH', version, obj_format, count + 1) + existing[6:]
+            + _script_entry(script_name, object_props, value_props))
 
-    tail = bytearray()
-    tail += _pack_wstring(script_name)
-    tail += struct.pack('<B', 0)                 # flags=0
+
+def _script_entry(script_name: str, object_props: dict = None,
+                  value_props: dict = None) -> bytes:
+    """One attached script: its name, flags 0, then its properties (status Edited)."""
     object_props = object_props or {}
     value_props = value_props or {}
-    tail += struct.pack('<H', len(object_props) + len(value_props))
+    out = _pack_wstring(script_name) + struct.pack('<BH', 0, len(object_props) + len(value_props))
     for pname, fid in object_props.items():
-        tail += _pack_wstring(pname)
-        tail += struct.pack('<BB', _VMAD_PROP_OBJECT, 1)
-        tail += struct.pack('<HhI', 0, -1, fid)
+        out += _pack_wstring(pname) + struct.pack('<BBHhI', _VMAD_PROP_OBJECT, 1, 0, -1, fid)
     for pname, (kind, value) in value_props.items():
-        tail += _pack_wstring(pname)
-        if kind == 'float':
-            tail += struct.pack('<BB', _VMAD_PROP_FLOAT, 1)
-            tail += struct.pack('<f', float(value))
-        elif kind == 'bool':
-            tail += struct.pack('<BB', _VMAD_PROP_BOOL, 1)
-            tail += struct.pack('<B', 1 if value else 0)
-        else:
-            tail += struct.pack('<BB', _VMAD_PROP_INT, 1)
-            tail += struct.pack('<i', int(value))
+        out += _pack_wstring(pname) + _property_value(kind, value)
+    return out
 
-    return (struct.pack('<HHH', version, obj_format, count + 1)
-            + body + bytes(tail))
+
+def _property_value(kind: str, value) -> bytes:
+    """A literal property's type byte, status and payload."""
+    if kind == 'float':
+        return struct.pack('<BBf', _VMAD_PROP_FLOAT, 1, float(value))
+    if kind == 'bool':
+        return struct.pack('<BBB', _VMAD_PROP_BOOL, 1, 1 if value else 0)
+    if kind == 'objects':
+        return (struct.pack('<BBI', _VMAD_PROP_OBJECT_ARRAY, 1, len(value))
+                + b''.join(struct.pack('<HhI', 0, -1, fid) for fid in value))
+    return struct.pack('<BBi', _VMAD_PROP_INT, 1, int(value))
 
 
 def _pack_wstring(s: str) -> bytes:

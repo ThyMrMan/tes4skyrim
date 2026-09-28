@@ -14,6 +14,7 @@ from ..tes4_reader import (Record, get_all_subrecords,
                            get_formid_str, get_string,
                            get_subrecord)
 from .character_falloutnv import CHARACTER_EXPORTERS, emit_class_deltas
+from .package_falloutnv import emit_package_deltas, emit_patrol_data
 from .quest_falloutnv import emit_quest_deltas
 from .common import (emit_float, emit_formid, emit_model, emit_raw_hex,
                      emit_script, emit_string, emit_u8, emit_u16, emit_u32)
@@ -101,6 +102,17 @@ def _emit_refr_deltas(lines: list, rec: Record):
     if xemi and len(xemi.data) >= 4:
         lines.append(f"XEMI.Emittance={get_formid_str(struct.unpack_from('<I', xemi.data, 0)[0])}")
 
+    _emit_actor_ref_deltas(lines, rec)
+
+
+def _emit_actor_ref_deltas(lines: list, rec: Record):
+    """A placed actor's or object's linked reference and patrol-point data."""
+    _emit_linked_ref(lines, rec)
+    emit_patrol_data(lines, rec)
+
+
+def _emit_linked_ref(lines: list, rec: Record):
+    """XLKR, the linked reference a patrol walks and GetLinkedRef reads."""
     xlkr = get_subrecord(rec, "XLKR")
     if xlkr and len(xlkr.data) >= 4:
         lines.append(f"XLKR.LinkedRef={get_formid_str(struct.unpack_from('<I', xlkr.data, 0)[0])}")
@@ -260,7 +272,8 @@ def _emit_navm_deltas(lines: list, rec: Record):
 
     FO3/FNV ship real navmeshes where TES4 has only pathgrids, so this is
     authored data to repack rather than geometry to generate. NVVX/NVTR/NVDP
-    are dumped verbatim; the importer reinterprets them into TES5's NVNM blob.
+    and the NVEX edge links are dumped verbatim; the importer reinterprets
+    them into TES5's NVNM blob.
 
     See: docs/commentary/tes4_export_falloutnv.md#navmesh-authored-not-generated
     """
@@ -275,7 +288,7 @@ def _emit_navm_deltas(lines: list, rec: Record):
         lines.append(f"DATA.CoverTriangleCount={ncover}")
         lines.append(f"DATA.DoorLinkCount={ndoor}")
 
-    for sig in ("NVVX", "NVTR", "NVDP"):
+    for sig in ("NVVX", "NVTR", "NVDP", "NVEX"):
         emit_raw_hex(lines, sig, get_subrecord(rec, sig))
 
 
@@ -385,10 +398,13 @@ def _emit_crea_deltas(lines: list, rec: Record):
 
     TES4's CREA DATA is 20 bytes with Soul and 8 attributes; FO3/FNV's is 17
     with neither, so the shared exporter's >= 20 guard silently emits nothing.
+    A Fallout creature names its voice type as an NPC_ does (robots, Rex).
+    See: docs/commentary/tes4_export_falloutnv.md#voice-files
     """
     _emit_actor_acbs(lines, rec)
     _emit_actor_aidt(lines, rec)
     _emit_actor_template(lines, rec)
+    emit_formid(lines, "VTCK.Voice", get_subrecord(rec, "VTCK"))
     data = get_subrecord(rec, "DATA")
     if not data or len(data.data) < 17:
         return
@@ -472,6 +488,8 @@ EFFECT_TYPES = frozenset({"SPEL", "ALCH", "ENCH", "INGR"})
 _DELTA_DISPATCH = {
     "CELL": _emit_cell_deltas,
     "REFR": _emit_refr_deltas,
+    "ACHR": _emit_actor_ref_deltas,
+    "ACRE": _emit_actor_ref_deltas,
     "WEAP": _emit_weap_deltas,
     "AMMO": _emit_ammo_deltas,
     "NAVM": _emit_navm_deltas,
@@ -485,6 +503,7 @@ _DELTA_DISPATCH = {
     "INGR": _emit_effect_deltas,
     "QUST": emit_quest_deltas,
     "CLAS": emit_class_deltas,
+    "PACK": emit_package_deltas,
 }
 
 #: Types carrying an OBND that TES4 has no field for; Skyrim reads it natively.
@@ -524,8 +543,8 @@ def export_STATIC_BASE(rec: Record) -> list:
 def export_ACTIVATOR_BASE(rec: Record) -> list:
     """A named, scriptable FO3/FNV base object, converted as a Skyrim ACTI.
 
-    TERM, NOTE and TACT are activators in all but signature: each carries a
-    model, a display name and (for TACT/TERM) a script.
+    TERM and TACT are activators in all but signature: each carries a model,
+    a display name and a script.
 
     See: docs/commentary/tes4_export_falloutnv.md#fallout-only-base-objects
     """
@@ -534,6 +553,35 @@ def export_ACTIVATOR_BASE(rec: Record) -> list:
     emit_string(lines, "FULL", get_subrecord(rec, "FULL"))
     emit_model(lines, "Model", rec)
     emit_script(lines, rec)
+    _emit_obnd(lines, rec)
+    return lines
+
+
+#: NOTE DATA types whose TNAM is text; Voice's TNAM is a topic FormID.
+_NOTE_TEXT_TYPES = (0, 1, 2)
+
+
+def export_NOTE(rec: Record) -> list:
+    """A NOTE: a Pip-Boy note the player carries, with its type, text or topic, sound or speaker, and quests.
+
+    See: docs/commentary/tes4_export_falloutnv.md#notes-are-items
+    """
+    lines = []
+    emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
+    emit_string(lines, "FULL", get_subrecord(rec, "FULL"))
+    emit_model(lines, "Model", rec)
+    data = get_subrecord(rec, "DATA")
+    kind = data.data[0] if data and data.data else 1
+    lines.append(f"DATA.Type={kind}")
+    tnam = get_subrecord(rec, "TNAM")
+    if tnam and kind in _NOTE_TEXT_TYPES:
+        emit_string(lines, "TNAM.Text", tnam)
+    elif tnam:
+        emit_formid(lines, "TNAM.Topic", tnam)
+    emit_formid(lines, "SNAM", get_subrecord(rec, "SNAM"))
+    emit_string(lines, "XNAM", get_subrecord(rec, "XNAM"))
+    for i, sub in enumerate(get_all_subrecords(rec, "ONAM")):
+        lines.append(f"Quest[{i}]={get_formid_str(struct.unpack_from('<I', sub.data, 0)[0])}")
     _emit_obnd(lines, rec)
     return lines
 
@@ -780,7 +828,7 @@ FALLOUT_BASE_EXPORTERS = {
     "IDLM": export_STATIC_BASE,
     "ASPC": export_STATIC_BASE,
     "TERM": export_ACTIVATOR_BASE,
-    "NOTE": export_ACTIVATOR_BASE,
+    "NOTE": export_NOTE,
     "TACT": export_ACTIVATOR_BASE,
     **CHARACTER_EXPORTERS,
 }

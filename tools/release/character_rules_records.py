@@ -21,6 +21,8 @@ from tes5_import.pipeline_finalize import write_seq_file
 ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 SOURCE_DIR = os.path.join(ROOT, 'character_rules', 'scripts', 'source')
 SELECTOR_SOURCE_DIR = os.path.join(ROOT, 'TESGameSelect', 'scripts', 'source')
+#: The scripts every converted game ships, which the rules call into (TES4_Reputation).
+STATIC_SOURCE_DIR = os.path.join(ROOT, 'script_convert', 'static_scripts')
 
 #: SMQN DNAM: Shares event, so the vanilla quests on the same event still run.
 SHARES_EVENT = 0x00020000
@@ -99,7 +101,12 @@ class Obj(int):
 
 
 def pack_script(name: str, props: dict) -> bytes:
-    """One VMAD script entry with typed properties (objects, strings, ints, floats, arrays)."""
+    """One VMAD script entry with typed properties (objects, strings, ints, floats, arrays).
+
+    An empty list is left unset: the game refuses a zero-length array property.
+    See: docs/commentary/character_rules.md#the-rules-plugin
+    """
+    props = {pname: value for pname, value in props.items() if value != []}
     out = _wstring(name) + struct.pack('<BH', 0, len(props))
     for pname, value in props.items():
         kind = _kind(value)
@@ -184,13 +191,13 @@ def build_node(fid: int, edid: str, place: tuple, quests: list, active_fid: int)
 # ---------------------------------------------------------------------------
 
 def compile_scripts(outdir: str, scripts: tuple) -> bool:
-    """Compile `scripts` against Skyrim's, SKSE's and TESGameSelect's headers."""
+    """Compile `scripts` against Skyrim's, SKSE's, TESGameSelect's and the converted games' headers."""
     try:
         cfg = load_config()
     except (FileNotFoundError, OSError):
         cfg = {}
     headers = [find_skyrim_source_scripts(cfg), find_skse_source_scripts(cfg),
-               SELECTOR_SOURCE_DIR, SOURCE_DIR]
+               SELECTOR_SOURCE_DIR, STATIC_SOURCE_DIR, SOURCE_DIR]
     compiler = os.path.join(ROOT, 'external', 'papyrus-compiler', 'papyrus.exe')
     out_dir = os.path.join(outdir, 'scripts')
     ok = True

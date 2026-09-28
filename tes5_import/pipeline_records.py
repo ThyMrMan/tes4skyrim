@@ -107,7 +107,7 @@ _SEPARATE_PHASE_TYPES = frozenset({'CELL', 'WRLD', 'DIAL', 'INFO', 'REFR', 'ACHR
 #: Phase 1 converters that take the writer, to mint companion records.
 _WRITER_TYPES = frozenset({'ARMO', 'CLOT', 'WEAP', 'AMMO', 'NPC_', 'CREA', 'BOOK',
                            'ENCH', 'SPEL', 'SGST', 'ALCH', 'INGR', 'HAIR', 'PROJ',
-                           'IPCT', 'IPDS', 'EXPL', 'ADDN', 'MUSC'})
+                           'IPCT', 'IPDS', 'EXPL', 'ADDN', 'MUSC', 'NOTE'})
 
 
 def _simple_types(st) -> list:

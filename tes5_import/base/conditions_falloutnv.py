@@ -19,9 +19,33 @@ FALLOUT_CTDA_SIZE = 28
 #: GetDisposition: absent in Skyrim, but evaluated at a fixed tier by convert_ctda.
 _GET_DISPOSITION = 76
 
+#: The player's reference, the one whose karma the mirror global holds.
+PLAYER_REF = 0x14
+
 #: Fallout Run On values: Subject, Target, Reference, Combat Target, Linked Ref.
 _RUN_ON_TARGET = 1
 _RUN_ON_REFERENCE = 2
+
+#: FO3/FNV GetObjectiveCompleted / GetObjectiveDisplayed -> the objective state each reads.
+OBJECTIVE_FUNCS = {420: 'Done', 421: 'Shown'}
+
+#: (source quest FormID low 24, objective index, state) -> the GLOB mirroring it; see objectives_falloutnv.
+OBJECTIVE_GLOBALS: dict = {}
+
+#: REPU FormID low 24 -> its [infamy, fame, mixed, good, bad, maximum] GLOB FormIDs; see reputation_falloutnv.
+REPUTATION_GLOBALS: dict = {}
+
+#: FO3/FNV actor value index -> the GLOB mirroring it (Karma).
+ACTOR_VALUE_GLOBALS: dict = {}
+
+#: FO3/FNV GetActorValue, GetReputation and GetReputationThreshold.
+_GET_ACTOR_VALUE, _GET_REPUTATION, _GET_REPUTATION_THRESHOLD = 14, 573, 575
+
+#: Skyrim GetGlobalValue, and the CTDA type bits a global read keeps (operator and OR).
+_GET_GLOBAL_VALUE, _OPERATOR_AND_OR = 74, 0xE1
+
+#: TES4/FO3/FNV CTDA type bit: the comparison value is a GLOB.
+_USE_GLOBAL = 0x04
 
 #: Actor value name -> (FO3/FNV index, Skyrim index); same meaning and scale in both games only.
 _FALLOUT_AV = {
@@ -76,6 +100,37 @@ def fallout_function(func_idx: int) -> 'int | None':
     if func_idx in FNV_FUNC_ABSENT and func_idx != _GET_DISPOSITION:
         return None
     return FNV_FUNC_REMAP.get(func_idx, func_idx)
+
+
+def _mirror_global(func_idx: int, param1: int, param2: int, on_player: bool) -> int:
+    """The GLOB a FO3/FNV objective, reputation or player-karma test reads, or 0."""
+    state = OBJECTIVE_FUNCS.get(func_idx)
+    if state:
+        return OBJECTIVE_GLOBALS.get((param1 & 0xFFFFFF, param2, state), 0)
+    if func_idx == _GET_ACTOR_VALUE:
+        return ACTOR_VALUE_GLOBALS.get(param1, 0) if on_player else 0
+    rep = REPUTATION_GLOBALS.get(param1 & 0xFFFFFF)
+    if rep and func_idx == _GET_REPUTATION and param2 in (0, 1):
+        return rep[param2]
+    if rep and func_idx == _GET_REPUTATION_THRESHOLD and param2 in (0, 1, 2):
+        return rep[2 + param2]
+    return 0
+
+
+def mirrored_ctda(type_byte: int, comp_raw: int, func_idx: int, param1: int,
+                  param2: int, on_player: bool = False) -> 'bytes | None':
+    """A FO3/FNV test of state kept in a global, as GetGlobalValue(it), same comparison; else None.
+
+    Objectives (Skyrim's functions are script-only), reputation and karma
+    (Skyrim has none) are mirrored in globals the converted scripts set.
+    See: docs/commentary/tes5_import_conditions.md#fallout-objective-conditions
+    See: docs/commentary/tes5_import_character_data.md#fallout-reputation
+    """
+    glob = _mirror_global(func_idx, param1, param2, on_player)
+    if not glob or type_byte & _USE_GLOBAL:
+        return None
+    return struct.pack('<B3xIHHIIII I', type_byte & _OPERATOR_AND_OR, comp_raw,
+                       _GET_GLOBAL_VALUE, 0, glob, 0, 0, 0, 0xFFFFFFFF)
 
 
 def fallout_actor_value(av: int) -> 'int | None':

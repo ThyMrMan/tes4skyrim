@@ -9,7 +9,11 @@ See: docs/commentary/tes4_export_falloutnv.md#marker-base-objects
 See: docs/commentary/tes4_export_falloutnv.md#child-worldspaces
 """
 
+import os
+import struct
+
 from ..base.constants import TES4_REQUIRES_KEY
+from ..base.writer import pack_subrecord
 from .common import get_float, get_int
 
 _XMARKER = 0x0000003B
@@ -24,6 +28,30 @@ FALLOUT_MARKER_FORMID_TO_SKYRIM = {
     0x00000032: _XMARKER_HEADING,  # COCMarkerHeading
     0x00000033: _XMARKER,          # RadiationMarker
 }
+
+#: Activator FormIDs (upper hex) of this run and its masters; a primitive on one is a trigger volume.
+_TRIGGER_BASES: set = set()
+
+#: Skyrim collision layer index L_TRIGGER, the XTRI vanilla writes on 53 activator primitives.
+_L_TRIGGER = 12
+
+
+def register_trigger_bases(by_type: dict, master_export=None) -> None:
+    """Record every activator a placed primitive can stand on."""
+    _TRIGGER_BASES.clear()
+    masters = [r for r in (master_export or {}).values() if r.get('Signature') == 'ACTI']
+    _TRIGGER_BASES.update((r.get('FormID') or '').upper() for r in masters + by_type.get('ACTI', []))
+
+
+def trigger_layer(rec: dict) -> bytes:
+    """XTRI = L_TRIGGER for a primitive placed on an activator, else b''.
+
+    See: docs/commentary/tes4_export_falloutnv.md#trigger-primitives
+    """
+    if rec.get('XPRM.Raw') and (rec.get('NAME') or '').upper() in _TRIGGER_BASES:
+        return pack_subrecord('XTRI', struct.pack('<I', _L_TRIGGER))
+    return b''
+
 
 #: Record types only FO3/FNV emit; their presence identifies the source game.
 FALLOUT_ONLY_SIGS = ('NAVM', 'TERM', 'MSTT', 'IDLM', 'PWAT', 'CCRD', 'REPU')
@@ -45,6 +73,12 @@ def register_fallout_source(by_type: dict):
 def is_fallout_source() -> bool:
     """True when this run's source plugin is FO3/FNV."""
     return bool(_IS_FALLOUT_SOURCE)
+
+
+def export_is_fallout(export_dir: str) -> bool:
+    """Whether an export folder holds a record type only FO3/FNV write."""
+    return any(os.path.isfile(os.path.join(export_dir, f'{sig}.txt'))
+               for sig in FALLOUT_ONLY_SIGS)
 
 
 def requires_key_level() -> int:

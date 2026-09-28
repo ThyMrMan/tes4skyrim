@@ -56,6 +56,10 @@ from .runtime_sidecars import begin_sidecar_run
 from .base.adopted_records import adopt_master_special_records
 from .base.cell_family import set_cell_families
 from .base.conditions import set_whole_day_global
+from .base.objectives_falloutnv import create_objective_globals
+from .record_types.equipment_falloutnv import create_weapon_anim_lists
+from .record_types.note_falloutnv import index_note_speakers
+from .record_types.reputation_falloutnv import create_reputation_records
 from .base.owned_records import (
     WELL_KNOWN_PROPERTIES,
     create_ambient_gmst_overrides,
@@ -421,6 +425,9 @@ def _prescan_menu_records(by_type: dict, writer, _SC, _step_done):
                             menu['fid_to_index'])}, merge=True)
     WELL_KNOWN_PROPERTIES.update(create_force_combat_factions(writer))
     WELL_KNOWN_PROPERTIES.update(create_destroyed_formlist(writer))
+    WELL_KNOWN_PROPERTIES.update(create_weapon_anim_lists(by_type, writer))
+    index_note_speakers(by_type)
+    WELL_KNOWN_PROPERTIES.update(create_reputation_records(by_type, writer))
     _step_done('chargen menu MESGs')
 
 
@@ -1144,6 +1151,7 @@ def _run_prescans(st: ImportState, all_records: list, num_new_masters: int,
     st.unlock_plan, st.unlock_globals, _SC = _prescan_unlock_plan(
         by_type, writer, _step_done)
     _prescan_force_greets(by_type, ctx, writer, _SC)
+    create_objective_globals(writer, by_type, _SC)
     _prescan_menu_records(by_type, writer, _SC, _step_done)
     st.fid_to_edid = _prescan_fid_to_edid(all_records, ctx, _step_done)
     st.xref = _prescan_cross_ref_graph(all_records, ctx, export_dir,
@@ -1163,6 +1171,11 @@ def _run_prescans(st: ImportState, all_records: list, num_new_masters: int,
                                   _step_done)
     st.pack_plan, st.pack_ctx, st._script_vars = _prescan_package_plan(
         by_type, ctx, writer, st.fid_to_edid, _step_done)
+    st.pack_ctx.xref = st.xref
+    from .packages.patrol_falloutnv import build_patrol_vmads
+    n_patrol = build_patrol_vmads(by_type, st.pack_ctx.pack_runner_refs, st.xref)
+    if n_patrol:
+        print(f"  Patrol markers: {n_patrol} scripted marker(s) bound to their patrols")
     _prescan_leveled_actors(by_type, ctx, writer, _step_done)
     _prescan_outfits_hair_skin(by_type, ctx, export_dir, writer)
 

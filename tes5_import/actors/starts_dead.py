@@ -7,8 +7,11 @@ corpses carry the ACHR "Starts Dead" record flag instead (~1,140 in Skyrim.esm).
 
 A ref a script resurrects keeps the health path, because the Papyrus
 `Resurrect` native refuses an actor with that flag ("is dead from the editor
-and cannot be resurrected", 1.6.1170 rva 0x9e99f0). FO3/FNV author the flag
-themselves, so their refs are left as exported.
+and cannot be resurrected", 1.6.1170 rva 0x9e99f0). FO3/FNV mark a corpse on
+its BASE record (record flag bit 19), so every placement of such a base gets
+the flag.
+
+See: docs/commentary/tes5_import_actors.md#fallout-starts-dead
 """
 
 import re
@@ -19,6 +22,9 @@ from ..record_types.world_falloutnv import is_fallout_source
 
 #: ACHR record flag 0x200: "Starts Dead".
 STARTS_DEAD_FLAG = 0x00000200
+
+#: FO3/FNV NPC_/CREA record flag bit 19 (xEdit "Unknown 19"): every placement starts dead.
+_FALLOUT_DEAD_BASE = 0x00080000
 
 _RESURRECT_RE = re.compile(r'(?:"?(\w+)"?[ \t]*\.[ \t]*)?\bresurrect\b', re.IGNORECASE)
 _ACTOR_SIGS = ('NPC_', 'CREA')
@@ -39,11 +45,17 @@ def _master_records(master_export: dict, sigs: tuple):
 
 
 def _dead_bases(by_type: dict, master_export: dict) -> dict:
-    """Base FormID (upper) -> record, for every NPC_/CREA whose health pool is 0 or less."""
+    """Base FormID (upper) -> record, for every NPC_/CREA authored dead."""
     pairs = [(get_str(r, 'FormID'), r) for sig in _ACTOR_SIGS for r in by_type.get(sig, [])]
     pairs += _master_records(master_export, _ACTOR_SIGS)
-    return {fid.upper(): r for fid, r in pairs
-            if fid and 'DATA.Health' in r and get_int(r, 'DATA.Health') <= 0}
+    return {fid.upper(): r for fid, r in pairs if fid and _is_dead_base(r)}
+
+
+def _is_dead_base(rec: dict) -> bool:
+    """Whether a base actor is authored dead in its own game's way."""
+    if is_fallout_source():
+        return bool(get_int(rec, 'RecordFlags') & _FALLOUT_DEAD_BASE)
+    return 'DATA.Health' in rec and get_int(rec, 'DATA.Health') <= 0
 
 
 def _resurrect_targets(by_type: dict, master_export: dict) -> tuple:
@@ -61,8 +73,6 @@ def _resurrect_targets(by_type: dict, master_export: dict) -> tuple:
 def index_starts_dead(by_type: dict, master_export: dict) -> int:
     """Record every placed ACHR/ACRE that gets the Starts Dead flag; returns the count."""
     _STARTS_DEAD.clear()
-    if is_fallout_source():
-        return 0
     bases = _dead_bases(by_type, master_export)
     named, own = _resurrect_targets(by_type, master_export)
     for sig in ('ACHR', 'ACRE'):

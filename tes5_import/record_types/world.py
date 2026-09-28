@@ -15,11 +15,12 @@ from ..base.constants import (
 from ..base.locations import WORLD_NAMES
 from ..base.equivalents import TES4_MARKER_FORMID_TO_SKYRIM
 from .world_falloutnv import (marker_substitute, parent_use_flags, requires_key_level,
-                              tes5_world_flags, world_map_offset)
+                              tes5_world_flags, trigger_layer, world_map_offset)
 from .world_morrowind import is_tes3_source, lock_is_exit_only, tes3_refr_flags
 from .vendor_stock_morrowind import stock_owner
 from .items import get_base_origin_shift
 from ..actors.starts_dead import STARTS_DEAD_FLAG, starts_dead
+from ..packages.patrol_falloutnv import patrol_subrecords, patrol_vmad
 from ..base.text_reader import remap_formid
 from .common import (
     TES4_DEFAULT_MUSIC_ENUM,
@@ -979,6 +980,7 @@ def _refr_head(rec: dict) -> bytes:
     edid = get_str(rec, 'EditorID')
     if edid:
         subs += pack_string_subrecord('EDID', edid)
+    subs += patrol_vmad(rec)
     name_raw = int(rec.get('NAME', '0') or '0', 16)
     name_fid = _refr_base_formid(rec, name_raw)
     if name_raw == 0x10 and get_str(rec, 'MapMarker') != '1':
@@ -990,7 +992,7 @@ def _refr_head(rec: dict) -> bytes:
             '<I', get_int(rec, 'XACT.ActionFlag', _REFR_ACTION_OPEN_BY_DEFAULT)))
     primitive = get_str(rec, 'XPRM.Raw')
     if primitive:
-        subs += pack_subrecord('XPRM', bytes.fromhex(primitive))
+        subs += pack_subrecord('XPRM', bytes.fromhex(primitive)) + trigger_layer(rec)
     return subs
 
 
@@ -1030,8 +1032,8 @@ def convert_REFR(rec: dict) -> bytes:
         subs += pack_subrecord('XESP', struct.pack('<II', xesp_ref, xesp_flags))
 
     from ..base.object_scripts import base_uses_parent_ref
-    if xesp_ref and base_uses_parent_ref(rec.get('NAME', '')):
-        subs += pack_subrecord('XLKR', struct.pack('<II', 0, xesp_ref))
+    mirrored = xesp_ref if base_uses_parent_ref(rec.get('NAME', '')) else 0
+    subs += linked_ref_subrecord(rec, mirrored) + patrol_subrecords(rec)
 
     xown = (stock_owner(get_formid(rec, 'FormID'))
             or get_formid(rec, 'XOWN.Owner'))
@@ -1105,6 +1107,7 @@ def convert_ACHR(rec: dict) -> bytes:
     if xesp_ref:
         xesp_flags = get_int(rec, 'XESP.Flags')
         subs += pack_subrecord('XESP', struct.pack('<II', xesp_ref, xesp_flags))
+    subs += linked_ref_subrecord(rec)
 
     scale = get_float(rec, 'XSCL.Scale')
     if scale and scale != 1.0:
@@ -1122,6 +1125,15 @@ def convert_ACHR(rec: dict) -> bytes:
     if starts_dead(get_str(rec, 'FormID')):
         flags |= STARTS_DEAD_FLAG
     return pack_record('ACHR', get_formid(rec, 'FormID'), flags, subs)
+
+
+def linked_ref_subrecord(rec: dict, mirrored: int = 0) -> bytes:
+    """XLKR for the authored FO3/FNV linked reference, else `mirrored`.
+
+    See: docs/commentary/tes5_import_package.md#fallout-package-types
+    """
+    ref = get_formid(rec, 'XLKR.LinkedRef') or mirrored
+    return pack_subrecord('XLKR', struct.pack('<II', 0, ref)) if ref else b''
 
 
 def convert_ACRE(rec: dict) -> bytes:

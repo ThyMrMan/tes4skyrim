@@ -119,7 +119,7 @@ Fallout 3 0.94). It reads the records the exporter now
 | `skills` | each skill `AVIF`: EditorID, name, actor value, [governing stat](#fallout-governing-stats), the Skyrim skills the converted content exercises with it, and whether the game shows it |
 | `classes` | each `CLAS`: tag skills (named through the `AVIF`s, a dependent's through its master's), S.P.E.C.I.A.L., playable |
 | `races` | each `RACE`'s skill bonuses (none in either master) and whether it is playable |
-| `perks` | each `PERK`: trait or perk, minimum level, ranks, playable, hidden, its requirement conditions (raw), and each effect: quest and stage, ability, or entry point, function and value, with its condition tabs |
+| `perks` | each `PERK`: name, description, trait or perk, minimum level, ranks, playable, hidden, its requirement conditions (raw), and each effect: quest and stage, ability, or entry point, function and value, with its condition tabs |
 | `reputations` | each `REPU` and its value |
 | `settings` | the XP rules' settings, over the engine's defaults read from the game's GECK when masterless: XP base and bump, the level cap, perks per level, skill points per level, the tag bonus, Health, carry weight and action point formulas, karma thresholds, every `iXPReward*` and `iXPLevel*` tier, and every `fAVDSkill*` (each skill's base and the stat and Luck multipliers) |
 | `player` | the class of the player's own `NPC_` (`00000007`), whose S.P.E.C.I.A.L. a new character starts with: New Vegas's "Vault Dweller", 5 in every stat |
@@ -155,7 +155,112 @@ familiar 2 + 2 × stat + Luck / 2. The table: Barter and Speech Charisma;
 Energy Weapons, Explosives and Lockpick Perception; Medicine, Repair and
 Science Intelligence; Melee Weapons Strength; Small Guns (Guns) and Sneak
 Agility; Big Guns and Unarmed Endurance; and actor value 44, Fallout 3's cut
-Throwing, Intelligence. New Vegas's exe cannot be read, so its Survival, which
-took over 44, is Endurance as the game shows it, and the other twelve are
-taken as Fallout 3's (fallout.wiki's New Vegas Intelligence page agrees on
-Medicine, Repair and Science).
+Throwing, Intelligence. New Vegas's GOG `FalloutNV.exe` (no DRM wrapper,
+unlike Steam's) confirms all 14: its table, filled at startup and indexed by
+actor value from `0x119b144`, gives the same stats, with Survival (44)
+Endurance, and the skill formula is the same (`0x643c20`).
+
+### <a id="fallout-perks"></a>Perks and traits become Skyrim perks
+
+**Code:** `tes5_import/record_types/perk_falloutnv.py`.
+
+A Fallout `PERK` is written into the converted plugin at its own FormID, not
+into the rules plugin: dialogue conditions (`HasPerk`, 124 in New Vegas) and
+scripts name perks, and only the converted plugin can hold forms its own
+records point at. A perk does nothing until something gives it: a script, or
+the [rules' perk menu](character_rules.md#fallout-perks).
+
+The record layout is shared, so identity, `DATA` (trait, level, ranks,
+playable, hidden) and the requirement conditions carry over. Requirements that
+test S.P.E.C.I.A.L. or a Fallout skill drop as every such
+[condition](tes5_import_conditions.md#fallout-actor-values) does; in Skyrim a
+perk's requirements only gate its perk-tree button, and the rules check the
+real ones themselves. Effects:
+
+- quest stage and ability effects carry over unchanged: every quest and all 48
+  abilities the New Vegas perks name are converted records;
+- an entry point converts when Skyrim has one of the same name
+  (`SKYRIM_ENTRY_POINTS`, from xEdit's lists: 17 of Fallout's 74), its
+  function changes a number or adds a leveled list, and every condition in its
+  tabs converts. A dropped condition would widen the bonus (a Guns-only damage
+  multiplier would apply to every weapon), so such an effect is left out
+  whole. Fallout's inline `Activate` scripts are left out too.
+
+Over `FalloutNV.esm`'s 212 effects: 119 convert (49 ability, 20 quest stage,
+50 entry point), 93 do not. Of those, 12 are Skyrim entry points whose weapon
+tab tests `GetWeaponSkillType`, which Skyrim lacks; the rest are Fallout-only
+entry points (action points, VATS, damage threshold, reload and attack speed,
+the XP and skill point bonuses). Swift Learner's XP bonus and Educated's skill
+points are the rules' own numbers, so the rules can apply those later.
+
+Unconfirmed: Skyrim's tab count for an entry point Skyrim.esm never uses is
+taken to be Fallout's (Skyrim.esm confirms 3 tabs for weapon damage and both
+critical entry points, 2 for buy prices).
+
+### <a id="fallout-reputation"></a>Reputation and karma live in globals
+
+New Vegas keeps fame and infamy per reputation (13 `REPU` records), and its
+dialogue reads the title they give through `GetReputationThreshold`: 1,581
+conditions, the most-tested function in the game. Scripts call the reputation
+commands 510 times (218 `AddReputation`), and `RewardKarma` 48 times.
+Skyrim has neither, so the converter keeps them in globals.
+
+- **A reputation is a FormList at the REPU's own FormID** (REPU records were
+  never written), listing six globals: infamy, fame, the mixed, good and bad
+  threshold, and the maximum (`DATA.Value`). A script property naming the
+  REPU is typed `FormList` and binds to it.
+- **Points.** `AddReputation rep kind value` adds Fallout's bump for value
+  1-5: 1, 2, 4, 7, 12 points (kind 1 fame, 0 infamy); `SetReputation` and
+  `GetReputation` are raw points (fallout.wiki; the disguise scripts set and
+  read raw points). Points never go below 0.
+- **Titles.** A kind's range is 0-3: below ceil(15% of the maximum), below
+  ceil(half), below the maximum, at or above it. That reproduces all 13 of
+  fallout.wiki's per-reputation tables (NCR, maximum 80: 0, 12, 40, 80;
+  Goodsprings, 15: 0, 3, 8, 15). The two ranges pick the title from the 4 x 4
+  table, and each title sits on one axis with one threshold: good Idolized 6,
+  Liked 5, Accepted 4, Good-Natured Rascal 3, Smiling Troublemaker 2; bad
+  Vilified 6, Hated 5, Shunned 4, Merciful Thug 3, Sneering Punk 2; mixed Wild
+  Child 5, Unpredictable 4, Mixed 3, Dark Hero and Soft-Hearted Devil 2;
+  Neutral is 1 on all three, and a title on another axis reads 0. Axis 0 is
+  mixed, 1 good, 2 bad, as the lines they gate show ("Whoa. New chick." at
+  good == 1; "best-loved cat on the Strip" at good >= 3).
+- **`TES4_Reputation`** (a static script) changes the points and re-derives
+  the three threshold globals; converted conditions read them with
+  `GetGlobalValue`, and `GetReputation` conditions read the points.
+  Thresholds start at 1, Neutral.
+- **Karma** is the global `TES4Karma`: `RewardKarma` and karma actor-value
+  writes change it, reads and `GetActorValue` Karma (Fallout actor value 23)
+  conditions read it.
+
+`FalloutNV.exe` confirms the titles: its threshold routine (`0x616a90`) gives
+the same value for all 16 fame and infamy ranges and for every axis, and a
+range compares points ÷ maximum with `fReputationThresholdOne`, `Two` and
+`Three` (0.15, 0.5, 1.0; `0x616950`), which for whole points is the ceil
+form above. The karma and infamy the player's
+kills and crimes earn are the rules' work
+([karma and infamy](character_rules.md#fallout-karma-and-infamy)), from the
+data below.
+
+### <a id="fallout-kill-karma"></a>Factions and alignments for kills and crimes
+
+Two more keys in the character data:
+
+| Key | Holds |
+|---|---|
+| `factions` | each `FACT` that is evil (`DATA` byte 0, bit 1), tracks crime (byte 1, bit 0) or names a New Vegas reputation (`WMI1`) |
+| `alignments` | the `NPC_`/`CREA` forms that are `very_evil`, `evil`, `very_good` or `good`; neutral actors are left out |
+
+The exporter wrote only `FACT`'s first `DATA` byte, which is all Oblivion has;
+Fallout's is four, and it now also writes the second byte (`DATA.Flags2`) and
+`WMI1`. Over `FalloutNV.esm`'s 682 factions: 188 track crime, 46 name one
+of 12 reputations, 44 are evil. The rules' lists hold 32 very evil, 1,196 evil, 302 good
+and 10 very good actors.
+
+An actor's alignment is its karma (`ACBS.Karma`) sorted as `Fallout3.exe`
+(`0x6e65b0`) and `FalloutNV.exe` (`0x47e040`) sort it: at or below `fAlignVeryEvilMaxKarma` (-750) very evil,
+at or below `fAlignEvilMaxKarma` (-250) evil, at or above
+`fAlignVeryGoodMinKarma` (750) very good, at or above `fAlignGoodMinKarma`
+(250) good, else neutral. New Vegas's actors use -900, -500, 0, 500 and 900
+(30, 568, 2,979, 229 and 10 `NPC_`). An actor whose template flags include
+Use Traits (`0x0001`) takes its template's karma; a leveled list's karma counts
+only when every entry agrees.

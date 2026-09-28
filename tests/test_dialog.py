@@ -38,6 +38,7 @@ from tes5_import.base.conditions import (
 from tes5_import.base.owned_records import _source_counts_whole_days
 from tes5_import.dialogue.converter import DIAL_TYPE_COMBAT, DIAL_TYPE_CONVERSATION, DIAL_TYPE_DETECTION, DIAL_TYPE_MISC, DIAL_TYPE_PERSUASION, DIAL_TYPE_SERVICE, DIAL_TYPE_TOPIC, _EDID_SUBTYPE, classify_topic, convert_DIAL, convert_INFO, make_dlbr, make_dlvw, should_skip_dial
 from tes5_import.dialogue.groups import build_dialog_groups
+from tes5_import.dialogue.topics_falloutnv import shown_text
 from tes5_import.dialogue.quest import (convert_QUST,
                                         set_assigned_var_names)
 from tes5_import.base.tes5_reader import records
@@ -1121,10 +1122,72 @@ class TestFalloutConditions:
         out = convert_ctda(raw)
         assert struct.unpack_from('<H', out, 8)[0] == 426
 
+    def test_voice_type_names_the_written_vtyp(self, monkeypatch):
+        """The VTYP is written under a derived id; the condition must follow it.
+
+        See docs/commentary/tes5_import_conditions.md#authored-voice-types.
+        """
+        from tes5_import.base.owned_records import FALLOUT_VTYP_BY_SOURCE
+        from tes5_import.base.text_reader import remap_formid
+        raw = bytes.fromhex('000000000000803fab010000dd420800000000000000000000000000')
+        monkeypatch.setitem(FALLOUT_VTYP_BY_SOURCE, remap_formid(0x000842DD),
+                            0x01ABCDEF)
+        assert struct.unpack_from('<I', convert_ctda(raw), 12)[0] == 0x01ABCDEF
+
+    def test_an_authored_voice_gate_is_read_only_from_fallout(self):
+        """The injected voice gate yields to one the INFO authors itself.
+
+        TES4's 427 is GetPlantedExplosive, so a TES4 source never counts.
+        """
+        from tes5_import.base.conditions import authors_voice_type
+        from tes5_import.record_types import world_falloutnv
+        rec = {'Condition[0].Raw':
+               '000000000000803fab010000dd420800000000000000000000000000'}
+        assert not authors_voice_type(rec)
+        world_falloutnv.register_fallout_source({'TERM': [1]})
+        try:
+            assert authors_voice_type(rec)
+        finally:
+            world_falloutnv._IS_FALLOUT_SOURCE.clear()
+
+    def test_a_quest_voice_gate_is_seen_in_the_inherited_ctdas(self):
+        """A quest condition's voice test also yields no injected voice gate."""
+        from tes5_import.base.conditions import (FUNC_GET_IS_ID,
+                                                 FUNC_GET_IS_VOICE_TYPE,
+                                                 build_ctda)
+        from tes5_import.base.writer import pack_subrecord
+        from tes5_import.dialogue.groups import _tests_voice_type
+        is_id = pack_subrecord('CTDA', build_ctda(FUNC_GET_IS_ID, param1=7))
+        voice = pack_subrecord('CTDA', build_ctda(FUNC_GET_IS_VOICE_TYPE,
+                                                  param1=9))
+        assert not _tests_voice_type(is_id)
+        assert _tests_voice_type(is_id + voice)
+
     def test_absent_function_is_dropped(self):
         """GetObjectiveCompleted (420) has no Skyrim function."""
         raw = bytes.fromhex('000000000000803fa4010000dd420800000000000000000000000000')
         assert convert_ctda(raw) is None
+
+    def test_objective_test_reads_its_mirror_global(self, monkeypatch):
+        """GetObjectiveCompleted(VCG01, 40) == 0 becomes GetGlobalValue(mirror) == 0.
+
+        See docs/commentary/tes5_import_conditions.md#fallout-objective-conditions.
+        """
+        from tes5_import.base.conditions_falloutnv import OBJECTIVE_GLOBALS
+        monkeypatch.setitem(OBJECTIVE_GLOBALS, (0x104C1C, 40, 'Done'), 0x01ABCDEF)
+        raw = struct.pack('<B3xfHHIIII', 0x01, 0.0, 420, 0, 0x104C1C, 40, 0, 0)
+        out = convert_ctda(raw)
+        assert struct.unpack_from('<BxxxfHHI', out) == (0x01, 0.0, 74, 0, 0x01ABCDEF)
+
+    def test_objective_tests_are_mirrored_for_own_quests(self):
+        """Only the tested states of the plugin's own quests get globals."""
+        from tes5_import.base.objectives_falloutnv import objective_script_globals
+        cond = struct.pack('<B3xfHHIIII', 0, 1.0, 421, 0, 0x104C1C, 40, 0, 0).hex()
+        other = struct.pack('<B3xfHHIIII', 0, 1.0, 420, 0, 0x999999, 5, 0, 0).hex()
+        by_type = {'QUST': [{'FormID': '00104C1C', 'EditorID': 'VCG01'}],
+                   'INFO': [{'Condition[0].Raw': cond, 'Condition[1].Raw': other}]}
+        assert objective_script_globals(by_type) == {
+            ('vcg01', 40): {'Shown': 'TES4ObjShown_VCG01_40'}}
 
     def test_tes4_index_at_a_fallout_slot_is_not_misread(self):
         """A 24-byte raw is TES4: 427 there is GetPlantedExplosive and stays put."""
@@ -1213,6 +1276,154 @@ class TestBranches:
                         [0x01F00001], [0x01000DEF, 0x01000DF0])
         order = _sub_order(out)
         assert order == ['EDID', 'QNAM', 'BNAM', 'TNAM', 'TNAM', 'ENAM', 'DNAM']
+
+
+class TestFalloutTopicLinks:
+    """FO3/FNV Top-level flag and prompt.
+
+    See docs/commentary/tes5_import_dialogue.md#fallout-topic-links.
+    """
+
+    @staticmethod
+    def _by_type():
+        """A Top-level topic whose line adds one reply and offers another; plus an unlinked reply."""
+        def dial(fid, flags):
+            """One quest-less Topic-type DIAL."""
+            return {'FormID': fid, 'EditorID': f'T{fid}', 'DATA.Type': '0',
+                    'DATA.Flags': flags, 'QuestCount': '0'}
+
+        def info(fid, parent, **extra):
+            """One condition-less INFO."""
+            return dict({'FormID': fid, 'ParentDIAL': parent, 'ResponseCount': '0',
+                         'ChoiceCount': '0', 'ConditionCount': '0', 'DATA.Flags': '0'}, **extra)
+        return {'QUST': [],
+                'DIAL': [dial('000B0001', '2'), dial('000B0002', '0'),
+                         dial('000B0003', '0'), dial('000B0004', '0')],
+                'INFO': [info('000C0001', '000B0001', AddTopicCount='1', ChoiceCount='1',
+                              **{'AddTopic[0]': '000B0002', 'Choice[0]': '000B0004'}),
+                         info('000C0002', '000B0002', Prompt='Tell me more.'),
+                         info('000C0003', '000B0003'), info('000C0004', '000B0004')]}
+
+    def test_top_level_or_added_topics_are_listed(self):
+        """DLBR DNAM: Top-level or AddTopic'd is listed; a choice or unlinked reply is not."""
+        from tes5_import.dialogue.unlocks import build_unlock_plan
+        by_type = self._by_type()
+        writer = _FakeWriter()
+        build_dialog_groups(by_type, writer, npc_to_vtyp={},
+                            unlock_plan=build_unlock_plan(by_type))
+        level = {struct.unpack('<I', _find_subrecord(rec, b'SNAM'))[0]:
+                 struct.unpack('<I', _find_subrecord(rec, b'DNAM'))[0]
+                 for _sig, _fid, rec in _walk_records(writer.groups['DLBR'])}
+        assert level == {0x0B0001: 1, 0x0B0002: 1, 0x0B0003: 0, 0x0B0004: 0}
+        infos = {fid: rec for sig, fid, rec in _walk_records(writer.groups['DIAL'])
+                 if sig == 'INFO'}
+        assert _find_subrecord(infos[0x0C0002], b'RNAM') == b'Tell me more.\0'
+
+
+class TestFalloutFollowUps:
+    """A FO3/FNV Follow Up continues, unasked, into a topic of shared copies.
+
+    See docs/commentary/tes5_import_dialogue.md#fallout-follow-ups.
+    """
+
+    def test_follow_up_becomes_an_invisible_continue_topic(self):
+        """X gets Invisible Continue and one TCLT to a topic whose INFO shares Y."""
+        def info(fid, parent, **extra):
+            """One condition-less INFO."""
+            return dict({'FormID': fid, 'ParentDIAL': parent, 'ResponseCount': '0',
+                         'ChoiceCount': '0', 'ConditionCount': '0', 'DATA.Flags': '0'}, **extra)
+        by_type = {'QUST': [],
+                   'DIAL': [{'FormID': '000B0001', 'EditorID': 'Greet', 'DATA.Type': '0',
+                             'DATA.Flags': '2', 'QuestCount': '0'},
+                            {'FormID': '000B0002', 'EditorID': 'Outro', 'DATA.Type': '0',
+                             'DATA.Flags': '0', 'QuestCount': '0'}],
+                   'INFO': [info('000C0001', '000B0001', FollowUpCount='1',
+                                 **{'FollowUp[0]': '000C0002'}),
+                            info('000C0002', '000B0002')]}
+        writer = _FakeWriter()
+        build_dialog_groups(by_type, writer, npc_to_vtyp={})
+        recs = list(_walk_records(writer.groups['DIAL']))
+        infos = {fid: rec for sig, fid, rec in recs if sig == 'INFO'}
+        topic = struct.unpack('<I', _find_subrecord(infos[0x0C0001], b'TCLT'))[0]
+        assert struct.unpack('<H', _find_subrecord(infos[0x0C0001], b'ENAM')[:2])[0] & 0x40
+        shared = [rec for fid, rec in infos.items() if fid not in (0x0C0001, 0x0C0002)]
+        assert [struct.unpack('<I', _find_subrecord(r, b'DNAM'))[0] for r in shared] == [0x0C0002]
+        assert ('DIAL', topic) in {(sig, fid) for sig, fid, _rec in recs}
+        levels = {struct.unpack('<I', _find_subrecord(r, b'SNAM'))[0]:
+                  struct.unpack('<I', _find_subrecord(r, b'DNAM'))[0]
+                  for _s, _f, r in _walk_records(writer.groups['DLBR'])}
+        assert levels[topic] == 0
+
+    def test_greeting_with_follow_up_opens_as_a_blocking_topic(self):
+        """A quest's GREETING that continues unasked is a Blocking CUST topic, not Hello."""
+        def info(fid, parent, **extra):
+            """One condition-less INFO of quest 000A0001."""
+            return dict({'FormID': fid, 'ParentDIAL': parent, 'QSTI.Quest': '000A0001',
+                         'ResponseCount': '0', 'ChoiceCount': '0', 'ConditionCount': '0',
+                         'DATA.Flags': '0'}, **extra)
+        by_type = {'QUST': [{'FormID': '000A0001', 'EditorID': 'Q', 'DATA.Flags': '1',
+                             'StageCount': '0'}],
+                   'DIAL': [{'FormID': '000000C8', 'EditorID': 'GREETING', 'DATA.Type': '0',
+                             'DATA.Flags': '0', 'QuestCount': '1', 'Quest[0]': '000A0001'},
+                            {'FormID': '000B0002', 'EditorID': 'Outro', 'DATA.Type': '0',
+                             'DATA.Flags': '0', 'QuestCount': '1', 'Quest[0]': '000A0001'}],
+                   'INFO': [info('000C0001', '000000C8', FollowUpCount='1',
+                                 **{'FollowUp[0]': '000C0002'}),
+                            info('000C0002', '000B0002')]}
+        writer = _FakeWriter()
+        build_dialog_groups(by_type, writer, npc_to_vtyp={})
+        greeting = next(rec for sig, fid, rec in _walk_records(writer.groups['DIAL'])
+                        if sig == 'DIAL' and _find_subrecord(rec, b'EDID').startswith(b'GREETING'))
+        assert _find_subrecord(greeting, b'SNAM') == b'CUST'
+        branch = struct.unpack('<I', _find_subrecord(greeting, b'BNAM'))[0]
+        kinds = {fid: struct.unpack('<I', _find_subrecord(r, b'DNAM'))[0]
+                 for _s, fid, r in _walk_records(writer.groups['DLBR'])}
+        assert kinds[branch] == 2
+
+    def test_a_scripted_chain_resumes_when_walked_away_from(self):
+        """Source and follow-up mark themselves said; a Blocking topic replays the follow-up.
+
+        See docs/commentary/tes5_import_dialogue.md#fallout-follow-ups-resume.
+        """
+        from tes5_import.dialogue.unlocks import build_unlock_plan, create_unlock_globals
+
+        def info(fid, parent, **extra):
+            """One condition-less INFO of quest 000A0001."""
+            return dict({'FormID': fid, 'ParentDIAL': parent, 'QSTI.Quest': '000A0001',
+                         'ResponseCount': '0', 'ChoiceCount': '0', 'ConditionCount': '0',
+                         'DATA.Flags': '0'}, **extra)
+        by_type = {'QUST': [{'FormID': '000A0001', 'EditorID': 'Q', 'DATA.Flags': '1',
+                             'StageCount': '0'}],
+                   'DIAL': [{'FormID': '000B0001', 'EditorID': 'Reply', 'DATA.Type': '0',
+                             'DATA.Flags': '2', 'QuestCount': '1', 'Quest[0]': '000A0001'},
+                            {'FormID': '000B0002', 'EditorID': 'Outro', 'DATA.Type': '0',
+                             'DATA.Flags': '0', 'QuestCount': '1', 'Quest[0]': '000A0001'}],
+                   'INFO': [info('000C0001', '000B0001', FollowUpCount='1',
+                                 **{'FollowUp[0]': '000C0002'}),
+                            info('000C0002', '000B0002', ResultScriptEnd='TrudyRef.Enable',
+                                 **{'DATA.Flags': '4'})]}
+        plan = build_unlock_plan(by_type)
+        assert plan['info_reveals'][0x0C0001] == ['TES4FollowUpFrom_0C0001']
+        assert plan['info_reveals'][0x0C0002] == ['TES4FollowUpSaid_0C0002']
+        writer = _FakeWriter()
+        globs = create_unlock_globals(writer, plan)
+        build_dialog_groups(by_type, writer, npc_to_vtyp={}, unlock_plan=plan,
+                            unlock_globals=globs)
+        recs = list(_walk_records(writer.groups['DIAL']))
+        resume = next(fid for sig, fid, rec in recs if sig == 'DIAL'
+                      and _find_subrecord(rec, b'EDID') == b'TES4FollowUpResume_000C0001\0')
+        kinds = {struct.unpack('<I', _find_subrecord(r, b'SNAM'))[0]:
+                 struct.unpack('<I', _find_subrecord(r, b'DNAM'))[0]
+                 for _s, _f, r in _walk_records(writer.groups['DLBR'])}
+        assert kinds[resume] == 2
+        copy = next(rec for sig, fid, rec in recs if sig == 'INFO' and fid not in (0x0C0001, 0x0C0002)
+                    and struct.pack('<I', globs['TES4FollowUpFrom_0C0001']) in rec)
+        assert struct.pack('<I', globs['TES4FollowUpSaid_0C0002']) in copy
+        assert struct.unpack('<I', _find_subrecord(copy, b'DNAM'))[0] == 0x0C0002
+        assert not struct.unpack('<H', _find_subrecord(copy, b'ENAM')[:2])[0] & 0x04
+        quest = struct.unpack('<I', _find_subrecord(dict((f, r) for _s, f, r in recs)[resume], b'QNAM'))[0]
+        assert any(sig == 'QUST' and struct.unpack_from('<I', data, 12)[0] == quest
+                   and b'TES4FollowUpResume' in data for sig, data in writer.records)
 
 
 # ---------------------------------------------------------------------------
@@ -2580,3 +2791,41 @@ class TestResetInteriorMovers:
         movers = scan_reset_movers(self._by_type(
             'Combatant0ARef.MoveTo OpponentMarkerRef'))
         assert not movers
+
+
+def test_walkthrough_reads_the_converters_stage_helpers():
+    """`X.TES4SetStage(Q as X, n)` and `X.TES4Start(Q as X)` are edges like `Q.SetStage(n)`."""
+    from tools.dialog.quest_walkthrough import extract_actions
+    body = ('FALLOUTNV_VCG01SCRIPT.TES4SetStage(VCG01 as FALLOUTNV_VCG01SCRIPT, 85)\n'
+            'FALLOUTNV_X.TES4Start(Other as FALLOUTNV_X)\nThird.SetStage(10)')
+    assert sorted(extract_actions(body)) == [('setstage', 'third', 10), ('setstage', 'vcg01', 85),
+                                             ('start', 'other', None)]
+
+
+def test_fallout_dialogue_hides_its_brace_notes():
+    """FNV never shows `{notes}`: acting, pronunciation and writer tags go; Oblivion text is untouched."""
+    line = '{Evil 2+}Just leave us alone. Caesar {KAI-zar}, I mean.'
+    assert shown_text(line) == line
+    world_falloutnv.register_fallout_source({'TERM': [1]})
+    try:
+        assert shown_text(line) == 'Just leave us alone. Caesar, I mean.'
+        assert shown_text('{Speech >= 65}') == ''
+    finally:
+        world_falloutnv._IS_FALLOUT_SOURCE.clear()
+
+
+def test_fallout_greetings_use_their_own_lockout():
+    """A FNV line waits only when authored Say Once a Day; otherwise a greeting stays repeatable.
+
+    See: docs/commentary/tes5_import_dialogue.md#info-enam-reset-timer
+    """
+    base = {'Signature': 'INFO', 'FormID': '00104C5E', 'RecordFlags': '0', 'ParentDIAL': '000000C8',
+            'DATA.Flags': '0', 'ResponseCount': '0'}
+    world_falloutnv.register_fallout_source({'TERM': [1]})
+    try:
+        resets = [struct.unpack('<HH', _find_subrecord(
+            convert_INFO(dict(base, **{'DATA.Flags2': flags2}), bark_dial_fids=set()), b'ENAM'))[1]
+            for flags2 in ('0', '1')]
+    finally:
+        world_falloutnv._IS_FALLOUT_SOURCE.clear()
+    assert resets == [0, 65535]

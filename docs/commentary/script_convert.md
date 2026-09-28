@@ -227,7 +227,7 @@ blocks**, of which 183 are types Oblivion never emits.
 
 | FO3/FNV block | blocks | Papyrus |
 |---|---:|---|
-| `saytodone` | 133 | none -- no dialogue-complete event |
+| `saytodone` | 133 | a function, called from the topic's INFO End fragments ([saytodone](#saytodone)) |
 | `oncombatend` | 26 | `OnCombatStateChanged`, guard `aeCombatState == 0` |
 | `ondestructionstagechange` | 11 | `OnDestructionStageChanged(int, int)` |
 | `ongrab` | 4 | `OnGrab()` |
@@ -241,8 +241,81 @@ Signatures are taken verbatim from
 invented. `oncombatend` reuses the existing `COMBAT_STATE_GUARDS` mechanism
 that already merges `onalarm` and `onstartcombat` into the one event.
 
-`saytodone` and `onfire` have no Skyrim equivalent: 136 blocks whose bodies
-still reach the script, now as an inert `;TODO:` rather than vanishing.
+`onfire` has no Skyrim equivalent, and its 3 blocks are still dropped.
+
+## FO3/FNV package scripts become package fragments
+<a id="package-fragments"></a>
+
+**Code:** `tes5_import/packages/scripts_falloutnv.py` (which sections exist),
+`script_convert/package_fragments.py` (the script),
+`tes5_import/packages/fragments_falloutnv.py` (the VMAD)
+
+A FO3/FNV package has three sections, OnBegin, OnEnd and OnChange, each with
+an embedded script and a topic the actor says
+([export](tes4_export_falloutnv.md#package-scripts)). FalloutNV.esm has 480
+section scripts: 171 advance a quest, 27 speak a line. A Skyrim package has
+the same three fragments natively (xEdit `wbVMADFragmentedPACK`: flags bit0
+OnBegin, bit1 OnEnd, bit2 OnChange, and one entry per set bit, in that order).
+
+Each package with a section to run gets `<NS>_PF__<FormID> extends Package`.
+Its Nth fragment is `Fragment_N(Actor akActor)`, for the Nth section the
+package has, and the importer writes the matching VMAD flags. A section's
+topic becomes a `Say <topic>` after its script. The body converts as a
+TopicInfo fragment, whose implicit subject is `akSpeakerRef`, bound first
+thing to `akActor`: the actor running the package is the script's implicit
+reference in FO3/FNV too. Both stages read `package_sections`, so the VMAD can
+never name a fragment the script lacks. The importer binds the properties
+from the same conversion (`package_property_refs`), so it also binds the
+script's `SCRO` references, which a text-only scan of the source misses. The
+say-topic scans read every section too, so a topic only a package says is
+script-driven and kept.
+
+On FalloutNV.esm: 427 packages get a fragment script and all compile. 28
+topics that only a package says stop being dropped as NPC-to-NPC chatter (10
+of them had lines, now written: 10 DIAL, 18 INFO), and no existing FormID
+moved. Package bodies brought out three conversion gaps, fixed for every
+fragment: a leading `.` (`.disable`, "this reference" in FO3/FNV) now parses
+as no reference, `MarkForDelete` takes the fragment's subject like the other
+`objref_self` commands, and a receiverless `PlayGroup` in a TopicInfo or
+ActiveMagicEffect fragment is an actor's animation event, not `Self`'s.
+
+## `begin SayToDone`: the speaker's script runs as its line ends
+<a id="saytodone"></a>
+
+**Code:** `script_convert/say_to_done.py`, `blocks.py` `block_header`,
+`pipeline.py` `_info_end_fragment`
+
+FO3/FNV run a `begin SayToDone <topic>` block on the speaker's own script when
+it finishes a line of that topic. Chains of NPC-to-NPC lines are built from
+it: Lily's `SayToDone LilyToDoctorHenry03` has Doctor Henry answer and holds
+VMS41's only `SetStage VMS41 60`. Skyrim has no such event, and these blocks
+were dropped, body and all.
+
+A block now becomes `Function TES4_SayToDone_<topic>()` on its script. Every
+INFO End fragment of the topic calls it after `LineEnded`:
+
+```
+  FALLOUTNV_LilyScript TES4_Done0 = akSpeakerRef as FALLOUTNV_LilyScript
+  If TES4_Done0
+    TES4_Done0.TES4_SayToDone_lilytodoctorhenry03()
+  EndIf
+```
+
+The cast is None for any speaker without that script, which is the
+"on the speaker's own script" rule. The call comes after `LineEnded` so a
+follow-up `SayTo` in the block does not wait on the finished line. A SayToDone
+topic also counts as script-driven (`scan_say_topics`), so its lines always
+have an End fragment. The one block with no topic (`L38Alarmwoman`) runs after
+any line, so it is hooked to every topic its script names.
+
+FalloutNV.esm has 133 blocks in 41 scripts, on 122 topics. 107 of those topics
+already had fragments. 14 have no INFO at all (Fallout 3 leftovers such as
+`CG00DadSpeech`), so they are dead in New Vegas too. 12 more start a chain
+nothing names (`REPCONHQTour00`, `VFreeformNellisPeteMural01`,
+`VHDOliverEmergency1`...). They are engine-picked NPC-to-NPC conversations,
+and one is the topic of a force-greet package (`HVVeronicaEnter`, in a `PKDD`
+the exporter does not write). The importer drops those, so the chains they
+open wait on the NPC-to-NPC conversation work.
 
 ## Comparing an inert operand
 <a id="comparing-an-inert-operand"></a>
@@ -1042,6 +1115,24 @@ copied verbatim from `SkyrimSE.exe` (note the space in `RaceSex Menu`):
 | TES4/FNV id | Skyrim menu | Evidence |
 |---|---|---|
 | 1036 | `RaceSex Menu` | FNV stage 36 calls `ShowRaceMenu`; Nehrim's block feeds `LongInCharacterDesigner` |
+
+#### <a id="menumode-message-box"></a>`begin MenuMode 1001` runs as the script's own box closes
+
+1001 is the message box. FO3/FNV's button idiom is `ShowMessage <MESG>` in
+OnActivate and `set Button to GetButtonPressed` in `begin MenuMode 1001`: the
+block runs every frame the box is up, and the button reads -1 until the click.
+The converter's `TES4_ShowMsg` already parks the thread in `Message.Show()` and
+stores the pick, so `message_box_closed` (`assemble.py`) turns every 1001 body
+into `TES4_MessageBoxClosed()`, which `TES4_ShowMsg` calls right after `Show()`
+returns: once, with the button in hand, in the same thread. An `OnMenuClose`
+listener for `MessageBoxMenu` would race `Show()`'s return and read -1.
+
+Only a script that shows its own button box gets the hook; a 1001 block in a
+script that shows none keeps the comment treatment. Commented out, the
+blocks held quest stages nothing else sets: `FortHowitzerScript` (VMS32 30),
+`VMS51BottleCapPressScript` (VMS51 20), `SLRemnantsBunkerPanelScript` (VMS54
+30) ([the audit](../audits/fallout_nv_quests.md)). 21 FalloutNV scripts have a
+1001 block.
 
 **The map holds only ids whose body is safe to run on a close**, which is why it
 has one entry rather than the six the menu-name table would allow. 1014
@@ -5560,6 +5651,60 @@ never complete. Its follow-up, `DocMitchellREF.StartConversation Player`,
 still converts to a `Say(GREETING)` bark; the psych test then needs the
 player to talk to Doc, since Skyrim has no scripted "open dialogue" call.
 
+### <a id="fallout-barter"></a>FO3/FNV `ShowBarterMenu` opens the speaker's barter
+
+New Vegas opens every shop from a dialogue line's result script: 124 sites,
+all in `INFO` results (none in `SCPT`, `QUST` or `PACK`), 4 of them naming
+another merchant (`VRRCArmorerREF.ShowBarterMenu`). The command was left as a
+TODO, so Chet's "Can do." played and no menu opened. It now becomes Skyrim's
+`Actor.ShowBarterMenu()` on the speaker, or on the named merchant, as the
+Oblivion Barter topic's fragment already does. Its optional argument, a price
+percentage (Chet's 75 and 50 for a good reputation), has no Skyrim form and is
+dropped. The menu needs the merchant in a vendor faction: FNV NPCs with vendor
+`AIDT.Services` and a placed ref linking a merchant container (`XMRC`) get
+their own, as Oblivion's do ([vendor factions](tes5_import_actors.md#vendor-factions)).
+
+### <a id="fallout-quest-completed"></a>FO3/FNV `GetQuestCompleted`, `GetQC` and `GetQR`
+
+New Vegas asks whether a quest is done with `GetQuestCompleted` (or its short
+form `GetQC`) and whether it runs with `GetQR`, the short form of
+`GetQuestRunning`. Only OBSE's `IsQuestCompleted` and the long
+`GetQuestRunning` were handled. An unconverted test in an `&&` chain is
+dropped and the rest kept, so the condition passes more often than authored:
+ED-E's quest script reads `if GetQuestCompleted vDialogueEDE == 1 && GetStage
+vDialogueEDE < 100 && bCompleteOnce == 0` and pays `RewardXP 100`, and without
+the first test that paid 100 XP five seconds into a new game. They now become
+`Quest.IsCompleted()` and `Quest.IsRunning()`. Skyrim marks a quest completed
+through the same stage flag New Vegas uses (Complete Quest, bit 0 of a stage
+log entry's flags, carried over by the importer; 150 entries in FalloutNV.esm).
+Before the fix FalloutNV's scripts dropped 81 `GetQuestCompleted`/`GetQC` and
+27 `GetQR` tests from `&&` chains.
+
+### <a id="fallout-weapon-anim-type"></a>FO3/FNV `GetWeaponAnimType` reads the Fallout type
+
+**Code:** `commands_falloutnv.weapon_anim_type`; `equipment_falloutnv.create_weapon_anim_lists`.
+
+`GetWeaponAnimType` returns the equipped weapon's Fallout animation type: 0
+Hand to Hand, 1-2 Melee, 3-4 Pistol, 5-7 Rifle, 8 Handle, 9 Launcher, 10-13
+thrown and mines. It was converted to Skyrim's `GetEquippedItemType(1)`, which
+numbers weapons its own way (1 sword ... 7 bow, 12 crossbow), and a converted
+gun is a crossbow ([guns become crossbows](tes4_export_falloutnv.md#weapons-guns-become-crossbows)).
+So Back in the Saddle could not finish: each of Sunny's target bottles
+(`VCG02TargetSCRIPT`, on the MISC `VCG02Bottle`) counts a hit only when
+`Player.GetWeaponAnimType > 3 && < 9`, and the varmint rifle (type 5) read 12.
+
+The importer writes one FormList per type, `TES4WeapAnimType1` to
+`TES4WeapAnimType13`, each holding the plugin's weapons of that type
+(`DNAM.FalloutAnimType`); every list is written, empty or not, so a property
+always binds. The converted call is the sum over the types of the type times
+`List.HasForm(actor.GetEquippedWeapon()) as Int`, which is the weapon's type,
+or 0 with no weapon, Fallout's Hand to Hand. That is 13 terms, but New Vegas
+calls it at only 11 sites, so no helper script is added (a shared
+`TES4Polyfill` change would rebuild every game's scripts).
+FalloutNV.esm's 261 weapons: 33 type 0, 29 type 1, 22 type 2, 37 type 3, 10
+type 4, 32 type 5, 25 type 6, 7 type 7, 12 type 8, 31 type 9, and 23 thrown or
+mines.
+
 ### <a id="fnv-objective-commands"></a>FO3/FNV objective commands
 
 FNV drives the journal through objectives rather than log entries
@@ -5600,6 +5745,55 @@ calls in FalloutNV.esm, 5,889 target a different quest. The guard needs a
 literal index (6,625 of 6,627 are; the 2 variables pass through) and stays
 silent for a quest that authors no objectives at all, so a quest whose
 objectives this pipeline has not converted is never second-guessed.
+
+## <a id="info-fragment-scripts"></a>INFO fragment scripts
+
+**Code:** `script_convert/pipeline.py:_info_batch`, `_info_psc`, `_info_bodies`
+
+An INFO that needs a fragment ([which ones](#info-fragment-stutter)) gets a
+script `<prefix>_TIF__<fid>`, and the importer writes the matching VMAD
+(`build_vmad_info_fragment`, flags 0x03):
+
+    Fragment_1 (OnBegin)  TES4Polyfill.LineBegan(akSpeakerRef, <length>)
+                          [FO3/FNV Begin script] [turn handoff]
+    Fragment_0 (OnEnd)    [unlock globals] [result script]
+                          [service menu]  TES4Polyfill.LineEnded(akSpeakerRef)
+
+The Begin and End hooks are how a converted `set T to Say topic` learns that
+the engine has started the line and how long it is (`TES4Polyfill.SayLine`).
+They carry only the speaker, so no property is bound and no INFO can be missed.
+`<length>` is the line's measured voice length, 0 when it has no voice file.
+
+- A TES4 result script goes in the End fragment. Oblivion ran an INFO's result
+  when the line finished: the CS wiki's own scripted-conversation recipe writes
+  `set Q.convTimer to <pause>` in results as an after-line pause, which only
+  works at the end.
+- Unlock globals are set for AddTopic revealer INFOs (`info_reveals`), and the
+  barter or training menu opens for service topics (`service_topics`). Both
+  must match the VMADs the importer writes.
+- Property declarations merge case-variant keys, most specific type wins, the
+  same rule the QUST-stage and standalone emitters apply. Without it, a QUST
+  SCRO preloaded as the generic `Quest` could win over the specific script
+  type under a differently cased EditorID, and every cross-script variable
+  read through it failed ("field or property StartTimer not found").
+
+### <a id="fallout-begin-scripts"></a>An FO3/FNV Begin script runs when the line starts
+
+An FO3/FNV INFO carries a Begin script and an End script
+([the export](tes4_export_falloutnv.md#info-end-script)). The GECK runs Begin
+when the line starts and End when it finishes. For a Fallout export
+(`export_is_fallout`: a record type only FO3/FNV write), `_info_bodies`
+converts the two separately, Begin into Fragment_1 after `LineBegan`, End into
+Fragment_0. A TES4 INFO keeps its one script in Fragment_0.
+
+Both used to land in Fragment_0, which stalled New Vegas's opening. The couch
+trigger (`VCG01DocMitchellCouchTriggerSCRIPT`) force-greets Doc Mitchell every
+two seconds until `VCG01.bBeganTest` is 1, and the psych test's first line
+(INFO `0010558F`) sets it in its Begin script. Run at the end of that line,
+the flag came late, the loop greeted again mid-conversation, and after the
+test Doc greeted once more with his fallback line ("The sooner you finish
+these tests the sooner you can get out of here") instead of moving on to the
+trait form.
 
 ## <a id="script-output-dir"></a>The script output directory: wiped, static scripts by ownership
 
