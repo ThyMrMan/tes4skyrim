@@ -6,6 +6,7 @@ import struct
 
 from tes4_export.record_types.character_falloutnv import (emit_class_deltas, export_ACTORVALUE,
                                                           export_PERK, export_REPUTATION)
+from tes4_export.record_types.actors import export_FACT
 from tes4_export.tes4_reader import Record, Subrecord
 from tes5_import.character_data_falloutnv import actor_value_index, character_data, game_of
 
@@ -110,6 +111,31 @@ def test_new_vegas_skills_classes_and_settings():
     assert settings['iLevelUpSkillPointsBase'] == 11 and settings['iXPRewardPickLockEasy'] == 10
     assert settings['iLevelsPerPerk'] == 2 and 'fUnrelated' not in settings
     assert doc['standings'] == [{'name': 'Karma', 'skyrim': None}]
+
+
+def _actor(formid, karma, template=0, flags=0):
+    """An exported NPC_ row with its karma and trait template."""
+    row = {'FormID': f'{formid:08X}', 'ACBS.Karma': str(karma), 'ACBS.TemplateFlags': str(flags)}
+    return row | ({'TPLT.Template': f'{template:08X}'} if template else {})
+
+
+def test_factions_and_the_alignment_each_actors_karma_gives():
+    """FACT's crime flag and reputation link; karma sorts by fAlign*, through trait templates and agreeing lists."""
+    lines = export_FACT(_record('FACT', ('EDID', _z('NCR')), ('DATA', bytes([0, 1, 0, 0])),
+                                ('WMI1', struct.pack('<I', 0xF43DD))))
+    assert 'DATA.Flags=0' in lines and 'DATA.Flags2=1' in lines and 'WMI1.Reputation=000F43DD' in lines
+    facts = [{'FormID': '00000010', 'DATA.Flags2': '1', 'WMI1.Reputation': '000F43DD'},
+             {'FormID': '00000011', 'DATA.Flags2': '0'}]
+    npcs = [_actor(0x100, -900), _actor(0x101, -500), _actor(0x102, 0, template=0x300, flags=1),
+            _actor(0x103, 900, template=0x100), _actor(0x104, 0, template=0x301, flags=1)]
+    lists = [{'FormID': '00000300', 'EntryCount': '2', 'Entry[0].FormID': '00000100', 'Entry[1].FormID': '00000100'},
+             {'FormID': '00000301', 'EntryCount': '2', 'Entry[0].FormID': '00000100', 'Entry[1].FormID': '00000101'}]
+    doc = character_data({'AVIF': AVIFS, 'FACT': facts, 'NPC_': npcs, 'LVLN': lists}, [], 'FalloutNV.esm',
+                         'falloutnv')
+    assert doc['factions'] == [{'form': ['FalloutNV.esm', 0x10], 'crime': True, 'evil': False,
+                                'reputation': ['FalloutNV.esm', 0xF43DD]}]
+    assert doc['alignments'] == {'very_evil': [['FalloutNV.esm', 0x100], ['FalloutNV.esm', 0x102]],
+                                 'evil': [['FalloutNV.esm', 0x101]], 'very_good': [['FalloutNV.esm', 0x103]]}
 
 
 def test_a_dependent_names_skills_through_its_master():

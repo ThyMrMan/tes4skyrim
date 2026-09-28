@@ -8,5 +8,5 @@ FalloutRules_Main Property Rules Auto
 
 Event OnStoryKillActor(ObjectReference akVictim, ObjectReference akKiller, Location akLocation, Int aiCrimeStatus, Int aiRelationshipRank)
 	Stop()
-	Rules.NoteKill(akVictim as Actor, akKiller as Actor)
+	Rules.NoteKill(akVictim as Actor, akKiller as Actor, aiCrimeStatus)
 EndEvent
