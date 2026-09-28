@@ -147,7 +147,7 @@ def stage(ctx, call) -> str:
 
 
 @command('startquest', 'stopquest', 'getquestrunning', 'completequest',
-         'isquestcompleted')
+         'isquestcompleted', 'getquestcompleted', 'getqc', 'getqr')
 def quest_state(ctx, call) -> str:
     """Quest lifecycle.
 
@@ -177,7 +177,9 @@ def quest_state(ctx, call) -> str:
     papyrus = {'startquest': 'Start', 'stopquest': 'Stop',
                'getquestrunning': 'IsRunning',
                'completequest': 'CompleteQuest',
-               'isquestcompleted': 'IsCompleted'}[call.name]
+               'isquestcompleted': 'IsCompleted',
+               'getquestcompleted': 'IsCompleted', 'getqc': 'IsCompleted',
+               'getqr': 'IsRunning'}[call.name]
     return f'{prop}.{papyrus}()'
 
 
@@ -426,7 +428,7 @@ def play_group(ctx, call) -> str:
         sig = ctx.xref.get_base_signature(call.ref) if ctx.xref else ''
         is_actor = sig in ('NPC_', 'CREA', 'ACHR', 'ACRE') if sig else True
     else:
-        is_actor = call.extends == 'Actor'
+        is_actor = call.extends in ('Actor', 'TopicInfo', 'ActiveMagicEffect')
 
     if is_actor:
         # SendAnimationEvent takes an ObjectReference, and TES4 aims PlayGroup
@@ -1391,6 +1393,22 @@ def _unmapped_actor_value(ctx, call, raw: str) -> str:
     return f';Fallout actor value {raw} has no Skyrim equivalent -- write dropped'
 
 
+#: FO3/FNV karma, kept in a global conditions also read.
+_KARMA = 'TES4Karma'
+
+
+def _karma_call(ctx, call) -> str:
+    """Karma as the TES4Karma global: a read, a Mod, or a Set.
+
+    See: docs/commentary/tes5_import_character_data.md#fallout-reputation
+    """
+    ctx.sc.property_refs.setdefault(_KARMA, 'GlobalVariable')
+    if call.name in ACTOR_VALUE_READ_FUNCTIONS:
+        return f'{_KARMA}.GetValue()'
+    papyrus = 'SetValue' if call.name in _AV_SET else 'Mod'
+    return f'{_KARMA}.{papyrus}({call.arg(1)})' if len(call) > 1 else ''
+
+
 @command(*sorted(ACTOR_VALUE_FUNCTIONS))
 def actor_value(ctx, call) -> str:
     """Get/Set/Mod ActorValue: the AV name is a quoted string in Papyrus, the
@@ -1406,6 +1424,8 @@ def actor_value(ctx, call) -> str:
         return _attribute_call(ctx, call, raw)
     if raw.lower() in FALLOUT_UNMAPPED_ACTOR_VALUES:
         return _unmapped_actor_value(ctx, call, raw)
+    if raw.lower() == 'karma':
+        return _karma_call(ctx, call)
     av = _av_name(raw, call)
     args = [f'"{av}"']
     if len(call) > 1:

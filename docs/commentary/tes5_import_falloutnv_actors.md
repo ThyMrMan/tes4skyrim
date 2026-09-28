@@ -49,8 +49,7 @@ agree about depth limits and cycles.
 Copying the inherited model onto the stub once, before any of them run, fixes
 all of them with no other change — the stub then looks like an ordinary actor
 that happens to share a mesh with its template, which is what it is. Only the
-categories the flags actually claim are copied, so a stub that overrides its
-own model keeps it.
+categories the flags actually claim are copied.
 
 ## Flattening is the only channel
 
@@ -115,6 +114,23 @@ Six of the categories are **counted arrays** (`ItemCount`/`Item[i]`,
 `_copy_array` takes every entry and rewrites the count, because a partial list
 is worse than none — the engine reads the count and would index past what was
 copied.
+
+<a id="a-claimed-category-is-final"></a>**A claimed category is final.** The
+copier first skipped a category whenever the stub already had its lead field,
+so that "a stub that overrides it keeps its own". But a stub cannot override a
+category it claims: the engine takes that category from the template, and the
+CK hides the stub's fields for it. Several of those fields are always written
+anyway: `ACBS.Level` and the `AIDT` block sit in fixed-size structs every
+record carries. So Stats and AI Data never flattened: the second played run's
+Goodsprings coyotes (`VSpawnTier1CoyoteMed`, templating through
+`VEncTier1CoyoteMed` onto the level-3 `VCrTier1CoyoteMed`) reported level 1
+and paid 1 XP. Each claimed category now comes whole from the nearest actor
+down the chain that defines it itself, meaning it does not claim that bit from
+a template of its own. Over FalloutNV.esm, stub values that had wrongly stayed:
+level 1,127, aggression 717, confidence 854, aggro radius 191, health 543,
+item lists 929, models 638, names 8. A chain through a leveled list with
+several entries still takes the first entry, where the game picks one per
+spawn.
 
 The field-to-bit mapping is xEdit's own, read from the `wbActorTemplateUse*`
 visibility predicates each subrecord declares in `wbDefinitionsFNV.pas:6830`

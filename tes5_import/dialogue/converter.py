@@ -48,6 +48,8 @@ from ..base.text_reader import (get_formid_index_offset, info_result_script,
                                 remap_formid)
 from ..base.constants import ENGINE_GLOBAL_FORMIDS
 from .say_topics import SAY_TOPIC_DISPOSITIONS
+from .topics_falloutnv import reset_ticks, shown_text
+from ..record_types.world_falloutnv import is_fallout_source
 from ..base.equivalents import TES4_ITEM_FORMID_TO_SKYRIM
 from ..record_types.common import (
     get_formid,
@@ -464,7 +466,7 @@ def convert_DIAL(rec: dict, *, info_count: int, dlbr_fid: int,
     edid = edid_override if edid_override is not None else get_str(rec, 'EditorID')
     if edid:
         subs += pack_string_subrecord('EDID', edid)
-    full = get_str(rec, 'FULL')
+    full = shown_text(get_str(rec, 'FULL'))
     if full:
         subs += pack_string_subrecord('FULL', full)
     subs += pack_subrecord('PNAM', struct.pack('<f', priority))
@@ -507,6 +509,9 @@ def convert_DIAL(rec: dict, *, info_count: int, dlbr_fid: int,
 # (0x08 Run Immediately and 0x40 Run for Rumors have no faithful TES5 meaning.)
 _ENAM_COMPATIBLE_MASK = 0x37
 
+#: TES5 ENAM Invisible Continue: after this line, dialogue goes into its one linked topic unasked.
+_INVISIBLE_CONTINUE = 0x40
+
 # "Hours until reset" for an ambient bark line, in the engine's stored form
 # trunc(days * 65535).  0.5 hours is vanilla Skyrim's dominant choice: 2809 of
 # its 5287 HELO lines (53%) use exactly this value.
@@ -515,71 +520,73 @@ _BARK_RESET_HOURS = 0.5
 _BARK_RESET_TICKS = int(_BARK_RESET_HOURS / 24.0 * 65535)   # 1365
 
 
-def _build_info_script_properties(result_script: str, xref,
-                                  well_known_props: dict = None) -> dict:
-    """Build VMAD property bindings for an INFO result script via ScriptConverter.
+def fragment_script_properties(result_script: str, xref,
+                               well_known_props: dict = None) -> dict:
+    """{property: FormID} for the properties a fragment's converted script declares.
 
-    Only properties the generated .psc actually DECLARES are emitted.
-    `well_known_props` is a name->FormID REGISTRY of synthesized records
-    (TES4Unlock_*, TES4Msg_*, TES4Fame, ...) that resolve_property_formid
-    cannot see because they exist only in the output; it is looked up per
-    declared property, never merged wholesale — the registry holds ~1,880
-    entries and copying it into every fragment wrote a 70 KB VMAD onto 4,985
-    INFOs (a third of a gigabyte of properties no script declares, each one
-    logged by the engine as "cannot be initialized because the script no
-    longer contains that property"). Same per-property lookup object_scripts
-    already does.
+    `well_known_props` names records that exist only in the output
+    (TES4Unlock_*, TES4Msg_*...); it is looked up per declared property, never
+    merged wholesale.
+    See: docs/commentary/tes5_import_dialogue.md#well-known-registry
     """
     if not xref:
         return {}
     from script_convert.converter import ScriptConverter
-    offset = get_formid_index_offset()
     try:
         conv = ScriptConverter(xref)
         conv.convert_fragment(result_script, 'TopicInfo')
     except Exception:
         return {}
+    return bind_script_properties(conv._property_refs, xref, well_known_props)
+
+
+def bind_script_properties(property_refs: dict, xref,
+                           well_known_props: dict = None) -> dict:
+    """{property: FormID} for a converted script's declared {property: type}.
+
+    Papyrus names are case-insensitive, so two spellings bind once, as the
+    script declares them once.
+    See: docs/commentary/tes5_import_dialogue.md#well-known-registry
+    """
+    offset = get_formid_index_offset()
+    props, seen = {}, set()
+    for prop_edid, ptype in property_refs.items():
+        fid = _property_formid(prop_edid, ptype, xref, well_known_props or {}, offset)
+        if fid and prop_edid.lower() not in seen:
+            seen.add(prop_edid.lower())
+            props[prop_edid] = fid
+    return props
+
+
+def _property_formid(prop_edid: str, ptype: str, xref, well_known: dict,
+                     offset: int) -> int:
+    """The output FormID one declared property binds to, or 0 when none.
+
+    The player and engine globals keep their fixed ids, output-only records
+    come from the registry, and a reference-typed property naming an actor,
+    activator or light BASE binds that base's one placed reference (the VM
+    refuses a base there).
+    See: docs/commentary/tes5_import_dialogue.md#well-known-registry
+    """
     from script_convert.constants import (resolve_property_formid,
                                           wants_placed_reference)
-    well_known = well_known_props or {}
-    props = {}
-    for prop_edid, ptype in conv._property_refs.items():
-        low = prop_edid.lower()
-        if low in ('player', 'playerref'):
-            props[prop_edid] = (_PLAYER_BASE_FID if ptype == 'ActorBase'
-                                else _PLAYER_FORMID)
-            continue
-        # Engine globals keep their vanilla FormID — see
-        # object_scripts.ENGINE_GLOBAL_FORMIDS.
-        if low in ENGINE_GLOBAL_FORMIDS:
-            props[prop_edid] = ENGINE_GLOBAL_FORMIDS[low]
-            continue
-        # Synthesized output-only records are already remapped in the registry.
-        if prop_edid in well_known:
-            props[prop_edid] = well_known[prop_edid]
-            continue
-        fid_hex = resolve_property_formid(xref, prop_edid)
-        if not fid_hex:
-            continue
-        # A reference-typed property naming a BASE means the placed instance;
-        # the VM refuses an NPC_/CREA/ACTI/LIGH base into it and the property
-        # reads None. Bind the base's one placed ref instead (see
-        # constants.wants_placed_reference).
-        if wants_placed_reference(ptype) and \
-                xref.record_type.get(fid_hex, '') in ('NPC_', 'CREA',
-                                                      'ACTI', 'LIGH'):
-            ref_hex = xref.unique_placed_ref(fid_hex)
-            if ref_hex:
-                fid_hex = ref_hex
-        try:
-            raw_fid = int(fid_hex, 16)
-        except (ValueError, TypeError):
-            continue
-        if raw_fid == 0:
-            continue
-        props[prop_edid] = (TES4_ITEM_FORMID_TO_SKYRIM.get(raw_fid)
-                            or remap_formid(raw_fid, offset))
-    return props
+    low = prop_edid.lower()
+    if low in ('player', 'playerref'):
+        return _PLAYER_BASE_FID if ptype == 'ActorBase' else _PLAYER_FORMID
+    if low in ENGINE_GLOBAL_FORMIDS:
+        return ENGINE_GLOBAL_FORMIDS[low]
+    if prop_edid in well_known:
+        return well_known[prop_edid]
+    fid_hex = resolve_property_formid(xref, prop_edid)
+    if fid_hex and wants_placed_reference(ptype) and xref.record_type.get(
+            fid_hex, '') in ('NPC_', 'CREA', 'ACTI', 'LIGH'):
+        fid_hex = xref.unique_placed_ref(fid_hex) or fid_hex
+    try:
+        raw_fid = int(fid_hex or '0', 16)
+    except (ValueError, TypeError):
+        return 0
+    return raw_fid and (TES4_ITEM_FORMID_TO_SKYRIM.get(raw_fid)
+                        or remap_formid(raw_fid, offset))
 
 
 # Shared static fragment scripts (script_convert/static_scripts) attached to
@@ -598,16 +605,16 @@ def convert_INFO(rec: dict, *, injected_ctdas: bytes = b'',
                  xref=None, reveal_props: dict = None,
                  service_menu: str = '', bark_dial_fids: set = None,
                  menu_topic_fids=(), script_vars: dict = None,
-                 speaker: bytes = b'') -> bytes:
-    """INFO record: EDID [VMAD] ENAM CNAM [TCLT...] [TRDT NAM1 NAM2 NAM3]* CTDAs [ANAM ONAM].
+                 speaker: bytes = b'', follow_up: int = 0) -> bytes:
+    """INFO record: EDID [VMAD] ENAM CNAM [TCLT...] [TRDT NAM1 NAM2 NAM3]* CTDAs [RNAM] [ANAM ONAM].
 
-    injected_ctdas: packed Skyrim-required gates. reveal_props
-    ({global_name: GLOB formid}): AddTopic globals its End fragment sets.
-    service_menu ('barter'/'training'): the menu its fragment opens.
-    bark_dial_fids / menu_topic_fids (bark INFOs only): the TCLT filter's
-    inputs, see _info_tclt.  speaker: a speak-as line's packed ANAM/ONAM.
+    RNAM is the FO3/FNV prompt; follow_up, its follow-up topic. reveal_props:
+    AddTopic globals its End fragment sets. service_menu: the menu its
+    fragment opens. bark_dial_fids / menu_topic_fids: the bark TCLT filter's
+    inputs. speaker: a speak-as line's packed ANAM/ONAM.
 
     See: docs/commentary/tes5_import_dialogue.md#info-tclt-choice-filter
+    See: docs/commentary/tes5_import_dialogue.md#fallout-follow-ups
     """
     subs = b''
     edid = get_str(rec, 'EditorID')
@@ -615,11 +622,16 @@ def convert_INFO(rec: dict, *, injected_ctdas: bytes = b'',
         subs += pack_string_subrecord('EDID', edid)
     subs += _info_vmad(rec, reveal_props, service_menu, xref,
                        well_known_props)
-    subs += _info_enam(rec, bark_dial_fids)
+    subs += _info_enam(rec, bark_dial_fids, follow_up)
     subs += pack_subrecord('CNAM', struct.pack('<B', 0))
     subs += _info_tclt(rec, bark_dial_fids, menu_topic_fids)
+    if follow_up:
+        subs += pack_formid_subrecord('TCLT', follow_up)
     subs += _info_responses(rec)
     subs += _info_conditions(rec, injected_ctdas, script_vars)
+    prompt = shown_text(get_str(rec, 'Prompt'))
+    if prompt:
+        subs += pack_string_subrecord('RNAM', prompt)
     subs += speaker
     return pack_record('INFO', get_formid(rec, 'FormID'),
                        get_int(rec, 'RecordFlags'), subs)
@@ -654,7 +666,7 @@ def _info_vmad(rec: dict, reveal_props, service_menu: str, xref,
     if not (info_fid and info_needs_fragment(rec, _reveals, _services)):
         return b''
     from script_convert.pipeline import build_vmad_info_fragment
-    prop_vals = (_build_info_script_properties(result_script, xref,
+    prop_vals = (fragment_script_properties(result_script, xref,
                                                well_known_props)
                  if code_lines else {})
     if reveal_props:
@@ -663,55 +675,44 @@ def _info_vmad(rec: dict, reveal_props, service_menu: str, xref,
         info_fid, property_values=prop_vals or None))
 
 
-def _info_enam(rec: dict, bark_dial_fids) -> bytes:
-    """ENAM (Flags U16 + Reset U16) from TES4 DATA.Flags.
+def _info_enam(rec: dict, bark_dial_fids, follow_up: int = 0) -> bytes:
+    """ENAM (Flags U16 + Reset U16) from TES4 DATA.Flags; Invisible Continue with a follow-up.
 
-    Reset is the re-play lockout TES4 has no field for; an ambient bark line
-    gets _BARK_RESET_TICKS, except SAY-ONCE (0x04) lines, which are already
-    permanently locked after one play.
+    Reset is the re-play lockout. TES4 has no field for it: an ambient bark
+    line gets _BARK_RESET_TICKS, except SAY-ONCE (0x04) lines, which are
+    already locked after one play. FO3/FNV author it (Say Once a Day).
 
     See: docs/commentary/tes5_import_dialogue.md#info-enam-reset-timer
     """
     tes4_flags = get_int(rec, 'DATA.Flags')
     reset = 0
-    if bark_dial_fids is not None and not (tes4_flags & 0x04):
+    if is_fallout_source():
+        reset = reset_ticks(rec)
+    elif bark_dial_fids is not None and not (tes4_flags & 0x04):
         reset = _BARK_RESET_TICKS
-    return pack_subrecord('ENAM', struct.pack(
-        '<HH', tes4_flags & _ENAM_COMPATIBLE_MASK, reset))
+    flags = tes4_flags & _ENAM_COMPATIBLE_MASK | (_INVISIBLE_CONTINUE if follow_up else 0)
+    return pack_subrecord('ENAM', struct.pack('<HH', flags, reset))
 
 
 def _info_tclt(rec: dict, bark_dial_fids, menu_topic_fids=()) -> bytes:
     """TCLT choice links (follow-up topics), in source order.
 
-    A bark INFO keeps only choices pointing at a CONVERSATION topic that has
-    no top-level branch; a choice into another bark (split/merged, so the link
-    would dangle), into a menu topic, or into a zero-INFO topic is dropped.
+    A choice into a zero-INFO topic is dropped; a bark INFO also drops choices
+    into another bark (split/merged, so the link would dangle). A bark's links
+    replace the menu, so it keeps them only when one leads to a topic with no
+    top-level branch, and then keeps its menu topics too.
 
     See: docs/commentary/tes5_import_dialogue.md#info-tclt-choice-filter
     """
-    def _keep_choice(cfid: int) -> bool:
-        """True when this choice target survives the bark/menu/empty filters."""
-        if not cfid:
-            return False
-        if bark_dial_fids is not None and (cfid in bark_dial_fids
-                                           or cfid in menu_topic_fids):
-            return False
-        if cfid in EMPTY_DIAL_FIDS:
-            return False
-        return True
-
-    out = b''
-    choice_count = get_int(rec, 'ChoiceCount')
-    if choice_count > 0:
-        for i in range(choice_count):
-            cfid = get_formid(rec, f'Choice[{i}]')
-            if _keep_choice(cfid):
-                out += pack_formid_subrecord('TCLT', cfid)
-    else:
-        cfid = get_formid(rec, 'TCLT.Choice')
-        if _keep_choice(cfid):
-            out += pack_formid_subrecord('TCLT', cfid)
-    return out
+    count = get_int(rec, 'ChoiceCount')
+    choices = ([get_formid(rec, f'Choice[{i}]') for i in range(count)] if count > 0
+               else [get_formid(rec, 'TCLT.Choice')])
+    choices = [c for c in choices if c and c not in EMPTY_DIAL_FIDS]
+    if bark_dial_fids is not None:
+        choices = [c for c in choices if c not in bark_dial_fids]
+        if all(c in menu_topic_fids for c in choices):
+            choices = []
+    return b''.join(pack_formid_subrecord('TCLT', c) for c in choices)
 
 
 def _info_responses(rec: dict) -> bytes:
@@ -726,7 +727,7 @@ def _info_responses(rec: dict) -> bytes:
     for i in range(rc):
         emotion = get_int(rec, f'Response[{i}].EmotionType')
         emotion_val = max(0, min(100, get_int(rec, f'Response[{i}].EmotionValue')))
-        text = get_str(rec, f'Response[{i}].ResponseText')
+        text = shown_text(get_str(rec, f'Response[{i}].ResponseText'))
         actor_notes = get_str(rec, f'Response[{i}].ActorNotes')
         resp_num = get_int(rec, f'Response[{i}].ResponseNumber') or (i + 1)
         out += pack_subrecord('TRDT', struct.pack('<IiI B3x I B3x',
@@ -781,12 +782,12 @@ def _packed_condition_pairs(packed: bytes) -> list:
 # ===========================================================================
 
 def make_dlbr(fid: int, edid: str, quest_fid: int, dial_fid: int,
-              top_level: bool) -> bytes:
-    """DLBR — Dialog Branch. top_level controls menu visibility vs link-only."""
+              top_level: bool, blocking: bool = False) -> bytes:
+    """DLBR — Dialog Branch: top-level (listed), link-only, or blocking (said on dialogue start)."""
     subs = pack_string_subrecord('EDID', edid)
     subs += pack_formid_subrecord('QNAM', quest_fid)
     subs += pack_uint32_subrecord('TNAM', 0)            # Player
-    subs += pack_uint32_subrecord('DNAM', 1 if top_level else 0)
+    subs += pack_uint32_subrecord('DNAM', 2 if blocking else (1 if top_level else 0))
     subs += pack_formid_subrecord('SNAM', dial_fid)
     return pack_record('DLBR', fid, 0, subs)
 
@@ -916,12 +917,14 @@ def build_npc_to_vtyp_map(by_type: dict, num_new_masters: int,
     """
     from ..base.equivalents import TES4_RACE_FID_TO_EDID, VOICE_TYPE_MAP
     from ..base.owned_records import FALLOUT_VTYP_BY_EDID
+    from ..record_types.actors_falloutnv import actor_index, inherited_voice
     authored_vtyp = {get_formid(v, 'FormID') & 0x00FFFFFF: fid
                      for v in by_type.get('VTYP', ())
                      for fid in (FALLOUT_VTYP_BY_EDID.get(
                          (get_str(v, 'EditorID') or '').strip().lower()),)
                      if fid}
     race_voice, race_edids = _index_race_voices(by_type)
+    index = actor_index(by_type, master_export) if authored_vtyp else {}
     npc_to_vtyp = {}
     actor_sources = [((k, r) for k, r in (master_export or {}).items()
                       if r.get('Signature') in ('NPC_', 'CREA')),
@@ -933,7 +936,8 @@ def build_npc_to_vtyp_map(by_type: dict, num_new_masters: int,
                                     is_own_id=True)
         except (TypeError, ValueError):
             continue
-        vtyp = authored_vtyp.get(get_formid(rec, 'VTCK.Voice') & 0x00FFFFFF)
+        voice = get_formid(rec, 'VTCK.Voice') or inherited_voice(rec, index)
+        vtyp = authored_vtyp.get(voice & 0x00FFFFFF)
         if not vtyp:
             gender = 'Female' if (get_int(rec, 'ACBS.Flags') & 1) else 'Male'
             race_fid = get_formid(rec, 'RNAM.Race') & 0x00FFFFFF

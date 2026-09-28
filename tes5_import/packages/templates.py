@@ -30,7 +30,10 @@ instance of that template, not invented).  Slots we drive from TES4 data are
 overwritten by the converter and their default is ignored.
 """
 
+import struct
 from dataclasses import dataclass, field
+
+from ..base.writer import pack_string_subrecord, pack_subrecord
 
 # ANAM type strings (the 4-byte ANAM payload is a zstring)
 T_LOCATION = 'Location'          # payload subrecord: PLDT
@@ -287,13 +290,12 @@ ACTIVATE = Template(
     slots={'target': 0},
 )
 
-# --- SitTarget (000A9277) — 276 instances --------------------------------
-# procedures: Wait.  Sits at a *specific* furniture ref.
+#: SitTarget (000A9277): sit at one furniture ref until conditioned out (wait 0, as all 276 vanilla instances).
 SIT_TARGET = Template(
     formid=0x000A9277, edid='SitTarget', xnam=17, version=2,
     index_list=(16, 3, 4),
     inputs=(T_SINGLEREF, T_FLOAT, T_BOOL),
-    defaults={1: 300.0, 2: 0},
+    defaults={1: 0.0, 2: 0},
     slots={'target': 0, 'wait_time': 1},
 )
 
@@ -331,5 +333,128 @@ PATROL = Template(
     index_list=(0, 1, 2, 4, 6, 8),
     inputs=(T_SINGLEREF, T_FLOAT, T_BOOL, T_BOOL, T_BOOL, T_BOOL),
     defaults={1: 0.0, 2: 1, 3: 1, 4: 0, 5: 0},
-    slots={'target': 0, 'radius': 1},
+    slots={'target': 0, 'radius': 1, 'repeatable': 2, 'start_at_nearest': 3,
+           'ride_horse': 4},
 )
+
+#: GuardPost (0001C9FF), from SolitudeOpeningPlatformGuardMove: wait at [0], stay inside the area [1].
+GUARD_POST = Template(
+    formid=0x0001C9FF, edid='GuardPost', xnam=4, version=2,
+    index_list=(3, 1),
+    inputs=(T_LOCATION, T_LOCATION),
+    defaults={1: (3, 0, 500)},
+    slots={'wait_location': 0, 'restricted_area': 1},
+)
+
+#: Say (0001CCB6), from PlayerFollowerSayDismissPackage: say a topic to a target, then finish speaking.
+SAY = Template(
+    formid=0x0001CCB6, edid='Say', xnam=6, version=5,
+    index_list=(0, 1, 2, 3, 4, 5),
+    inputs=(T_TOPIC, T_SINGLEREF, T_BOOL, T_LOCATION, T_BOOL, T_BOOL),
+    defaults={1: (0, 0x14, 0), 2: 1, 3: (2, 0, 32), 4: 1, 5: 0},
+    slots={'topic': 0, 'target': 1, 'look_at': 2, 'location': 3},
+)
+
+#: UseWeapon (0001C338), from MGRArniel04UseWeaponPackage; slot names follow the root's BNAMs by UNAM.
+USE_WEAPON = Template(
+    formid=0x0001C338, edid='UseWeapon', xnam=37, version=13,
+    index_list=(0, 1, 2, 3, 4, 28, 30, 34, 5, 6, 32, 7, 8, 9, 10, 11, 12, 13,
+                14, 15, 16, 17, 19, 21, 23, 25, 35, 36),
+    inputs=(T_LOCATION, T_TARGETSEL, T_OBJECTLIST, T_LOCATION, T_SINGLEREF,
+            T_SINGLEREF, T_INT) + (T_BOOL,) * 8 + (T_INT, T_FLOAT, T_FLOAT,
+                                                    T_INT, T_INT, T_FLOAT,
+                                                    T_BOOL, T_BOOL, T_BOOL,
+                                                    T_INT, T_BOOL, T_BOOL,
+                                                    T_BOOL),
+    defaults={0: (12, 0, 0), 1: (2, 11, 0), 2: 0, 3: (2, 0, 32), 5: (6, 0, 0),
+              6: 0, 7: 0, 8: 0, 9: 0, 10: 0, 11: 1, 12: 0, 13: 1, 14: 0,
+              15: 0, 16: 0.0, 17: 0.0, 18: 0, 19: 0, 20: 0.0, 21: 0, 22: 0,
+              23: 1, 24: 0, 25: 0, 26: 0, 27: 1},
+    slots={'weapon_type': 1, 'location': 3, 'target': 4, 'trigger_ref': 5,
+           'always_hit': 8, 'do_no_damage': 9, 'hold_when_blocked': 11,
+           'crouch_to_reload': 12, 'never_end': 13, 'pause_between': 14,
+           'end_after_barrages': 15, 'min_pause': 16, 'max_pause': 17,
+           'min_attacks': 18, 'max_attacks': 19},
+)
+
+
+# ---------------------------------------------------------------------------
+# Data inputs: one instance's values, packed in its template's order
+# ---------------------------------------------------------------------------
+
+def f32(v: float) -> bytes:
+    """A little-endian f32."""
+    return struct.pack('<f', float(v))
+
+
+def u32(v: int) -> bytes:
+    """A little-endian u32, wrapped to 32 bits."""
+    return struct.pack('<I', int(v) & 0xFFFFFFFF)
+
+
+def location_payload(ltype: int, target: int, radius: int) -> bytes:
+    """A PLDT payload: (type u32, target/formid i32, radius i32)."""
+    return struct.pack('<iIi', ltype, target, radius)
+
+
+def null_location() -> bytes:
+    """Type 3, "near editor location": the harmless vanilla default."""
+    return struct.pack('<iIi', 3, 0, 0)
+
+
+def target_payload(ttype: int, target: int, count: int) -> bytes:
+    """A PTDA payload: (type u32, target/formid i32, count i32)."""
+    return struct.pack('<iIi', ttype, target, count)
+
+
+def null_target() -> bytes:
+    """Type 6, Self: vanilla's filler, never a FormID-0 reference the CK rejects."""
+    return struct.pack('<iIi', 6, 0, 0)
+
+
+class Inputs:
+    """Positional data-input values for one template instance.
+
+    Starts from the template's vanilla defaults so every slot the converter
+    does not drive still carries a value a real Skyrim package would carry.
+    A Location or target slot also takes a (type, target, radius/count) tuple.
+    """
+
+    def __init__(self, template: Template):
+        self.t = template
+        self.values = dict(template.defaults)
+
+    def set(self, name: str, value):
+        """Set the named slot."""
+        self.values[self.t.slot(name)] = value
+
+    def set_slot(self, idx: int, value):
+        """Set a slot by its position."""
+        self.values[idx] = value
+
+    def emit(self) -> bytes:
+        """ANAM(+CNAM/PLDT/PTDA/PDTO) per slot, then the root's UNAM list and XNAM."""
+        out = b''
+        for i, atype in enumerate(self.t.inputs):
+            out += pack_string_subrecord('ANAM', atype) + _slot_payload(atype, self.values.get(i))
+        for idx in self.t.index_list:
+            out += pack_subrecord('UNAM', struct.pack('<b', idx))
+        return out + pack_subrecord('XNAM', bytes([self.t.xnam]))
+
+
+def _slot_payload(atype: str, v) -> bytes:
+    """The subrecord carrying one data input's value, by its ANAM type."""
+    if atype == T_LOCATION:
+        v = location_payload(*v) if isinstance(v, tuple) else v
+        return pack_subrecord('PLDT', v if isinstance(v, bytes) else null_location())
+    if atype in (T_SINGLEREF, T_TARGETSEL):
+        v = target_payload(*v) if isinstance(v, tuple) else v
+        return pack_subrecord('PTDA', v if isinstance(v, bytes) else null_target())
+    if atype == T_TOPIC:
+        ptype, pval = v if isinstance(v, tuple) else (0, v)
+        return pack_subrecord('PDTO', struct.pack('<II', ptype, int(pval or 0)))
+    if atype == T_BOOL:
+        return pack_subrecord('CNAM', bytes([1 if v else 0]))
+    if atype == T_FLOAT:
+        return pack_subrecord('CNAM', f32(v or 0.0))
+    return pack_subrecord('CNAM', u32(v or 0))

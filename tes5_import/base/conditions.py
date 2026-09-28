@@ -24,10 +24,11 @@ from .ctda_bool import bool_outcomes
 from .equivalents import TES4_ITEM_FORMID_TO_SKYRIM
 from .conditions_falloutnv import (FALLOUT_CTDA_SIZE, fallout_actor_value,
                                    fallout_ctda, fallout_function,
-                                   fallout_run_on)
+                                   fallout_run_on, mirrored_ctda, PLAYER_REF)
 from ..generated.ctda_param_types import CTDA_FORMID_PARAMS
-from .owned_records import MGEF_FAMILY_KEYWORDS
+from .owned_records import FALLOUT_VTYP_BY_SOURCE, MGEF_FAMILY_KEYWORDS
 from .race_factions import race_faction
+from ..record_types.world_falloutnv import is_fallout_source
 from .text_reader import (_ENGINE_FIXED_FORMIDS, get_formid_index_offset,
                           remap_formid)
 
@@ -88,7 +89,9 @@ FUNC_GET_STAGE = 58            # GetStage(quest)
 FUNC_GET_STAGE_DONE = 59       # GetStageDone(quest, stage)
 FUNC_GET_QUEST_RUNNING = 56    # GetQuestRunning(quest)
 FUNC_GET_GLOBAL_VALUE = 74     # GetGlobalValue(glob)
-FUNC_GET_IS_VOICE_TYPE = 426   # GetIsVoiceType(vtyp)  — TES5-only, no TES4 source
+#: GetIsVoiceType(vtyp): Skyrim's index, then FO3/FNV's; TES4 has no such function.
+FUNC_GET_IS_VOICE_TYPE = 426
+_FALLOUT_GET_IS_VOICE_TYPE = 427
 FUNC_HAS_MAGIC_EFFECT = 214
 FUNC_HAS_MAGIC_EFFECT_KEYWORD = 699
 FUNC_HAS_KEYWORD = 560
@@ -563,6 +566,9 @@ def _convert_params(func_idx: int, param1: int, param2: int,
             return None
     elif func_idx == FUNC_GET_GLOBAL_VALUE:
         param1 = _remap_global(param1, offset)
+    elif func_idx == FUNC_GET_IS_VOICE_TYPE:
+        param1 = _remap_formid(param1, offset)
+        param1 = FALLOUT_VTYP_BY_SOURCE.get(param1, param1)
     elif 1 in fid_slots:
         param1 = _remap_formid(param1, offset)
     if 2 in fid_slots:
@@ -618,6 +624,10 @@ def _ctda_head(raw: bytes, offset: int, in_speak_as_topic: bool):
         is_target, run_on, reference = fallout_run_on(
             raw, lambda fid: _remap_formid(fid, offset))
         type_byte |= CTDA_RUN_ON_TARGET if is_target else 0
+        mirrored = mirrored_ctda(type_byte, comp_raw, func_idx, param1, param2,
+                                 is_target or reference == PLAYER_REF)
+        if mirrored:
+            return mirrored
         func_idx = fallout_function(func_idx)
         if func_idx is None:
             return None
@@ -1139,6 +1149,22 @@ def shared_state_conditions(recs: list) -> list:
     if not common:
         return []
     return [b for b in per_rec[0] if b in common]
+
+
+def authors_voice_type(rec: dict) -> bool:
+    """True if a FO3/FNV record already gates on GetIsVoiceType (its index 427).
+
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
+    """
+    if not is_fallout_source():
+        return False
+    i = 0
+    while (raw_hex := rec.get(f'Condition[{i}].Raw')) is not None:
+        i += 1
+        if len(raw_hex) >= 24 and int.from_bytes(
+                bytes.fromhex(raw_hex[16:20]), 'little') == _FALLOUT_GET_IS_VOICE_TYPE:
+            return True
+    return False
 
 
 def has_audience_condition(rec: dict) -> bool:

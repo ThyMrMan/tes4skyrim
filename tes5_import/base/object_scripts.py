@@ -140,6 +140,11 @@ def get_object_vmad(record_fid: int) -> bytes:
     return _OBJECT_VMAD.get(record_fid, b'')
 
 
+def set_object_vmad(record_fid: int, vmad: bytes) -> None:
+    """Bind a packed VMAD subrecord onto output `record_fid`, replacing any."""
+    _OBJECT_VMAD[record_fid] = vmad
+
+
 # Context captured by build_object_script_plan so a LATER pass can attach a
 # script to a record that does not exist yet.  build_leveled_actor_shells mints
 # its shell NPC_ records long after the plan is built, and each shell has to

@@ -21,7 +21,7 @@ from ..record_types.sound import (load_soun_identity, reset_sound_descriptors,
                                  reset_soun_identity)
 from ..record_types.projectile_falloutnv import index_gun_projectiles
 from ..record_types.reference_falloutnv import index_convertible_records
-from ..record_types.world_falloutnv import register_fallout_source
+from ..record_types.world_falloutnv import register_fallout_source, register_trigger_bases
 from ..record_types.world_morrowind import register_tes3_locks
 from ..registry import IMPORT_DISPATCH, SKIP_TYPES
 
@@ -52,6 +52,7 @@ def build_actor_indexes(by_type: dict, writer, export_dir: str, ctx,
     _load_sound_identity(by_type, master_export)
     reset_emitted_regions()
     register_fallout_source(by_type)
+    register_trigger_bases(by_type, master_export)
     n_locks = register_tes3_locks(by_type, export_dir, master_export)
     if n_locks:
         print(f'  TES3 door locks: {n_locks} exit-only lock(s) dropped')
@@ -67,7 +68,7 @@ def build_actor_indexes(by_type: dict, writer, export_dir: str, ctx,
 
     n_dead = index_starts_dead(by_type, master_export)
     if n_dead:
-        print(f'  Starts Dead: {n_dead} placed corpse(s) with a 0 health pool')
+        print(f'  Starts Dead: {n_dead} placed corpse(s) start dead')
 
     build_creature_races(by_type, writer, export_dir, master_export)
     n_piles = build_creature_death_piles(writer)

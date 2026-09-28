@@ -14,9 +14,9 @@ import re
 from dataclasses import replace
 
 from script_convert.blocks import (BLOCK_MAP, COMBAT_STATE_GUARDS,
-                                   block_filter_guard)
+                                   block_filter_guard, block_header)
 from script_convert.constants import (
-    LAST_ACTIVATOR_VAR, MENU_ID_NAMES, UDF_CALLER_PARAM, UDF_RESULT_VAR,
+    LAST_ACTIVATOR_VAR, MENU_ID_NAMES, MESSAGE_BOX_MENU_ID, UDF_CALLER_PARAM, UDF_RESULT_VAR,
     POLL_BLOCKS, REF_SPECIFICITY, TYPE_MAP, is_generated_script_type,
     safe_property_name, papyrus_script_name
 )
@@ -520,7 +520,7 @@ def events(conv, tree, extends: str, skip_poll: bool = False) -> list:
     """
     merged, order = {}, []
     for block in (tree.blocks if tree else ()):
-        header = BLOCK_MAP.get(block.btype.lower())
+        header = block_header(block)
         if header is None or (skip_poll and header[0] == 'Event OnUpdate()'):
             continue
         if block.btype.lower() == 'menumode':
@@ -1214,12 +1214,15 @@ def menu_blocks(conv, tree, extends: str) -> list:
 
     A MAPPED id becomes a real OnMenuClose listener: TES4 ran the body every
     frame that menu was up, and the observable Skyrim moment is the close, so
-    the body runs once there. An UNMAPPED id keeps the comment treatment --
+    the body runs once there. The message box runs when this script's own box
+    closes (message_box_closed). An UNMAPPED id keeps the comment treatment --
     converted so a hand-port only supplies the hook, but never executed.
     """
-    out = []
-    for block in (tree.blocks if tree else ()):
-        if block.btype.lower() != 'menumode' or _menumode_kind(block) != 'menu':
+    blocks = [b for b in (tree.blocks if tree else ())
+              if b.btype.lower() == 'menumode' and _menumode_kind(b) == 'menu']
+    out = message_box_closed(conv, blocks, extends)
+    for block in blocks:
+        if conv.sc.msgbox_hook and _is_message_box(block):
             continue
         label = ('MenuMode %s' % (block.filter or '')).strip()
         body = _script.emit_body(conv, block.body, extends, 1)
@@ -1238,6 +1241,31 @@ def menu_blocks(conv, tree, extends: str) -> list:
         out += ['  If TES4_MenuName != "%s"' % menu, '    Return', '  EndIf']
         out += body + ['EndEvent', '']
     return out
+
+
+def _is_message_box(block) -> bool:
+    """Whether a menu-ID MenuMode block is the message box's (1001)."""
+    return str(block.filter or '').strip() == MESSAGE_BOX_MENU_ID
+
+
+def message_box_closed(conv, blocks: list, extends: str) -> list:
+    """`begin MenuMode 1001` bodies as TES4_MessageBoxClosed, run as this script's box closes.
+
+    Only for a script that shows its own button box (TES4_ShowMsg): the body
+    reads that box's button, and TES4_ShowMsg calls this once Show() returns.
+    See: docs/commentary/script_convert.md#menumode-message-box
+    """
+    boxes = [b for b in blocks if _is_message_box(b)]
+    if not boxes or not conv.sc.uses_msg_buttons:
+        return []
+    conv.sc.msgbox_hook = True
+    out = ['; --- TES4 `begin MenuMode %s` - runs as this script\'s message box closes ---'
+           % MESSAGE_BOX_MENU_ID, 'Function TES4_MessageBoxClosed()']
+    if extends == 'Quest':
+        out += ['  If (!IsRunning())', '    Return', '  EndIf']
+    for block in boxes:
+        out += _script.emit_body(conv, block.body, extends, 1)
+    return out + ['EndFunction', '']
 
 
 def stage_latches(conv) -> list:

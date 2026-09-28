@@ -90,6 +90,9 @@ def aidt_tiers(rec: dict) -> tuple:
 #: Types a TPLT chain can pass through. FO3/FNV has LVLN as well as LVLC.
 _TEMPLATE_SIGS = ('CREA', 'NPC_', 'LVLC', 'LVLN')
 
+#: The actor types in a chain; a leveled list only points onward.
+_ACTOR_SIGS = ('CREA', 'NPC_')
+
 
 def _index_actors(by_type: dict, master_export: dict) -> dict:
     """FormID -> record for every actor and leveled actor list in scope."""
@@ -101,6 +104,24 @@ def _index_actors(by_type: dict, master_export: dict) -> dict:
             if get_str(rec, 'Signature') in _TEMPLATE_SIGS:
                 index[get_formid(rec, 'FormID')] = rec
     return index
+
+
+def actor_index(by_type: dict, master_export: dict = None) -> dict:
+    """FormID -> record for every actor and leveled actor list, for template walks."""
+    return _index_actors(by_type, master_export)
+
+
+def inherited_voice(rec: dict, index: dict) -> int:
+    """A Use Traits stub's voice type, from the nearest template naming one, or 0.
+
+    `_flatten_one` keys the Traits category on `RNAM.Race`, which no CREA
+    owns, so a creature stub's voice is resolved here instead.
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
+    """
+    if not get_int(rec, 'ACBS.TemplateFlags') & _USE_TRAITS:
+        return 0
+    donor = _first_owning(rec, index, 'VTCK.Voice')
+    return get_formid(donor, 'VTCK.Voice') if donor is not None else 0
 
 
 def _chain(rec: dict, index: dict):
@@ -133,12 +154,15 @@ def _first_owning(rec: dict, index: dict, key: str) -> dict:
     return None
 
 
-def _first_owning_array(rec: dict, index: dict, count_key: str) -> dict:
-    """The nearest actor down the chain with a non-empty ``count_key``."""
-    for node in _chain(rec, index):
-        if get_int(node, count_key, 0) > 0:
-            return node
-    return None
+def _defines(node: dict, bit: int) -> bool:
+    """Whether an actor holds category ``bit`` itself, not from a template."""
+    inherits = get_int(node, 'ACBS.TemplateFlags') & bit and get_formid(node, 'TPLT.Template')
+    return get_str(node, 'Signature') in _ACTOR_SIGS and not inherits
+
+
+def _defining(rec: dict, index: dict, bit: int) -> dict:
+    """The nearest actor down the chain that defines category ``bit`` itself, or None."""
+    return next((node for node in _chain(rec, index) if _defines(node, bit)), None)
 
 
 def _copy_array(rec: dict, donor: dict, count_key: str, templates) -> bool:
@@ -162,18 +186,17 @@ def _copy_array(rec: dict, donor: dict, count_key: str, templates) -> bool:
 def _flatten_one(rec: dict, index: dict) -> bool:
     """Copy every category ``rec``'s flags claim down from its template.
 
-    A category is skipped when the stub already owns its lead key, so a stub
-    that overrides one of them keeps its own. Counted arrays (inventory,
-    factions, packages, spells) are carried whole.
+    A claimed category comes whole from the nearest actor down the chain that
+    defines it: the engine ignores the stub's own values there, which it still
+    carries (ACBS.Level and AIDT are always written). Counted arrays
+    (inventory, factions, packages, spells) are carried whole.
 
     See: docs/commentary/tes5_import_falloutnv_actors.md#every-category-flattens
     """
-    flags = get_int(rec, 'ACBS.TemplateFlags')
+    flags = get_int(rec, 'ACBS.TemplateFlags') if get_formid(rec, 'TPLT.Template') else 0
     filled = False
     for bit, keys in _CATEGORIES:
-        if not flags & bit or get_str(rec, keys[0]):
-            continue
-        donor = _first_owning(rec, index, keys[0])
+        donor = _defining(rec, index, bit) if flags & bit else None
         if donor is None:
             continue
         for key in keys:
@@ -184,9 +207,7 @@ def _flatten_one(rec: dict, index: dict) -> bool:
         filled = True
 
     for bit, count_key, templates in _ARRAY_CATEGORIES:
-        if not flags & bit or get_int(rec, count_key, 0) > 0:
-            continue
-        donor = _first_owning_array(rec, index, count_key)
+        donor = _defining(rec, index, bit) if flags & bit else None
         if donor is not None and _copy_array(rec, donor, count_key, templates):
             filled = True
     return filled

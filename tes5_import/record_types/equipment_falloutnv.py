@@ -22,6 +22,7 @@ from asset_convert.havok.gun_vocabulary_falloutnv import (ANIM_TYPE_CLASS,
                                                           RELOAD_LETTERS)
 
 from ..base.equivalents import WEAPON_ANIM_CROSSBOW
+from ..base.writer import pack_formid_subrecord, pack_record, pack_string_subrecord
 from .bodypart_falloutnv import SIDECAR_DIR, source_file
 from .projectile_falloutnv import gun_ammo
 from .sound import get_soun_identity, sndr_editor_id
@@ -35,6 +36,36 @@ _GUN_TYPES = frozenset({3, 4, 5, 6, 7, 9, 10, 11, 12, 13})
 def is_gun(rec: dict) -> bool:
     """Whether the WEAP is a FO3/FNV firearm (by its authored anim type)."""
     return get_int(rec, 'DNAM.FalloutAnimType', -1) in _GUN_TYPES
+
+
+#: FO3/FNV weapon animation types after Hand to Hand (0): 1 Melee (1 Hand) to 13 Thrown (1 Hand).
+_ANIM_TYPES = range(1, 14)
+
+#: FO3/FNV weapon animation type -> the FormList of its weapons, which converted GetWeaponAnimType reads.
+WEAPON_ANIM_LISTS = {kind: f'TES4WeapAnimType{kind}' for kind in _ANIM_TYPES}
+
+
+def create_weapon_anim_lists(by_type: dict, writer) -> dict:
+    """One FormList per FO3/FNV weapon animation type, of this plugin's weapons; {} for other games.
+
+    Every list is written, empty or not, so a script's property always binds.
+    See: docs/commentary/script_convert.md#fallout-weapon-anim-type
+    """
+    if not is_fallout_source():
+        return {}
+    members = {kind: [] for kind in _ANIM_TYPES}
+    for rec in by_type.get('WEAP', []):
+        kind = get_int(rec, 'DNAM.FalloutAnimType', -1)
+        if kind in members:
+            members[kind].append(get_formid(rec, 'FormID'))
+    out = {}
+    for kind, edid in WEAPON_ANIM_LISTS.items():
+        fid = writer.derive_formid('FLST', edid)
+        subs = pack_string_subrecord('EDID', edid)
+        subs += b''.join(pack_formid_subrecord('LNAM', weapon) for weapon in sorted(members[kind]))
+        writer.add_record('FLST', pack_record('FLST', fid, 0, subs))
+        out[edid] = fid
+    return out
 
 
 def refine_anim_type(rec: dict, anim_type: int) -> int:

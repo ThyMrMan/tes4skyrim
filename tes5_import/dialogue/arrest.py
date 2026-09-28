@@ -71,7 +71,7 @@ def _subrecords(body: bytes):
         pos += 6 + size
 
 
-def _records(children: bytes):
+def info_records(children: bytes):
     """Yield (FormID, flags, body) for each INFO in a topic's packed children."""
     pos = 0
     while pos + 24 <= len(children):
@@ -80,20 +80,21 @@ def _records(children: bytes):
         pos += 24 + size
 
 
-def _shared_copy(body: bytes, source_fid: int, fid: int, flags: int) -> bytes:
-    """A shared INFO naming `source_fid`, with no response and no lockout."""
+def shared_copy(body: bytes, source_fid: int, fid: int, flags: int, gate: bytes = b'',
+                clear: int = 0) -> bytes:
+    """A shared INFO naming `source_fid`: no response, no lockout, ENAM flags `clear` off, `gate` CTDAs first."""
     subs, placed = b'', False
     for sig, data in _subrecords(body):
         if sig in _RESPONSE_SUBS:
             continue
         if sig == b'ENAM' and len(data) >= 4:
-            data = data[:2] + b'\x00\x00'
+            data = struct.pack('<H', struct.unpack_from('<H', data)[0] & ~clear) + b'\x00\x00'
         if sig == b'CTDA' and not placed:
-            subs += pack_subrecord('DNAM', struct.pack('<I', source_fid))
+            subs += pack_subrecord('DNAM', struct.pack('<I', source_fid)) + gate
             placed = True
         subs += pack_subrecord(sig.decode('ascii'), data)
     if not placed:
-        subs += pack_subrecord('DNAM', struct.pack('<I', source_fid))
+        subs += pack_subrecord('DNAM', struct.pack('<I', source_fid)) + gate
     return pack_record('INFO', fid, flags, subs)
 
 
@@ -107,10 +108,10 @@ def force_greet_topic(writer, src_dial: dict, owner_qfid: int, infos: list,
     """
     guard = {out_fid: rec for out_fid, rec in infos if requires_guard(rec)}
     copies, count = b'', 0
-    for fid, flags, body in _records(children):
+    for fid, flags, body in info_records(children):
         if fid in guard:
             copy_fid = writer.derive_formid('ARREST_INFO', guard[fid]['FormID'])
-            copies += _shared_copy(body, fid, copy_fid, flags)
+            copies += shared_copy(body, fid, copy_fid, flags)
             count += 1
     if not count:
         return b''

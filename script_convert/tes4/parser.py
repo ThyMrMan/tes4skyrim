@@ -103,14 +103,10 @@ _FIXED_ARITY = {
     'getstage': 1, 'getdisposition': 1,
 }
 
-#: Commands whose FIRST argument may be a tight negative number, so the sign
-#: starts the argument list rather than continuing it.  A leading tight sign
-#: is otherwise refused, because `x -1` on a plain variable is subtraction,
-#: not a call -- these are the only three names in the corpus where it is an
-#: argument (`PositionWorld -3328.02, 280.33, ...`), and all three take
-#: coordinates.
+#: Commands whose first argument may be a tight negative number (coordinates, or a signed amount).
 _NEGATIVE_FIRST_ARG = frozenset({
     'positionworld', 'positioncell', 'emcsetmusictype',
+    'rewardkarma', 'modpcfame', 'modpcinfamy',
 })
 
 
@@ -439,11 +435,14 @@ class Parser:
         """One statement, or None when a terminator keyword is next.
 
         The terminator is NOT consumed -- the block parser that owns it does
-        that, which is what makes nesting correct by construction.
+        that, which is what makes nesting correct by construction. A leading
+        `.` (`.disable`) names the script's own reference, as no ref does.
         """
         self.skip_newlines()
         if self.at_end():
             return None
+        if self.cur.text == '.' and self.toks[self.i + 1].kind is T.IDENT:
+            self.advance()
         tok = self.cur
         low = tok.text.lower() if tok.kind is T.IDENT else ''
         if low and low in terminators:

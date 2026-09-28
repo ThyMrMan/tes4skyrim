@@ -430,6 +430,17 @@ TES4 Relations become TES5 XNAM — `Faction(FormID) Modifier(S32)
 GroupCombatReaction(U32)`. The enum is xEdit `wbFactionRelations`
 (wbDefinitionsCommon): **0 Neutral, 1 Enemy, 2 ALLY, 3 FRIEND**.
 
+**FO3/FNV author the reaction.** Their XNAM is 12 bytes, the same three
+fields as Skyrim's, and the enum is the same. The exporter read only the first
+eight (`Relation[i].Faction`, `Disposition`) and the importer derived the
+reaction from the modifier, which New Vegas leaves at 0 almost everywhere, so
+every one of FalloutNV.esm's 1,314 relations became Neutral, a faction's
+Ally-to-itself included. Very Aggressive actors attack neutrals, so in the
+third played run geckos killed geckos and Primm's Powder Gangers and convicts
+killed each other. The exporter now writes `Relation[i].CombatReaction` when
+the XNAM has it, and `_relation_reaction` takes it as authored; TES4's
+eight-byte XNAM still reads its disposition.
+
 Ally and Friend were previously swapped here (3 written for Ally, 2 for
 Friend). Confirmed two ways: the xEdit definition, and a census of Skyrim.esm
 where 160 of 200 faction SELF-relations use 2 — a faction is Ally to itself,
@@ -627,9 +638,20 @@ script calls a bare `Resurrect`, is left unflagged. Nehrim has 10 such refs
 still lie unclothed until raised. A resurrect through a ref variable cannot be
 resolved statically.
 
-FO3/FNV author the flag themselves on the reference, so their refs are left as
-exported. Creatures share the rule: `creature_health_offset` pins a 0 pool at
-−32768, and their refs get the same flag.
+Creatures share the rule: `creature_health_offset` pins a 0 pool at −32768,
+and their refs get the same flag.
+
+<a id="fallout-starts-dead"></a>**FO3/FNV mark the corpse on its base.** The
+note here used to say Fallout authors the flag on the reference, and its refs
+were left as exported. No FNV ACHR carries `0x200` (xEdit lists only
+Persistent, Initially Disabled and No AI Acquire for it); the mark is NPC_/CREA
+record flag bit 19 (`0x80000`, xEdit "Unknown 19"). In FalloutNV.esm 280 bases
+carry it: 218 are named `...Dead...` and the rest are corpses too (Nipton's
+mayor, the booby-trapped NCR troopers, an ambushed ranger); only 3 `Dead`-named
+bases lack it. Their 399 placements now get Starts Dead, the resurrect rule
+above included. Before, every one loaded alive: the second played run "killed"
+a Bright Follower and a Wastelander in the Goodsprings cave, which were
+corpses, and each paid kill XP.
 
 ## <a id="hair-color"></a>Hair color: a generated CLFM per authored RGB
 

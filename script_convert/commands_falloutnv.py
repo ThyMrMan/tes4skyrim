@@ -12,6 +12,7 @@ See: docs/commentary/script_convert.md#getfactionrelation-has-two-receivers
 
 from script_convert.constants import safe_property_name, typed_already
 from script_convert.message_menus import authored_site
+from tes5_import.record_types.equipment_falloutnv import WEAPON_ANIM_LISTS
 
 
 def faction_relation(ctx, call):
@@ -112,7 +113,33 @@ def quest_native(ctx, call):
     if not typed_already(ctx.sc.property_refs, prop):
         ctx.sc.property_refs[prop] = 'Quest'
     args = ', '.join(call.arg(i) for i in range(1, len(parts)))
-    return f'{prop}.{native}({args})'
+    return f'{prop}.{native}({args})' + _objective_mirror(ctx, call, quest_edid, parts)
+
+
+def _mirror_values(name: str, flag: str, value: str) -> dict:
+    """{state: Papyrus value} an objective command sets; completing also displays."""
+    if name == 'setobjectivedisplayed':
+        return {'Shown': value}
+    return {'Done': value, **({'Shown': '1'} if flag not in ('0', '') else {})}
+
+
+def _objective_mirror(ctx, call, quest_edid: str, parts: list) -> str:
+    """The SetValue lines keeping this objective's condition globals in step, or ''.
+
+    See: docs/commentary/tes5_import_conditions.md#fallout-objective-conditions
+    """
+    index = parts[1].strip()
+    if call.name not in ('setobjectivecompleted', 'setobjectivedisplayed') or not index.isdigit():
+        return ''
+    globs = ctx.objective_globals.get((quest_edid.lower(), int(index)), {})
+    flag = parts[2].strip() if len(parts) > 2 else '1'
+    value = call.arg(2) if len(parts) > 2 else '1'
+    out = ''
+    for state, setting in _mirror_values(call.name, flag if flag.isdigit() else '', value).items():
+        if state in globs:
+            ctx.sc.property_refs.setdefault(globs[state], 'GlobalVariable')
+            out += f'\n  {globs[state]}.SetValue({setting})'
+    return out
 
 
 def show_message(ctx, call):
@@ -134,6 +161,24 @@ def show_message(ctx, call):
 
 
 #: TES4 command name -> handler, merged into `commands.REGISTRY`.
+def weapon_anim_type(ctx, call) -> str:
+    """`<actor>.GetWeaponAnimType`: the Fallout animation type of the equipped weapon.
+
+    Each type's weapons are a FormList the importer writes, so the value is
+    the sum of each type times whether its list holds the weapon; no weapon
+    reads 0, Hand to Hand, as in Fallout. Skyrim's own weapon types number
+    differently (a converted rifle is a crossbow).
+    See: docs/commentary/script_convert.md#fallout-weapon-anim-type
+    """
+    ref = ctx._convert_ref(call.ref, call.extends, as_receiver=True) if call.ref else 'Self'
+    weapon = f'({ref} as Actor).GetEquippedWeapon()'
+    for name in WEAPON_ANIM_LISTS.values():
+        ctx.sc.property_refs[name] = 'FormList'
+    terms = (f'{kind} * ({name}.HasForm({weapon}) as Int)' for kind, name in WEAPON_ANIM_LISTS.items())
+    return '(' + ' + '.join(terms) + ')'
+
+
 FALLOUT_HANDLERS = {'getfactionrelation': faction_relation,
+                    'getweaponanimtype': weapon_anim_type,
                     'showmessage': show_message,
                     **{name: quest_native for name in _QUEST_NATIVES}}

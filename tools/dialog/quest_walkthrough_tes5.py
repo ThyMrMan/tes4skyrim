@@ -225,9 +225,11 @@ class Edge:
 
 
 class Tes5Engine:
-    def __init__(self, d: Tes5Data, verbose=False):
+    def __init__(self, d: Tes5Data, verbose=False, started=()):
         self.d = d
         self.verbose = verbose
+        #: lower EditorIDs of quests another plugin starts (TESGameSelect's game openings)
+        self.started = {edid.lower() for edid in started}
         self.edges = []
         self.dead_info = {}       # info fid -> reason string (unfixably dead)
         self.edge_notes = defaultdict(list)   # container -> notes
@@ -285,9 +287,12 @@ class Tes5Engine:
                     self.edges.append(Edge(gate, ('complete', qfid),
                                            container, sname))
                     continue
-                fid, why = self._resolve_prop(prop, props, sname, container)
+                if prop == 'self' and container[0] == 'QUST':
+                    fid, why = container[1], None
+                else:
+                    fid, why = self._resolve_prop(prop, props, sname, container)
                 if fid is None:
-                    # Self.SetStage etc. or unresolvable property
+                    # Self outside a quest's own script, or unresolvable property
                     if prop in ('self', 'game', 'debug', 'utility'):
                         continue
                     self.edge_notes[container].append(
@@ -491,7 +496,7 @@ class Tes5Engine:
         completed = set()
         self.say_sources = set()
         for qfid, q in d.quests.items():
-            if q['flags'] & 0x01:
+            if q['flags'] & 0x01 or q['edid'].lower() in self.started:
                 running.add(qfid)
 
         for _pass in range(60):

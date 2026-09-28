@@ -195,7 +195,7 @@ class TestArrestTopic:
             (b'TCLT', b'\x01\x00\x00\x00'), (b'TRDT', b'\x00' * 24),
             (b'NAM1', b'hi\x00'), (b'NAM2', b'\x00'), (b'NAM3', b'\x00'),
             (b'CTDA', b'\x00' * 32)))
-        copy = arrest._shared_copy(body, 0x01000123, 0x01000999, 0)
+        copy = arrest.shared_copy(body, 0x01000123, 0x01000999, 0)
         subs = [sig for sig, _d in arrest._subrecords(copy[24:])]
         assert subs == [b'ENAM', b'CNAM', b'TCLT', b'DNAM', b'CTDA']
         data = dict(arrest._subrecords(copy[24:]))

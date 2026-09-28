@@ -525,16 +525,18 @@ def patch_creature_voices(writer) -> int:
     """Point every converted creature's VTCK at its generated creature voice.
 
     Creature NPC_ records carry a 4-byte VTCK and the generated RACE an 8-byte
-    male+female pair; both were written with the humanoid fallback voice before
-    the creature VTYPs existed (build_creature_voice_types runs last so it
-    cannot disturb any other FormID). This rewrites those slots in the packed
-    bytes — the same placeholder-then-patch approach used for actor sounds and
-    ForceGreet topics.
-
-    Returns the number of records patched.
+    male+female pair, both written with a placeholder voice before the
+    creature VTYPs existed (they are allocated last); this rewrites those
+    slots in the packed bytes. A FO3/FNV creature that names its own voice
+    type (`RobotProtectron`) keeps it. Returns the number of records patched.
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
+    See: docs/commentary/tes5_import_actors.md#crea-vtck-always
     """
     if not _CREA_VOICE_MAP:
         return 0
+    from ..base.owned_records import FALLOUT_VTYP_BY_SOURCE
+    from ..record_types.actor_common import npc_vtyp
+    authored = set(FALLOUT_VTYP_BY_SOURCE.values())
 
     # crea_fid -> voice, for every creature (raced or not)
     actor_voice = {}
@@ -557,7 +559,7 @@ def patch_creature_voices(writer) -> int:
                 continue
             fid = struct.unpack_from('<I', blob, 12)[0]
             voice = table.get(fid if sig == 'RACE' else fid & 0x00FFFFFF)
-            if not voice:
+            if not voice or (sig == 'NPC_' and npc_vtyp(fid) in authored):
                 continue
             at = blob.find(b'VTCK', 24)
             if at < 0 or struct.unpack_from('<H', blob, at + 4)[0] != size:

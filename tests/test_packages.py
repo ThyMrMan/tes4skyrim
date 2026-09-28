@@ -30,6 +30,7 @@ from tes5_import.packages.templates import (
     FOLLOW,
     PKDT_TYPE_PACKAGE,
     SANDBOX,
+    SIT_TARGET,
     SLEEP,
     TRAVEL,
 )
@@ -125,6 +126,38 @@ def test_location_type_and_radius_survive():
     ltype, value, radius = struct.unpack('<iIi', _first(_subrecords(b), 'PLDT'))
     assert (ltype, radius) == (1, 512)
     assert value & 0x00FFFFFF == 0x0001ABCD
+
+
+def _template_and_ptda(record: bytes) -> tuple:
+    """The template FormID a converted package instances, and its first PTDA."""
+    subs = _subrecords(record)
+    tmpl = struct.unpack('<III', _first(subs, 'PKCU'))[1]
+    ptda = next((d for s, d in subs if s == 'PTDA'), None)
+    return tmpl, ptda and struct.unpack('<iIi', ptda)
+
+
+def test_travel_to_furniture_sits_in_it():
+    """A Travel ending at a specific chair uses it, as the source engines do
+    (Doc Mitchell's psych test waits for him to be seated)."""
+    ctx = PackContext(ref_base_sig={0x1055B8: 'FURN', 0x1055BA: 'STAT'})
+    chair = _pack(6, **{'PLDT.Type': 0, 'PLDT.Location': '001055B8',
+                        'PLDT.Radius': 0})
+    tmpl, ptda = _template_and_ptda(convert_PACK(chair, ctx))
+    assert tmpl == SIT_TARGET.formid
+    assert ptda[0] == 0 and ptda[1] & 0xFFFFFF == 0x1055B8
+
+    statue = dict(chair, **{'PLDT.Location': '001055BA'})
+    assert _template_and_ptda(convert_PACK(statue, ctx))[0] == TRAVEL.formid
+
+
+def test_sit_target_waits_until_conditioned_out():
+    """Wait time 0, as all 276 vanilla SitTarget instances write."""
+    ctx = PackContext(ref_base_sig={0x1055B8: 'FURN'})
+    subs = _subrecords(convert_PACK(_pack(6, **{
+        'PLDT.Type': 0, 'PLDT.Location': '001055B8', 'PLDT.Radius': 0,
+    }), ctx))
+    floats = [d for s, d in subs if s == 'CNAM' and len(d) == 4]
+    assert [struct.unpack('<f', d)[0] for d in floats] == [0.0]
 
 
 def test_target_type_survives():
@@ -583,3 +616,156 @@ def test_hunt_chain_runs_ahead_of_its_source_on_alias_and_pkid_lists():
             [0x0100E001, 0x0100DDDD, 0x0100DDDE]
     finally:
         set_package_chains({})
+
+
+class TestFalloutPackageTypes:
+    """FO3/FNV Patrol, Guard, Dialogue and Use Weapon get their Skyrim templates.
+
+    See docs/commentary/tes5_import_package.md#fallout-package-types.
+    """
+
+    @staticmethod
+    def _choose(**fields):
+        """The Inputs `_choose` picks for a FO3/FNV PACK with these fields."""
+        from tes5_import.packages.converter import PackContext, _choose
+        rec = {'Signature': 'PACK', 'FormID': '0017BA19', 'EditorID': 'P'}
+        rec.update(fields)
+        return _choose(rec, PackContext(), 0x0117BA19)
+
+    def test_patrol_starts_at_its_marker_and_walks_the_linked_chain(self):
+        """Near-reference start; PKPT's Repeatable carries over."""
+        from tes5_import.packages.templates import PATROL
+        inp = self._choose(**{'PKDT.Type': '13', 'PLDT.Type': '0',
+                              'PLDT.Location': '001547C3', 'PLDT.Radius': '0',
+                              'PKPT.Repeatable': '0'})
+        assert inp.t is PATROL
+        assert struct.unpack('<iIi', inp.values[0])[0] == 0
+        assert inp.values[2] == 0 and inp.values[3] == 0
+
+    def test_a_patrol_with_no_start_marker_starts_at_its_linked_ref(self):
+        """Near linked reference (6) or editor location: the actor's own XLKR."""
+        inp = self._choose(**{'PKDT.Type': '13', 'PLDT.Type': '6',
+                              'PLDT.Location': '0', 'PLDT.Radius': '0'})
+        assert inp.values[0] == (3, 0, 0) and inp.values[3] == 1
+
+    def test_guard_waits_inside_a_restricted_area(self):
+        """GuardPost: the package location, its radius as the area."""
+        from tes5_import.packages.templates import GUARD_POST
+        inp = self._choose(**{'PKDT.Type': '14', 'PLDT.Type': '3',
+                              'PLDT.Location': '0', 'PLDT.Radius': '2000'})
+        assert inp.t is GUARD_POST and inp.values[1] == (3, 0, 2000)
+
+    def test_a_player_conversation_is_a_force_greet_on_its_topic(self):
+        """Its own topic; GREETING leaves the 0 placeholder for the quest's greeting."""
+        from tes5_import.packages.templates import FORCE_GREET
+        own = self._choose(**{'PKDT.Type': '15', 'PTDT.Type': '0',
+                              'PTDT.Target': '00000014', 'PTDT.Count': '1024',
+                              'PKDD.Topic': '00168AD9', 'PKDD.Type': 'Conversation'})
+        greeting = self._choose(**{'PKDT.Type': '15', 'PTDT.Type': '0',
+                                   'PTDT.Target': '00000014', 'PKDD.Topic': '000000C8',
+                                   'PKDD.Type': 'Conversation'})
+        assert own.t is FORCE_GREET and own.values[0] & 0xFFFFFF == 0x168AD9
+        assert greeting.values[0] == 0
+
+    def test_a_say_to_package_says_its_topic_to_the_target(self):
+        """A SayTo Dialogue package is Skyrim's Say, aimed at its target."""
+        from tes5_import.packages.templates import SAY
+        inp = self._choose(**{'PKDT.Type': '15', 'PTDT.Type': '0',
+                              'PTDT.Target': '00115C38', 'PKDD.Topic': '00118A74',
+                              'PKDD.Type': 'SayTo'})
+        assert inp.t is SAY and inp.values[0] & 0xFFFFFF == 0x118A74
+
+    def test_use_weapon_shoots_its_second_target_as_pkw3_sets(self):
+        """Always Hit and Do No Damage; three bursts, then the package ends."""
+        from tes5_import.packages.templates import USE_WEAPON
+        inp = self._choose(**{'PKDT.Type': '16', 'PLDT.Type': '2', 'PLDT.Location': '0',
+                              'PLDT.Radius': '0', 'PTDT.Type': '1',
+                              'PTDT.Target': '0010A70A', 'PTD2.Type': '0',
+                              'PTD2.Target': '0010A709', 'PKW3.Flags': str(1 | 1 << 8),
+                              'PKW3.FireRate': '0', 'PKW3.FireCount': '0',
+                              'PKW3.Bursts': '3'})
+        assert inp.t is USE_WEAPON
+        assert struct.unpack('<iIi', inp.values[4])[1] & 0xFFFFFF == 0x10A709
+        assert (inp.values[8], inp.values[9], inp.values[13], inp.values[15]) == (1, 1, 0, 3)
+
+    def test_an_authored_linked_ref_wins_over_the_enable_parent_mirror(self):
+        """A patrol walks XLKR; FO3/FNV authors it, TES4 only mirrors XESP."""
+        from tes5_import.record_types.world import linked_ref_subrecord
+        authored = linked_ref_subrecord({'XLKR.LinkedRef': '00107DB0'}, 0x1234)
+        assert struct.unpack_from('<II', authored, 6)[1] & 0xFFFFFF == 0x107DB0
+        assert struct.unpack_from('<II', linked_ref_subrecord({}, 0x1234), 6) == (0, 0x1234)
+        assert linked_ref_subrecord({}) == b''
+
+    def test_a_dialogue_package_topic_is_script_driven(self):
+        """Kept from the NPC-to-NPC drop, and aimed at its target for the retarget."""
+        from tes5_import.dialogue.say_topics import build_say_topic_dispositions
+        by_type = {'DIAL': [{'FormID': '00118A74', 'EditorID': 'VFSOrrisLeaves'}],
+                   'PACK': [{'FormID': '1', 'PKDT.Type': '15', 'PTDT.Target': '00000014',
+                             'PKDD.Topic': '00118A74', 'PKDD.Type': 'SayTo'}]}
+        assert build_say_topic_dispositions(by_type)[0x118A74][0] == 'ref'
+
+
+class TestFalloutPatrolPoints:
+    """FO3/FNV patrol points: Skyrim's patrol data, and a PM_ script for the embedded one.
+
+    See docs/commentary/tes5_import_package.md#patrol-points.
+    """
+
+    @staticmethod
+    def _by_type():
+        """A patrol package starting at M1, the chain M1 -> M2, and M2's script."""
+        return {'PACK': [{'FormID': '00001000', 'PKDT.Type': '13', 'PLDT.Type': '0',
+                          'PLDT.Location': '0000A001'}],
+                'REFR': [{'FormID': '0000A001', 'XLKR.LinkedRef': '0000A002',
+                          'Patrol.IdleTime': '0.5'},
+                         {'FormID': '0000A002', 'XLKR.LinkedRef': '0000A001',
+                          'Patrol.IdleTime': '2.0', 'Patrol.Topic': '00107470',
+                          'Patrol.Script': 'moveto REPHQ2ndTeleport1'}]}
+
+    def test_a_patrol_point_keeps_skyrims_own_patrol_data(self):
+        """XPRD idle time, XPPA, idle 0 and the topic as a Topic Ref PDTO."""
+        from tes5_import.packages.patrol_falloutnv import patrol_subrecords
+        blob = patrol_subrecords(self._by_type()['REFR'][1])
+        assert [blob[i:i + 4] for i in (0, 10, 16, 26)] == [b'XPRD', b'XPPA', b'INAM', b'PDTO']
+        assert struct.unpack_from('<f', blob, 6)[0] == 2.0
+        assert struct.unpack_from('<II', blob, 32)[1] & 0xFFFFFF == 0x107470
+        assert patrol_subrecords({'FormID': '1'}) == b''
+
+    def test_every_marker_on_the_chain_knows_its_patrol(self):
+        """The walk follows XLKR from the start marker and stops at the loop."""
+        from tes5_import.packages.patrol_falloutnv import patrol_routes
+        routes = patrol_routes(self._by_type(), {})
+        assert routes == {'0000A001': ['00001000'], '0000A002': ['00001000']}
+
+    def test_the_marker_script_runs_the_body_on_the_arriving_actor(self):
+        """The watch, the package check, and the body acting on akSpeakerRef."""
+        from script_convert.cross_ref import CrossRefGraph
+        from script_convert.patrol_scripts import patrol_psc
+        psc = patrol_psc(self._by_type()['REFR'][1], CrossRefGraph())
+        assert 'extends ObjectReference' in psc and 'Event OnCellAttach()' in psc
+        assert 'TES4PatrolPackages.Find(a.GetCurrentPackage()) >= 0' in psc
+        body = psc.split('Function TES4PatrolArrived(Actor akActor)', 1)[1]
+        assert 'akSpeakerRef.MoveTo(' in body.split('EndFunction')[0]
+
+    def test_a_form_array_property_packs_every_formid(self):
+        """VMAD property type 11: a count, then one object entry per FormID."""
+        from script_convert.pipeline import build_vmad_object_script
+        vmad = build_vmad_object_script('X', None, {'P': ('objects', [0x0100A001, 0x0100A002])})
+        at = vmad.index(b'P') + 1
+        assert struct.unpack_from('<BBI', vmad, at) == (11, 1, 2)
+        assert struct.unpack_from('<HhIHhI', vmad, at + 6) == (0, -1, 0x0100A001, 0, -1, 0x0100A002)
+
+    def test_a_topic_only_a_marker_says_is_script_driven(self):
+        """Kept from the NPC-to-NPC drop, so the marker's PDTO names a real topic."""
+        from script_convert.pipeline import scan_say_topics
+        by_type = dict(self._by_type(), DIAL=[{'FormID': '00107470',
+                                               'EditorID': 'VFreeformNellisPeteMural01'}])
+        assert 'vfreeformnellispetemural01' in scan_say_topics(by_type)
+
+    def test_a_travel_to_a_marker_runs_its_patrol_script_too(self):
+        """FO3/FNV runs a patrol point's script for any package arriving there."""
+        from tes5_import.packages.patrol_falloutnv import patrol_routes
+        by_type = self._by_type()
+        by_type['PACK'].append({'FormID': '00002000', 'PKDT.Type': '6', 'PLDT.Type': '0',
+                                'PLDT.Location': '0000A002'})
+        assert patrol_routes(by_type, {})['0000A002'] == ['00001000', '00002000']

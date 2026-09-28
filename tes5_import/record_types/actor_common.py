@@ -800,6 +800,22 @@ def resolve_actor_voice(rec: dict, gender: str) -> int:
             or VOICE_TYPE_MAP.get(('Imperial', gender), 0))
 
 
+def _relation_reaction(rec: dict, i: int, to_self: bool) -> int:
+    """A relation's group combat reaction: FO3/FNV author it (same enum), TES4 is read from its disposition.
+
+    See: docs/commentary/tes5_import_actors.md#faction-relations
+    """
+    authored = rec.get(f'Relation[{i}].CombatReaction')
+    if authored is not None:
+        return int(authored)
+    disp = get_int(rec, f'Relation[{i}].Disposition')
+    if disp <= -50:
+        return _XNAM_ENEMY
+    if disp >= 50:
+        return _XNAM_ALLY if to_self else _XNAM_FRIEND
+    return _XNAM_NEUTRAL
+
+
 def convert_FACT(rec: dict) -> bytes:
     """FACT -> FACT: relations as XNAM, flags remapped, CNAM as CRVA.
 
@@ -821,13 +837,7 @@ def convert_FACT(rec: dict) -> bytes:
     rc = get_int(rec, 'RelationCount')
     for i in range(rc):
         fid = get_formid(rec, f'Relation[{i}].Faction')
-        disp = get_int(rec, f'Relation[{i}].Disposition')
-        if disp <= -50:
-            reaction = _XNAM_ENEMY
-        elif disp >= 50:
-            reaction = _XNAM_ALLY if fid == self_fid else _XNAM_FRIEND
-        else:
-            reaction = _XNAM_NEUTRAL
+        reaction = _relation_reaction(rec, i, fid == self_fid)
         subs += pack_subrecord('XNAM', struct.pack('<IiI', fid, 0, reaction))
 
     tes4_flags = get_int(rec, 'DATA.Flags')

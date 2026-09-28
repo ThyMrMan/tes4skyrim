@@ -20,6 +20,7 @@
 - [PACK conversion: verified-correct behaviour](#pack-conversion-2)
 - [Verified correct — do NOT "fix" these](#section)
 - [Shop doors: Unlock Doors At Location becomes Unlock At Start](#shop-doors-unlock-at-location)
+- [A Travel that ends at furniture sits in it](#travel-to-furniture)
 
 ## PACK Conversion Plan (TES4 → TES5)
 <a id="pack-conversion-plan"></a>
@@ -200,7 +201,7 @@ every field we need (`PKDT.Flags/Type/Format`, `PSDT.*`, `PLDT.Type/Location/Rad
 
 | TES4 Type | Count | Target template | Fidelity |
 |---|---:|---|---|
-| 6 Travel | 1,924 | `Travel` | **exact** — same procedure |
+| 6 Travel | 1,924 | `Travel` / `SitTarget` | **exact** — same procedure; one ending at furniture sits in it ([§](#travel-to-furniture)) |
 | 5 Wander | 1,820 | `Sandbox` | **exact** — TES4 Wander = wander/sit/idle in a radius, which is what Sandbox does |
 | 3 Eat | 829 | `Eat` | **exact** — dedicated tree w/ Acquire+Find-chair |
 | 8 UseItemAt | 751 | `SitTarget` / `Activate` / `Travel` | **partial** — see §2.1, §3.2 |
@@ -312,7 +313,8 @@ Each rule below preserves the TES4 `PLDT` (location, **including its type and
 radius**), the `PSDT` schedule, and the conditions. Only the *procedure* is
 re-expressed in Skyrim's vocabulary.
 
-- **Travel (6)** → `Travel`. `PLDT` → *Place to Travel*. TES4 "always run" →
+- **Travel (6)** → `Travel`, or `SitTarget` when `PLDT` is a furniture
+  reference ([travel to furniture](#travel-to-furniture)). `PLDT` → *Place to Travel*. TES4 "always run" →
   `PreferredSpeed=Run` + `0x2000`.
 - **Wander (5)** → `Sandbox` at `PLDT`, radius preserved. Booleans:
   Wandering/Sitting/IdleMarkers/Conversation on.
@@ -888,3 +890,104 @@ Morrowind `AIEscort` — and falls back to vanilla `Escort` only when no root is
 installed (a master built before this change). Adding the root moved no
 FormID (1,187,406 records before, the same plus one after). Test:
 `tests/test_escort_when_near.py`.
+
+## <a id="travel-to-furniture"></a>A Travel that ends at furniture sits in it
+
+In Oblivion, Fallout 3 and New Vegas a Travel package whose location is a
+specific furniture reference (`PLDT` type 0 on a `FURN` placement) uses that
+furniture on arrival. Skyrim's `Travel` only walks there, so the converter
+emits `SitTarget` on that reference instead (a quest alias when the package's
+quest has one), the same template a Find or UseItemAt aimed at a specific
+chair already gets.
+
+Authored evidence: New Vegas's opening quest `VCG01` sends Doc Mitchell to his
+chair with `VCG01DocMitchellTravelToExamSpot` (Travel, `PLDT` 0 on
+`DocMitchellChairREF`, from stage 80), and nothing else seats him; the couch
+and chair triggers (`VCG01DocMitchellCouchTriggerSCRIPT`,
+`VCG01DocMitchellChairTriggerSCRIPT`) start the psych test only once
+`DocMitchellREF.IsCurrentFurnitureRef DocMitchellChairREF`. Converted as a
+Travel, Doc stood by the chair and the scene stalled. The same shape is
+common: Travel packages ending at a furniture reference number 154 in
+Oblivion (`SE04SheogorthSit`, the `SE*Worship` packages), 131 in Fallout 3
+(`MS09MidnightMeetingStayBench*`) and 111 in New Vegas (`NVCCSleep*`).
+
+`SitTarget`'s wait time is 0, as in all 276 vanilla instances: sit until the
+package is conditioned out. It was 300, which stood a sitter up after five
+minutes. Tests: `tests/test_packages.py`
+(`test_travel_to_furniture_sits_in_it`,
+`test_sit_target_waits_until_conditioned_out`).
+
+## <a id="fallout-package-types"></a>FO3/FNV package types 12-16
+
+**Code:** `tes5_import/packages/types_falloutnv.py`, `record_types/world.py`
+`linked_ref_subrecord`, `tes4_export/record_types/package_falloutnv.py`.
+
+FO3/FNV numbers its package types as Oblivion does up to 10, then adds
+Sandbox 12, Patrol 13, Guard 14, Dialogue 15 and Use Weapon 16. `_choose`
+knew only Oblivion's, so every other type sandboxed at its location: in
+FalloutNV.esm, Sandbox 753 (right), Patrol 505, Dialogue 332, Guard 175 and
+Use Weapon 82. Each now picks the vanilla template doing the same thing,
+with inputs taken from real Skyrim.esm instances:
+
+| FO3/FNV | Skyrim template | Inputs |
+|---|---|---|
+| Patrol | `Patrol` (00017723) | start: the PLDT's near-reference marker, else the actor's linked ref (PTDA type 3) with Start At Nearest; `PKPT` Repeatable; PLDT radius |
+| Guard | `GuardPost` (0001C9FF) | wait at the package location; restricted area the same location, radius 500 when unset |
+| Dialogue, to the player | `ForceGreet` | the `PKDD` topic; GREETING/HELLO leave the 0 placeholder so `patch_forcegreet_topics` opens the quest's own greeting; `PTDT.Count` as the forcegreet distance |
+| Dialogue, SayTo or to an NPC | `Say` (0001CCB6) | the `PKDD` topic (HELLO when none), the target, the location when authored |
+| Use Weapon | `UseWeapon` (0001C338) | the second target (`PTD2`) to shoot and trigger on, the weapon (`PTDT` Object ID), `PKW3` Always Hit / Do No Damage / Crouch / Hold Fire, bursts (Number of Bursts ends the package after N), volley pauses and shots |
+
+A Dialogue package's topic counts as script-driven (`dialogue_source` reads it
+as `SayTo <target> <topic>`), so the NPC-to-NPC drop keeps it and its
+target conditions retarget onto that target. A player conversation is also a
+force greet for `convert_PACK`'s speed and interrupt rules (`_is_force_greet`,
+which also covers Oblivion's idiom: an Ambush or Find aimed at the player is
+a scripted approach, not a hostile ambush).
+
+Two shared pieces had to widen for these. PLDT location types 6 (near linked
+reference) and 7 (at package location) are the same numbers in Skyrim, and
+`build_location` used to null them. And a patrol walks the markers' linked
+refs, which were never written: `linked_ref_subrecord` now writes the authored
+`XLKR` on REFR and ACHR (the export gained it for ACHR/ACRE: 1,164 and 242),
+winning over Oblivion's enable-parent mirror.
+
+Not yet carried: a patrol marker's idle time (`XPRD`), idle and embedded
+script, `PTDT` Object Type values (FO3/FNV's object-type enum is not TES4's),
+and a Dialogue package's `PKDD` flags.
+
+## <a id="patrol-points"></a>FO3/FNV patrol points
+
+**Code:** `tes5_import/packages/patrol_falloutnv.py`,
+`script_convert/patrol_scripts.py`, `record_types/world.py` (`convert_REFR`).
+
+A FO3/FNV patrol point is a REFR on a Patrol package's linked chain, carrying
+an idle time, an idle, an embedded script and a topic
+([export](tes4_export_falloutnv.md#patrol-points)): FalloutNV.esm has 1,347,
+106 with a script, 14 with a topic, none with an idle. The actor that reaches
+one waits, runs the script on itself (`moveto`, `Say`, `AddItem`, quest
+variables) and says the topic. The REPCON HQ tour, Pete's murals and General
+Oliver's emergency are built this way.
+
+Skyrim's REFR keeps most of it natively. 3,179 vanilla patrol markers (the
+same `XMarkerHeading` base) carry `XPRD` idle time, the empty `XPPA` Patrol
+Script Marker, `INAM` idle (0 on all of them) and a `PDTO` topic (one vanilla
+marker sets it). A patrol point is written that way: its idle time, `XPPA`,
+idle 0 (a FO3/FNV IDLE names no Skyrim animation) and the topic as a Topic
+Ref `PDTO`. Patrol topics and scripts feed the say-topic scans, so a topic
+only a marker says is kept.
+
+The script has no Skyrim home: Skyrim's REFR keeps only unused leftovers of
+the embedded script, and no Papyrus event reports a patroller's arrival. A
+marker with a script therefore gets `<NS>_PM__<FormID> extends
+ObjectReference`. While its cell is attached it polls every 0.5 s. The
+closest actor within 128 units, not the player, whose current package is one
+of `TES4PatrolPackages`, runs the converted body once (`akSpeakerRef` is that
+actor, as in a package fragment). It can arrive again after moving 256 units
+away. `TES4PatrolPackages` (a Form-array VMAD property) is every package that
+brings an actor to the marker. A Patrol walks the XLKR chain from the marker
+its PLDT names, else from each of its actors' own linked reference; any other
+package arrives at the marker its PLDT names. FO3/FNV runs the script for
+those too: VMS21's Joana escaping, the Legion snipers and the Strip
+securitrons are Travel packages to scripted markers, and two Legion tent
+guards are Guard packages. A marker nothing is known to reach gets no VMAD,
+so it never runs for a passer-by.

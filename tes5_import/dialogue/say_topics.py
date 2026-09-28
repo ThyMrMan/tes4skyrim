@@ -12,6 +12,8 @@ import re
 from collections import defaultdict
 
 from ..base.text_reader import info_result_script
+from ..packages.patrol_falloutnv import is_patrol_point, patrol_scan_source
+from ..packages.scripts_falloutnv import package_source, edids_by_formid
 from ..record_types.common import get_formid, get_str
 from .say_morrowind import say_topic_fids
 
@@ -58,8 +60,12 @@ def build_say_topic_dispositions(by_type: dict) -> dict:
 
 def collect_script_texts(by_type: dict) -> list:
     """Every script body that can hold a call site: SCPT sources, INFO result
-    scripts, and each QUST stage log's result script, in that order."""
+    scripts, FO3/FNV package sections, then each QUST stage log's result script."""
     texts = [get_str(r, 'SCTX') or '' for r in by_type.get('SCPT', [])]
+    edid_by_fid = edids_by_formid(by_type)
+    texts += [package_source(r, edid_by_fid) for r in by_type.get('PACK', [])]
+    texts += [patrol_scan_source(r, edid_by_fid) for r in by_type.get('REFR', [])
+              if is_patrol_point(r)]
     for r in by_type.get('INFO', []):
         texts.append(info_result_script(r))
     for r in by_type.get('QUST', []):

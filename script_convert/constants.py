@@ -302,7 +302,7 @@ _RECORD_TYPE_PAPYRUS = {
     # needs base-aware comparison/assignment emission (GetBaseObject()).
     'QUST': 'Quest', 'NPC_': 'Actor', 'CREA': 'Actor',
     'FACT': 'Faction', 'GLOB': 'GlobalVariable',
-    'SPEL': 'Spell', 'ENCH': 'Enchantment', 'MGEF': 'MagicEffect',
+    'SPEL': 'Spell', 'ENCH': 'Enchantment', 'MGEF': 'MagicEffect', 'PERK': 'Perk',
     'CELL': 'Cell', 'WRLD': 'WorldSpace', 'PACK': 'Package',
     'SOUN': 'Sound', 'SNDR': 'Sound', 'DIAL': 'Topic', 'RACE': 'Race',
     'MESG': 'Message', 'MSTT': 'Static',
@@ -310,7 +310,7 @@ _RECORD_TYPE_PAPYRUS = {
     'LVLN': 'LeveledActor', 'LVSP': 'LeveledSpell',
     'WEAP': 'Weapon', 'ARMO': 'Armor', 'BOOK': 'Book',
     'ALCH': 'Potion', 'INGR': 'Ingredient', 'LIGH': 'Light',
-    'MISC': 'MiscObject', 'KEYM': 'Key', 'AMMO': 'Ammo',
+    'MISC': 'MiscObject', 'KEYM': 'Key', 'AMMO': 'Ammo', 'NOTE': 'Book', 'REPU': 'FormList',
     # TES4-only item types, typed by what the IMPORTER writes them as (measured
     # over Morrowind_ob: 565 CLOT -> ARMO, 22 APPA -> MISC).  Leaving them
     # unmapped fell through to the 'ObjectReference' default, which is not a
@@ -652,6 +652,9 @@ POLL_BLOCKS = ('gamemode', 'scripteffectupdate')
 MENU_ID_NAMES = {
     '1036': 'RaceSex Menu',
 }
+
+#: `begin MenuMode 1001`, the script's own message box; docs/commentary/script_convert.md#menumode-message-box
+MESSAGE_BOX_MENU_ID = '1001'
 
 
 #: Reference types, WIDEST first: the later one is the more specific.
