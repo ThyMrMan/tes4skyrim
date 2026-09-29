@@ -1,27 +1,56 @@
 > [!NOTE]
 > **This is a fork.** [ThyMrMan/tes4skyrim](https://github.com/ThyMrMan/tes4skyrim)
 > is a personal fork of [bryantmh/tes4skyrim](https://github.com/bryantmh/tes4skyrim),
-> the original TES Auto-Convert. All the conversion work is upstream's. Everything
-> below this note is upstream's README, plus this fork's changes to it.
+> the original TES Auto-Convert. The converter itself is upstream's work. This
+> note describes the fork; everything below it is upstream's README.
 >
-> **What this fork is for:**
-> - Making the converter easier to set up and run: a launch fix, a portable
->   package with its own Python, and clearer requirements.
-> - Building toward playing each converted game on its own: one Mod Organizer 2
->   profile per world, and Oblivion's own systems (attributes, classes,
->   birthsigns, leveling, menus) generated from your Oblivion files. See the
->   [fork roadmap](docs/fork/ROADMAP.md). This is planned or in
->   progress; most of it isn't built yet.
+> **Where the fork is going.** Upstream converts other games' worlds into
+> Skyrim, played with Skyrim's own character and leveling. This fork aims to
+> play each converted world **on its own terms**:
+> - **The source game's character rules.** Oblivion's attributes, skills and
+>   skill-use leveling; Fallout's S.P.E.C.I.A.L., XP, perks, traits, karma,
+>   reputation and speech checks. They come from each game's own records and
+>   executable, in an optional plugin generated per game. Morrowind follows.
+> - **One world at a time, without hand setup.** A Mod Organizer 2 profile per
+>   world (or one with every world), made and filled by the converter, then a
+>   launcher.
+> - **Stability and performance.** Play-testing every system, preflight audits
+>   that catch stuck quests and lost dialogue before play, and cutting the
+>   Papyrus cost of converted scripts.
+> - **Focus:** Morrowind, Oblivion, Fallout 3 and New Vegas. Nehrim is
+>   deprioritized.
 >
-> **How it relates to upstream:**
-> - The `standalone` branch (the default) is this fork's version: upstream, plus
->   this fork's changes. `master` is an unchanged copy of upstream.
-> - Upstream is merged in regularly. General fixes and improvements go back
->   upstream as [pull requests](https://github.com/bryantmh/tes4skyrim/pulls?q=author%3AThyMrMan);
+> **Where it stands (2026-09-29, upstream 0.673 merged):**
+> - **Fallout 3 and New Vegas** are being play-tested, and the fixes from each
+>   round are in. Fallout 3 is a world choice at game start ("Capital Wasteland").
+> - **Character rules:** Oblivion's leveling and New Vegas's XP leveling have
+>   been played. Fallout perk and trait menus, karma, reputation, the Fallout 3
+>   rules plugin and Fallout 3's speech challenges are written but not played
+>   yet. The stats menu, Morrowind's rules and item condition are not started.
+> - **Preflight audits** are built: `python -m tools.validate.preflight`.
+> - **Profiles and launcher:** not started; the fork's profiles are made by hand.
+>
+> **How it differs from upstream where both touch the same thing:**
+> - The player levels by the source game's rules, not by Skyrim's level-up.
+>   Upstream's [character sheet plan](docs/plans/character_sheet.md) is not
+>   followed.
+> - Skills Skyrim folds together (Blade and Blunt, the Fallout weapon skills)
+>   are kept apart, not read as the higher of the two.
+> - A Fallout condition on a skill Skyrim folds, or on Medicine, fails open
+>   until the rules keep that skill.
+>
+> The plans, what's built and what's next are in the
+> [fork roadmap](docs/fork/ROADMAP.md).
+>
+> **Branches and releases:**
+> - `standalone` (the default) is upstream plus this fork's work, with upstream
+>   merged in regularly. `master` is an unchanged copy of upstream, and may
+>   lag behind it.
+> - General fixes go back upstream as
+>   [pull requests](https://github.com/bryantmh/tes4skyrim/pulls?q=author%3AThyMrMan);
 >   work that only suits this fork stays here.
-> - For official releases, support and bug reports about the converter itself,
->   use [upstream](https://github.com/bryantmh/tes4skyrim). This fork has no
->   releases yet.
+> - This fork has no releases. For releases, support and bug reports about the
+>   converter itself, use [upstream](https://github.com/bryantmh/tes4skyrim).
 
 <p align="center">
   <img src="docs/assets/banner.svg" alt="TES Auto-Convert — Gamebryo to Skyrim Conversion" width="720">
