@@ -29,9 +29,11 @@ import os
 import re
 import sys
 
-ACTOR_BASES = {'NPC_', 'CREA'}
-# LVLC spawns an actor at runtime, so an Actor Property on one is correct.
-RUNTIME_ACTOR_BASES = {'LVLC'}
+#: Base record types an Actor property's reference may have; LVLC spawns an actor at runtime.
+ACTOR_BASES = {'NPC_', 'CREA', 'LVLC'}
+
+#: Export files that never hold a base record.
+_NOT_BASES = ('REFR', 'ACHR', 'ACRE', 'CELL', 'LAND', 'INFO', 'DIAL', 'SCPT', 'QUST')
 
 _PROP_RE = re.compile(r'^Actor Property (\w+) Auto', re.M)
 
@@ -42,11 +44,9 @@ def iter_records(path):
     with open(path, encoding='utf-8', errors='replace') as fh:
         for line in fh:
             line = line.rstrip('\n')
-            if line == '---RECORD_BEGIN---':
-                cur = {}
-            elif line == '---RECORD_END---':
-                if cur:
-                    yield cur
+            if line == '---RECORD_END---' and cur:
+                yield cur
+            if line in ('---RECORD_BEGIN---', '---RECORD_END---'):
                 cur = {}
             elif '=' in line:
                 k, _, v = line.partition('=')
@@ -58,23 +58,30 @@ def build_ref_map(export_dir):
     edid_to_base = {}
     for sig in ('REFR', 'ACHR', 'ACRE'):
         path = os.path.join(export_dir, f'{sig}.txt')
-        if not os.path.exists(path):
-            continue
-        for rec in iter_records(path):
-            if 'EditorID' in rec and 'NAME' in rec:
-                edid_to_base[rec['EditorID'].lower()] = rec['NAME']
-
+        if os.path.exists(path):
+            edid_to_base.update((rec['EditorID'].lower(), rec['NAME']) for rec in iter_records(path)
+                                if 'EditorID' in rec and 'NAME' in rec)
     base_type = {}
     for path in glob.glob(os.path.join(export_dir, '*.txt')):
         sig = os.path.basename(path)[:-4]
-        if sig in ('REFR', 'ACHR', 'ACRE', 'CELL', 'LAND',
-                   'INFO', 'DIAL', 'SCPT', 'QUST'):
-            continue
-        for rec in iter_records(path):
-            fid = rec.get('FormID')
-            if fid:
-                base_type[fid] = sig
+        if sig not in _NOT_BASES:
+            base_type.update((rec['FormID'], sig) for rec in iter_records(path) if rec.get('FormID'))
     return edid_to_base, base_type
+
+
+def unbindable_actor_properties(export_dir, src) -> dict:
+    """{(property name, base signature): [script files]} of Actor properties on non-actor refs."""
+    edid_to_base, base_type = build_ref_map(export_dir)
+    bad = {}
+    for path in glob.glob(os.path.join(src, '*.psc')):
+        with open(path, encoding='utf-8', errors='replace') as fh:
+            names = _PROP_RE.findall(fh.read())
+        for name in names:
+            base = edid_to_base.get(name.lower())
+            sig = base_type.get(base, '?') if base else None
+            if sig and sig not in ACTOR_BASES:
+                bad.setdefault((name, sig), []).append(os.path.basename(path))
+    return bad
 
 
 def blame(export_dir, names):
@@ -95,51 +102,8 @@ def blame(export_dir, names):
     return found
 
 
-def main():
-    ap = argparse.ArgumentParser(
-        description='Flag Actor Property declarations bound to non-actor refs.')
-    ap.add_argument('-f', '--plugin', default='Oblivion.esm',
-                    help='plugin name, for locating export/ and output/')
-    ap.add_argument('--src',
-                    help='directory of .psc to audit '
-                         '(default: output/<plugin>/scripts/source)')
-    ap.add_argument('--export',
-                    help='export directory (default: export/<plugin>)')
-    ap.add_argument('--blame', action='store_true',
-                    help='also list the TES4 calls that named each bad ref')
-    args = ap.parse_args()
-
-    export_dir = args.export or os.path.join('export', args.plugin)
-    src = args.src or os.path.join('output', args.plugin, 'scripts', 'source')
-    if not os.path.isdir(export_dir):
-        sys.exit(f'no export directory: {export_dir}')
-    if not os.path.isdir(src):
-        sys.exit(f'no script source directory: {src}')
-
-    print(f'export: {export_dir}\nsource: {src}')
-    edid_to_base, base_type = build_ref_map(export_dir)
-    print(f'  {len(edid_to_base)} placed refs, {len(base_type)} base records')
-
-    bad = {}
-    scanned = 0
-    for path in glob.glob(os.path.join(src, '*.psc')):
-        scanned += 1
-        with open(path, encoding='utf-8', errors='replace') as fh:
-            for name in _PROP_RE.findall(fh.read()):
-                base = edid_to_base.get(name.lower())
-                if base is None:
-                    continue          # not a placed ref -- nothing to check
-                sig = base_type.get(base, '?')
-                if sig in ACTOR_BASES or sig in RUNTIME_ACTOR_BASES:
-                    continue
-                bad.setdefault((name, sig), []).append(os.path.basename(path))
-
-    print(f'  scanned {scanned} scripts\n')
-    if not bad:
-        print('CLEAN: no Actor Property bound to a non-actor reference.')
-        return 0
-
-    blamed = blame(export_dir, [n for n, _ in bad]) if args.blame else {}
+def _print_bad(bad: dict, blamed: dict) -> None:
+    """Each unbindable property with its scripts and, when blamed, the TES4 calls naming it."""
     print(f'{len(bad)} Actor Property declaration(s) that cannot bind:\n')
     for (name, sig), files in sorted(bad.items(), key=lambda kv: -len(kv[1])):
         print(f'  {name:34s} base={sig:5s} in {len(files)} script(s)')
@@ -147,10 +111,34 @@ def main():
             print(f'      {f}')
         if len(files) > 5:
             print(f'      ... and {len(files) - 5} more')
-        if args.blame:
-            calls = sorted(blamed.get(name.lower(), ()))
-            if calls:
-                print(f'      TES4 calls: {", ".join(calls)}')
+        calls = sorted(blamed.get(name.lower(), ()))
+        if calls:
+            print(f'      TES4 calls: {", ".join(calls)}')
+
+
+def main():
+    """Audit one plugin; 1 when any Actor property cannot bind."""
+    ap = argparse.ArgumentParser(
+        description='Flag Actor Property declarations bound to non-actor refs.')
+    ap.add_argument('-f', '--plugin', default='Oblivion.esm',
+                    help='plugin name, for locating export/ and output/')
+    ap.add_argument('--src', help='directory of .psc to audit (default: output/<plugin>/scripts/source)')
+    ap.add_argument('--export', help='export directory (default: export/<plugin>)')
+    ap.add_argument('--blame', action='store_true',
+                    help='also list the TES4 calls that named each bad ref')
+    args = ap.parse_args()
+
+    export_dir = args.export or os.path.join('export', args.plugin)
+    src = args.src or os.path.join('output', args.plugin, 'scripts', 'source')
+    for folder in (export_dir, src):
+        if not os.path.isdir(folder):
+            sys.exit(f'no such directory: {folder}')
+    print(f'export: {export_dir}\nsource: {src}')
+    bad = unbindable_actor_properties(export_dir, src)
+    if not bad:
+        print('CLEAN: no Actor Property bound to a non-actor reference.')
+        return 0
+    _print_bad(bad, blame(export_dir, [n for n, _ in bad]) if args.blame else {})
     return 1
 
 

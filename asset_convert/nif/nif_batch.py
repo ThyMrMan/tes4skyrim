@@ -154,6 +154,18 @@ def _empty_batch_stats(total):
     }
 
 
+def _named_by_records(wearable_plan) -> set:
+    """Mesh keys a placed fixture or a worn item names, which SKIP_PATHS spares.
+
+    FO3's glasses and Pip-Boy glove sit under `characters/`, which no
+    character stage converts, so their ARMOs pointed at nothing.
+    See: docs/commentary/asset_convert_nif.md#skip-paths-fixtures
+    """
+    plan = wearable_plan or {}
+    worn = {k for k in plan if isinstance(k, str) and not k.startswith('*')}
+    return worn | set(plan.get(FIXTURE_KEY, ()))
+
+
 def _collect_nifs(mesh_path, subdir_filter, fixtures=()):
     """(files to convert, how many the filters dropped).
 
@@ -358,7 +370,7 @@ def batch_convert(mesh_dir, output_dir, *, fix_textures=True,
     mesh_path = Path(mesh_dir)
     out_base = Path(output_dir)
     nif_files, skipped_by_path = _collect_nifs(
-        mesh_path, subdir_filter, (wearable_plan or {}).get(FIXTURE_KEY, ()))
+        mesh_path, subdir_filter, _named_by_records(wearable_plan))
     total = len(nif_files)
     stats = _empty_batch_stats(total)
     skipped_list = []

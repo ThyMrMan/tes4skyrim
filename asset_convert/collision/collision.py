@@ -14,7 +14,7 @@ from pyffi.formats.nif import NifFormat
 from asset_convert.collision.cms_builder import build_cms_collision
 from asset_convert.collision.collision_anim import clip_moves_node, mesh_has_sequence
 from asset_convert.collision.collision_falloutnv import fo3_layer, is_fallout_source
-from asset_convert.collision.collision_hulls import decompose_clutter_hull
+from asset_convert.collision.collision_hulls import decompose_clutter_hull, list_shape_over
 from asset_convert.collision.collision_material import (
     OB_TO_SK_MATERIAL,
     convert_materials,
@@ -36,6 +36,8 @@ _HAVOK_SCALE = 0.1
 # skeleton.hkx describe the SAME bodies and vanilla ships identical masses in
 # both (dog total 74.00 either side).  See _convert_blend_collision.
 _OB_MASS_DIV = 7.0
+#: Phantom holders; only a bhkSimpleShapePhantom body is kept, a bare AABB phantom is dropped.
+PHANTOM_COLLISION_OBJECTS = ('bhkSPCollisionObject', 'bhkPCollisionObject')
 #: Vanilla's velocity ceiling for every engine-driven keyframed door and gate.
 _KEYFRAMED_VELOCITY_CAP = 1000002.0
 NIF_FLAGS = 14  # Standard Skyrim NiAVObject flags (SelectiveUpdate bits 1-3)
@@ -851,6 +853,10 @@ def _convert_shape(shape, root_node):
         shape.radius *= _HAVOK_SCALE
         return shape
 
+    if shape.__class__.__name__ == 'bhkConvexListShape':
+        return _convert_shape(list_shape_over(list(shape.sub_shapes),
+                                              get_havok_material(shape.material)), root_node)
+
     if isinstance(shape, NifFormat.bhkListShape):
         # Convert children; flatten any nested bhkListShape produced by child
         # conversion (e.g. multisphere expansion) — a list shape carries no
@@ -1176,7 +1182,7 @@ def _convert_collision(node, actual_root=None, keep_blend=False):
         else:
             node.collision_object = None
         return
-    if cls_name == 'bhkSPCollisionObject':
+    if cls_name in PHANTOM_COLLISION_OBJECTS:
         # Trigger-volume phantom (tripwire triggers, gas/fire damage zones).
         # Skyrim fully supports bhkSPCollisionObject + bhkSimpleShapePhantom —
         # vanilla ships 31 of them under meshes/traps alone (traptripwire01,

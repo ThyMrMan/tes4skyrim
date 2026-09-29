@@ -38,6 +38,24 @@ def is_gun(rec: dict) -> bool:
     return get_int(rec, 'DNAM.FalloutAnimType', -1) in _GUN_TYPES
 
 
+#: DNAM Flags1 bits Skyrim's DNAM Flags keeps: ignores resistance, can't drop, embedded, non-playable.
+_KEPT_WEAPON_FLAGS = 0x01 | 0x08 | 0x20 | 0x80
+
+
+def weapon_flags(rec: dict) -> int:
+    """The FO3/FNV DNAM Flags1 bits that mean the same in Skyrim's DNAM Flags.
+
+    See: docs/commentary/tes4_export_falloutnv.md#embedded-weapons
+    """
+    return get_int(rec, 'DNAM.Flags1') & _KEPT_WEAPON_FLAGS
+
+
+def embedded_node_subs(rec: dict) -> bytes:
+    """NNAM, the actor node an embedded weapon is and fires from, or nothing."""
+    node = rec.get('NNAM')
+    return pack_string_subrecord('NNAM', node) if node else b''
+
+
 #: FO3/FNV weapon animation types after Hand to Hand (0): 1 Melee (1 Hand) to 13 Thrown (1 Hand).
 _ANIM_TYPES = range(1, 14)
 

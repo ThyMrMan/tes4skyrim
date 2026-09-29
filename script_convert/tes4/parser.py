@@ -106,7 +106,7 @@ _FIXED_ARITY = {
 #: Commands whose first argument may be a tight negative number (coordinates, or a signed amount).
 _NEGATIVE_FIRST_ARG = frozenset({
     'positionworld', 'positioncell', 'emcsetmusictype',
-    'rewardkarma', 'modpcfame', 'modpcinfamy',
+    'rewardkarma', 'modpcfame', 'modpcinfamy', 'islimbgone',
 })
 
 

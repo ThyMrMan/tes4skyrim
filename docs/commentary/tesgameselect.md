@@ -16,6 +16,7 @@ never moves an existing one:
 | Range | Records |
 |---|---|
 | `0x800`–`0x807` | GLOB: one "installed" flag per converted game, Skyrim's, and `TESGS_CurrentGame` |
+| `0x808` | GLOB: `TESGS_HasFallout3`, the eighth game's flag (after `TESGS_CurrentGame`, so no id moved) |
 | `0x80F` | FLST of the new-game prompt variants |
 | `0x810`… | MESG: 2^(gated games) prompt variants — the block GROWS with each game |
 | `0xA00`–`0xA02` | QUST selector, QUST travel, BOOK scroll |
@@ -76,7 +77,7 @@ new game. Nehrim marks its opening that way (`Charactergen` 0002466E and `MQ00`
 00000811, DATA.Flags 1): `CharGenQuest` sets its own stage 5 after five update
 ticks, which moves the player into Nehrim's start cave, and Nehrim's
 `GlobalplayerScript` sets `MQ00` stage 1 the first time it runs. Oblivion,
-Morroblivion and FalloutNV leave their openings off the `.seq`; the TES3 games
+Morroblivion and both Fallouts leave their openings off the `.seq`; the TES3 games
 wait for `CharGenState`.
 
 The hold comes in two parts, because stopping a quest already in the journal
@@ -117,6 +118,7 @@ base-record items (see [#mq101-takeover](#mq101-takeover)).
 | Morrowind | Morrowind.esm `Player`: `common_shirt_01`, `common_pants_01`, `common_shoes_01` |
 | Arktwend | Arktwend's own `Player`: `common_robe_02_rr` plus the same three |
 | FalloutNV | nothing: `VCG00` stage 0 removes the Pip-Boy, the only thing its record carries |
+| Fallout 3 | nothing: the player is born in `CG00`, and the CG quests hand out the vault suit and Pip-Boy as the years pass |
 
 The TES3 exporter drops the `Player` NPC record, so these came from the source
 files. Arktwend's ids were read from an authored-mode export (the only mode it
@@ -175,18 +177,28 @@ movement controls are off, which also covers every opening sequence.
 
 A MESG button's text is fixed and `Message.Show()` returns only 0–9 (CK wiki),
 so a menu holds at most 10 buttons. Two buttons per game ("Begin" and "Return
-to") would need 15. Instead each game has one button and the whole menu comes
-in one variant per started-game set (2^7 = 128), the script showing entry
+to") would need 17. Instead each game has one button and the whole menu comes
+in one variant per started-game set (2^8 = 256), the script showing entry
 `[startedMask]` of the FLST — the same device the new-game prompt uses for its
 DESC, which carries no condition. Conditions still hide absent games and the
 current one; a hidden button does not renumber the rest, so the returned index
-is the game id and index 7 is "Stay".
+is the game id and index 8 is "Stay".
+
+The travel quest keeps one `started` flag and one return point per game, in
+arrays whose size is a literal (`GAME_SLOTS`). A save made before a game was
+added holds shorter arrays, so `EnsureArrays` copies them into full-size ones
+on the next load; `test_scripts_size_their_arrays_to_the_game_count` keeps the
+literals equal to the game count.
 
 ## <a id="id-migration"></a>Game numbering
 
 The button index IS the game id, in the order Skyrim, Cyrodiil, Vvardenfell
-(vanilla Morrowind), Vvardenfell (Morroblivion), Nehrim, Arktwend, Mojave, with
-Fallout 3 reserved next. Saves from the first numbering (Oblivion 1,
+(vanilla Morrowind), Vvardenfell (Morroblivion), Nehrim, Arktwend, Mojave,
+Capital Wasteland. Fallout 3 (7) begins like New Vegas: `CG00` (`0001F388`)
+stage 0 is its whole opening, which moves the parents and Doctor Li into
+place, sets stage 5 (the birth) and moves the player to `CG00PlayerStartMarker`
+(`00039562`); Doctor Li's gene projection later shows its own race menu. Saves
+from the first numbering (Oblivion 1,
 Morroblivion 2, Nehrim 3, FalloutNV 4, Morrowind 5, Arktwend 6) store
 `ChosenGame` under it; `IdVersion` defaults to 0 on those saves and
 `MigrateIds` renumbers once.

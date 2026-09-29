@@ -34,8 +34,8 @@ SCRIPTS = ('FalloutRules_Main', 'FalloutRules_Player', 'FalloutRules_KillEvent',
 #: The records character_data_falloutnv reads for the rules.
 EXPORT_TYPES = frozenset({'AVIF', 'CLAS', 'CREA', 'FACT', 'GMST', 'LVLC', 'LVLN', 'NPC_', 'PERK'})
 
-#: Game plugin (lowercase) -> its id in TESGameSelectQuest (GAME_FALLOUTNV).
-GAME_IDS = {'falloutnv.esm': 6}
+#: Game plugin (lowercase) -> its id in TESGameSelectQuest (GAME_FALLOUTNV, GAME_FALLOUT3).
+GAME_IDS = {'falloutnv.esm': 6, 'fallout3.esm': 7}
 
 #: S.P.E.C.I.A.L. in actor value order, 5 to 11: the engine's fixed order.
 SPECIAL = ('Strength', 'Perception', 'Endurance', 'Charisma', 'Intelligence', 'Agility', 'Luck')

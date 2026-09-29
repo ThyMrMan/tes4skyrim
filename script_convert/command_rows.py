@@ -233,9 +233,9 @@ COMMAND_ROWS = {
         'None', note='getPackageTarget has no Papyrus equivalent (read as None)'),
 
     #: NOT StopCombat -- opposite direction. See: docs/commentary/script_convert.md#receiver-and-argument-not-interchangeable
-    'scaonactor': Cmd('{ref}.StopCombatAlarm()', AV),
-    'sca': Cmd('{ref}.StopCombatAlarm()', AV),
-    'stopcombatalarmonactor': Cmd('{ref}.StopCombatAlarm()', AV, flags='zero_arg'),
+    'scaonactor': Cmd('{ref}.StopCombatAlarm()', ACTOR),
+    'sca': Cmd('{ref}.StopCombatAlarm()', ACTOR),
+    'stopcombatalarmonactor': Cmd('{ref}.StopCombatAlarm()', ACTOR, flags='zero_arg'),
     #: ClearOwnership
     'clearownership': Cmd('{ref}.SetActorOwner(Game.GetPlayer().GetActorBase())', SELF, flags='zero_arg'),
     #: Reset → ref.Reset()
@@ -840,11 +840,12 @@ COMMAND_ROWS = {
     #: See: docs/commentary/script_convert.md#tes4s-destroyed-flag-has-no
     'getdisabled': Cmd('TES4Polyfill.GetDisabled({ref}, {destroyed})', flags='objref_self zero_arg'),
     'isdisabled': Cmd('TES4Polyfill.GetDisabled({ref}, {destroyed})', flags='bare_bool objref_self'),
-    'getdestroyed': Cmd('TES4Polyfill.GetDestroyed({ref}, {destroyed})', flags='bare_no_equiv zero_arg'),
+    'getdestroyed': Cmd('TES4Polyfill.GetDestroyed({ref}, {destroyed})', OBJREF,
+                        flags='bare_no_equiv zero_arg'),
 
-    #: SetDestroyed writes that same shadow list.
+    #: SetDestroyed writes that same shadow list; a fragment's subject is its actor, not the fragment.
     'setdestroyed': Cmd(
-        'TES4Polyfill.SetDestroyed({ref}, {destroyed}, {b0})',
+        'TES4Polyfill.SetDestroyed({ref}, {destroyed}, {b0})', OBJREF,
         defaults={0: '1'}),
 
     #: See: docs/commentary/script_convert.md#closing-oblivion-gate-destroyed-flag

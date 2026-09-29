@@ -121,6 +121,16 @@ A skipped-folder mesh now converts when a placed-fixture record
 (`fixture_plan.FIXTURE_TYPES`: STAT, ACTI, LIGH, CONT, DOOR) names it, into the
 normal `meshes\<ns>\creatures\...` path the record already carries.
 
+**Worn items too** (`_named_by_records`). Fallout 3 keeps 19 ARMO models under
+`characters\`: every pair of glasses (`GlassesReadingChild` on a birthday-party
+kid), the powdered wig and the Pip-Boy glove (`characters\_male\
+lefthandpipboyglove.nif`, handed to the player at the party). The hair stage
+converts HAIR records only, into `__f`-suffixed files, so these ARMOs named
+nothing and rendered as the missing-mesh marker. A mesh the wearable plan
+names now converts like any other armor, with the plan's weight variants.
+They do not join the fixture set: that set also drops collision, which an
+item keeps.
+
 ## DOOR conversion notes
 <a id="door-conversion-notes"></a>
 - TES4 FNAM bit 0 = "Oblivion gate" — **clear this bit** when writing TES5 FNAM (no TES5 equivalent, may corrupt flags)

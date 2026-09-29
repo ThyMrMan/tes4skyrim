@@ -1202,19 +1202,44 @@ def place_at_me(ctx, call) -> str:
     return f'{ref}.PlaceAtMe({base}, {count})'
 
 
+@command('sin', 'cos', 'tan')
+def trig(ctx, call):
+    """FO3/FNV `Tan x 1`: a nonzero second argument asks for the INVERSE
+    function, in degrees; Papyrus spells that Math.atan (asin, acos).
+    See: docs/commentary/script_convert.md#trig-inverse-flag
+    """
+    if len(call) < 2:
+        return None
+    flag = call.source(1).strip()
+    try:
+        inverse = float(flag) != 0
+    except ValueError:
+        return ctx.note(f'{call.raw_name} {call.src}: the inverse flag '
+                        f'{flag} is not a constant')
+    return f'Math.{"a" if inverse else ""}{call.name}({call.arg(0)})'
+
+
+#: Record types a `Dispel` can name that Papyrus's DispelSpell cannot take.
+_NOT_SPELLS = {'ENCH': 'an enchantment', 'ALCH': 'an ingestible',
+               'INGR': 'an ingredient'}
+
+
 @command('dispel', 'dispelspell')
 def dispel(ctx, call) -> str:
     """Dispel -- remove an active spell.
 
-    An ENCHANTMENT operand has no Skyrim Spell behind it to dispel, so it
-    neutralises rather than binding a property that could never resolve.
+    An ENCHANTMENT or an ingestible (FO3's `Dispel StealthBoy`) operand has
+    no Skyrim Spell behind it to dispel, so it neutralises rather than binding
+    a property that could never resolve.
+    See: docs/commentary/script_convert.md#dispel-needs-a-spell
     """
     if not len(call):
         return None
     raw = call.source(0).strip()
-    if _record_type(ctx, raw) == 'ENCH':
-        return ctx.note(f'Dispel {raw} names an enchantment, which has no '
-                        f'Skyrim Spell to dispel')
+    kind = _record_type(ctx, raw)
+    if kind in _NOT_SPELLS:
+        return ctx.note(f'Dispel {raw} names {_NOT_SPELLS[kind]}, which has '
+                        f'no Skyrim Spell to dispel')
     arg = call.arg(0)
     ctx.sc.property_refs[raw] = 'Spell'
     ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)

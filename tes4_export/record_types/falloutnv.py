@@ -191,6 +191,7 @@ def _emit_weap_fire(lines: list, rec: Record, dnam):
         emit_float(lines, "DNAM.ShotsPerSec", dnam, 88)
     for sig in _WEAP_FORMIDS:
         emit_formid(lines, sig, get_subrecord(rec, sig))
+    emit_string(lines, "NNAM", get_subrecord(rec, "NNAM"))
 
 
 def _emit_proj_deltas(lines: list, rec: Record):

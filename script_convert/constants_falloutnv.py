@@ -154,6 +154,11 @@ FALLOUT_COMMAND_ROWS = {
     'rewardxp': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterXP", "", {f0})'),
     'setspecialpoints': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "special", {f0})'),
     'showlovetestermenuparams': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "special", {f0})'),
+    #: FO3's baby book. Takes no parameter; CG01's `ssbmp 40` writes the 40-point total, the default.
+    'showspecialbookmenu': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "special", {f0})',
+                                defaults={0: '40'}),
+    'ssbmp': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "special", {f0})',
+                  defaults={0: '40'}),
     'settagskills': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "tags", {f0})'),
     'showtraitmenu': dict(emit='Game.GetPlayer().SendModEvent("TESCharacterMenu", "traits", 0.0)',
                           flags='zero_arg'),

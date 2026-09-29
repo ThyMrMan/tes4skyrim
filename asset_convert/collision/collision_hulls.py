@@ -98,7 +98,7 @@ def _covers_same_volume(pts_hk, hull_shape):
     return True
 
 
-def _list_shape_over(piece_shapes, sk_material):
+def list_shape_over(piece_shapes, sk_material):
     """A bhkListShape wrapping the finished piece hulls."""
     ls = NifFormat.bhkListShape()
     set_havok_material(ls.material, sk_material)
@@ -286,7 +286,7 @@ def build_clutter_hull(tris_hk, sk_material):
             pts, _SYNTH_HULL_RADIUS, sk_material)] if s is not None]
     if not shapes:
         return None
-    return shapes[0] if len(shapes) == 1 else _list_shape_over(shapes,
+    return shapes[0] if len(shapes) == 1 else list_shape_over(shapes,
                                                                sk_material)
 
 
@@ -324,5 +324,5 @@ def decompose_clutter_hull(node, hull_shape):
             return None
         piece_shapes.append(s)
 
-    return _list_shape_over(piece_shapes, sk_material)
+    return list_shape_over(piece_shapes, sk_material)
 

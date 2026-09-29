@@ -36,6 +36,8 @@ from script_convert.poll_interval import quest_script_delays
 from script_convert.quest_fragments import (quest_fragment_psc,
                                             scripted_count, stage_fragments)
 from script_convert.say_durations import scan_voice_durations
+from script_convert.speech_challenges_falloutnv import reroll_line, speech_helper
+from tes5_import.dialogue.speech_chance_falloutnv import NEED_GLOBALS, rerolls
 from script_convert.say_to_done import (fragment_calls, say_to_done_hooks,
                                         say_to_done_topics)
 from script_convert.scro_refs import (preload_scro_refs, resolve_scro_aliases,
@@ -276,6 +278,9 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
     quest_script_vars = build_quest_script_vars(by_type)
     _write_conversation_driver(export_dir, output_dir, by_type,
                                quest_script_vars, say_durations)
+    helper = speech_helper(export_dir, by_type['INFO'])
+    if helper:
+        write_psc(output_dir, *helper)
     message_menus = build_message_plan(by_type['SCPT'], by_type['MESG'])
     if message_menus:
         print(f'    Button menus: {sum(len(v) for v in message_menus.values())} '
@@ -684,10 +689,11 @@ def _info_bodies(rec: dict, xref: CrossRefGraph, result_script: str) -> tuple:
 
 
 def _info_psc(rec: dict, xref: CrossRefGraph, reveals: list, service_kind: str,
-              length: float) -> tuple:
-    """(script name, Papyrus) of one INFO's TopicInfo fragment script.
+              length: float, speech: bool = False) -> tuple:
+    """(script name, Papyrus) of one INFO's TopicInfo fragment script; `speech` rolls the next challenge.
 
     See: docs/commentary/script_convert.md#info-fragment-scripts
+    See: docs/commentary/tes5_import_dialogue.md#fallout-speech-challenges
     """
     result_script = info_result_script(rec)
     begin_lines, body_lines, conv = [], [], None
@@ -697,8 +703,9 @@ def _info_psc(rec: dict, xref: CrossRefGraph, reveals: list, service_kind: str,
                              _WORKER_CTX.get('quest_edid_by_fid') or {})
     script_name = f'{script_prefix("_TIF__")}{rec["FormID"]}'
     out_lines = [f'ScriptName {script_name} extends TopicInfo Hidden', '']
-    declared = {gname.lower() for gname in reveals}
-    out_lines += [f'GlobalVariable Property {gname} Auto' for gname in reveals]
+    globals_set = list(reveals) + (list(NEED_GLOBALS) if speech else [])
+    declared = {gname.lower() for gname in globals_set}
+    out_lines += [f'GlobalVariable Property {gname} Auto' for gname in globals_set]
     if conv and conv.sc.property_refs:
         out_lines += property_declarations(dict(conv.sc.property_refs), declared)
     if declared:
@@ -706,7 +713,7 @@ def _info_psc(rec: dict, xref: CrossRefGraph, reveals: list, service_kind: str,
     out_lines += _info_begin_fragment(body_lines, seq_gate, length, begin_lines, reveals)
     done = (_WORKER_CTX.get('say_to_done') or {}).get((rec.get('ParentDIAL') or '').upper(), ())
     out_lines += _info_end_fragment(body_lines, seq_gate, service_kind, length,
-                                    fragment_calls(done))
+                                    fragment_calls(done) + ([reroll_line()] if speech else []))
     if conv:
         out_lines.extend(conv.get_cell_family_helpers())
     return script_name, '\n'.join(out_lines)
@@ -737,7 +744,8 @@ def _info_batch(records: list, output_dir: str, xref: CrossRefGraph,
         if not formid:
             continue
         scripted = bool(info_result_script(rec).strip())
-        if not info_needs_fragment(rec, info_reveals, service_topics):
+        speech = rerolls(rec, _WORKER_CTX.get('info_begin_scripts', False))
+        if not (speech or info_needs_fragment(rec, info_reveals, service_topics)):
             stats['info_total'] += 1
             stats['info_ok'] += 1
             continue
@@ -750,7 +758,7 @@ def _info_batch(records: list, output_dir: str, xref: CrossRefGraph,
             script_name, papyrus = _info_psc(
                 rec, xref, reveals,
                 service_topics.get(rec.get('ParentDIAL', ''), ''),
-                _info_length(formid))
+                _info_length(formid), speech)
             write_psc(output_dir, script_name, papyrus)
             stats['info_ok'] += scripted
             stats['todo_count'] += papyrus.count(';TODO')

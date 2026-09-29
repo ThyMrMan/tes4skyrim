@@ -313,7 +313,7 @@ python convert.py -f Morrowind_ob.esm --scripts-only     # masters, largest corp
 
 python tools/script/psc_semantic_diff.py compare \
     -f Oblivion.esm -f Nehrim.esm -f Morrowind_ob.esm -f Knights.esp --show 0
-python tools/validate/vmad_property_typecheck.py
+python -m tools.validate.vmad_property_typecheck
 ```
 
 `psc_semantic_diff` compares what each script **does** — properties, locals,

@@ -624,7 +624,7 @@ def convert_INFO(rec: dict, *, injected_ctdas: bytes = b'',
                        well_known_props)
     subs += _info_enam(rec, bark_dial_fids, follow_up)
     subs += pack_subrecord('CNAM', struct.pack('<B', 0))
-    subs += _info_tclt(rec, bark_dial_fids, menu_topic_fids)
+    subs += info_tclt(rec, bark_dial_fids, menu_topic_fids)
     if follow_up:
         subs += pack_formid_subrecord('TCLT', follow_up)
     subs += _info_responses(rec)
@@ -694,7 +694,7 @@ def _info_enam(rec: dict, bark_dial_fids, follow_up: int = 0) -> bytes:
     return pack_subrecord('ENAM', struct.pack('<HH', flags, reset))
 
 
-def _info_tclt(rec: dict, bark_dial_fids, menu_topic_fids=()) -> bytes:
+def info_tclt(rec: dict, bark_dial_fids, menu_topic_fids=()) -> bytes:
     """TCLT choice links (follow-up topics), in source order.
 
     A choice into a zero-INFO topic is dropped; a bark INFO also drops choices

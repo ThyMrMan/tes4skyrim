@@ -411,6 +411,28 @@ The jump, sprint, shout and horse selectors key on `iRightHandEquipped` /
 (id 38821) while the weapon is drawn, so they are in `HAND_TYPE_VARS` and
 get a type-13 entry like the `iRightHandType` slots.
 
+### <a id="classes-without-gaits"></a>Fallout 3's rifles have no walk clips of their own
+
+New Vegas authors walk and run clips for every gun class in both views
+(`_male/locomotion/2hrforward.kf` and so on). Fallout 3 does only in first
+person. In third person its `_male/locomotion/` holds walk clips for `1hp` and
+the melee classes, and the `mt*` set in `male/` and `female/`, but nothing for
+`2hr`, `2ha`, `2hh` or `2hl`. Their `2hraim` and similar clips are the upper
+body; the legs come from the shared `mt` walk, composed by priority as in
+[turn clips](#turn-clips-are-overlays).
+
+`loco_machine` assumed at least one direction clip and indexed an empty list,
+which crashed the creatures stage on Fallout 3 before any gun graph was
+written. Now a class with no gait (`has_gait`) returns None, and
+`class_selector` gives it the vanilla slot's generator (`vanilla_slot`): the
+crossbow's direction blend in `1hm_locomotion`, `CrossbowSprintForward` for
+sprint. `moving_gen` then always blends that class' aim pose (with its iron
+sights on the zoom variable) over the vanilla legs, as FO3 layers its aim
+clip over `mt`. First person has every gait. Its `Melee_Direction_Behavior`
+has no crossbow state at all, so `vanilla_slot` returns None there; a class
+that needed the fallback would reuse the first class instead. The New Vegas
+graphs rebuild byte-identical.
+
 ### <a id="accum-root-identity"></a>The accum root plays as identity; NonAccum carries the 90°
 
 **Code:** `clip_retarget.py` `_source_locals`/`retarget_clip`,

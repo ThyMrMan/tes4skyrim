@@ -201,8 +201,12 @@ for `FalloutNV.esm` and first played on 2026-09-27. The rules started at the
 Mojave choice and handed Skyrim's leveling to TESRuntime, and the player's
 kills (two Bloatflies) counted while a convict's kill did not. S.P.E.C.I.A.L.
 stayed at the class's 5s, which led to the character creation menus below.
-No quest in that run pays XP from a stage. Fallout 3 has no
-TESGameSelect game, so its rules cannot start yet, though its data builds.
+No quest in that run pays XP from a stage. Fallout 3's rules build the same
+way (`--plugin Fallout3.esm`, game 7, `GAME_FALLOUT3`, which
+[TESGameSelect](tesgameselect.md#id-migration) now offers as the Capital
+Wasteland): 13 skills with Big Guns and no Survival, level cap 20, skill points
+10 + Intelligence, no traits, no reputations and no infamy. Built on
+2026-09-28; not yet played.
 
 | Record | What it is |
 |---|---|

@@ -157,10 +157,10 @@ def test_prologue_names_only_installed_games():
 
 
 def test_game_order_is_the_published_one():
-    """Skyrim, Cyrodiil, both Vvardenfells, Nehrim, Arktwend, Mojave, in index order."""
+    """Skyrim, Cyrodiil, both Vvardenfells, Nehrim, Arktwend, Mojave, Capital Wasteland, in index order."""
     assert [b[0] for b in BUTTONS] == ['Skyrim', 'Cyrodiil', 'Vvardenfell',
                                        'Vvardenfell', 'Nehrim', 'Arktwend',
-                                       'Mojave']
+                                       'Mojave', 'Capital Wasteland']
 
 
 def test_menu_lists_hold_every_variant_in_mask_order(built):
@@ -382,10 +382,19 @@ def test_script_game_constants_match_the_button_order():
 
 
 def test_scripts_size_their_arrays_to_the_game_count():
-    """Papyrus array sizes are literals; each must equal the number of games."""
+    """Papyrus array sizes are literals; each must equal the number of games.
+
+    MigrateIds' renumber table is the exception: it maps the SEVEN ids a save
+    from before the reorder can hold, so it never grows.
+    """
     for name in (SCRIPT_NAME, TRAVEL_SCRIPT_NAME):
-        sizes = re.findall(r'new \w+\[(\d+)\]', _psc(name))
-        assert sizes and all(int(s) == len(BUTTONS) for s in sizes), name
+        text = _psc(name)
+        legacy = re.findall(r'renumbered = new Int\[(\d+)\]', text)
+        assert legacy in ([], ['7']), name
+        sizes = re.findall(r'(?<!renumbered = )new \w+\[(\d+)\]', text)
+        assert (sizes or legacy) and all(int(s) == len(BUTTONS) for s in sizes), name
+    slots = re.search(r'Property GAME_SLOTS\s*=\s*(\d+)', _psc(TRAVEL_SCRIPT_NAME))
+    assert slots and int(slots.group(1)) == len(BUTTONS)
 
 
 def test_scripts_never_compare_an_array_to_none():

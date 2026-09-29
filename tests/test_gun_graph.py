@@ -12,8 +12,8 @@ from asset_convert.havok.gun_anim_falloutnv import (classify_stem,
                                                     gun_layout)
 from asset_convert.havok.gun_graph_falloutnv import (
     GUN_EVENTS, GUN_HAND_TYPE, GUN_VARIABLES, GunClips, GunGraphBuilder,
-    class_selector, clip_speed, fire_machine, loco_machine, ready_machine,
-    equip_gen)
+    class_selector, clip_speed, fire_machine, has_gait, loco_machine,
+    moving_gen, ready_machine, equip_gen)
 from asset_convert.havok.humanoid_graph import HumanoidGraph, param_text
 from tes5_import.record_types.equipment_falloutnv import gun_profile
 
@@ -129,6 +129,21 @@ class TestMachines:
         assert xml.count('hkbManualSelectorGenerator') >= 1
         assert 'BSiStateTaggingGenerator' in xml
 
+    def test_class_without_gaits_uses_the_vanilla_legs(self):
+        """Fallout 3's third-person rifles have no walk/run clips: locomotion
+        plays the vanilla slot, and moving wears the aim pose over it."""
+        m = _manifest()
+        m['clips'] = [c for c in m['clips'] if 'forward' not in c['stem']
+                      and 'fastleft' not in c['stem']]
+        clips = GunClips(m)
+        gb = _builder(clips)
+        assert not has_gait(clips, '2hr')
+        assert loco_machine(gb, '2hr') is None
+        sel = class_selector(gb, 'MSG', lambda c: loco_machine(gb, c), '#0777')
+        assert '#0777' in gb.render(sel)
+        moving = moving_gen(gb, '2hr', '#0001', '#0002')
+        assert _text_name(moving) == 'TES4Gun_2hr_MovingBlend'
+
 
 def _text_name(obj):
     """The `name` param of a rendered builder object."""
@@ -233,6 +248,12 @@ class TestHumanoidGraphPatch:
         p = tmp_path / 'g.xml'
         p.write_text(SYNTH_GRAPH, encoding='ascii')
         return HumanoidGraph(str(p))
+
+    def test_vanilla_slot(self, graph):
+        """The last vanilla type's generator in a selector or machine slot."""
+        assert graph.vanilla_slot('TypeMSG') == '#0062'
+        assert graph.vanilla_slot('TypeMachine') == '#0062'
+        assert graph.vanilla_slot('NoSuchSlot') is None
 
     def test_tables_extend_in_place(self, graph):
         """Variables and events append once each and bump every count."""

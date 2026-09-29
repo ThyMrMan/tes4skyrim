@@ -21,6 +21,7 @@ Parameter remapping and the crash rule are in
 - [GameDaysPassed reads a whole-day copy](#whole-days)
 - [GetIsRace on a plugin-authored race becomes a faction test](#plugin-authored-races)
 - [GetIsVoiceType names the VTYP as written](#authored-voice-types)
+- [Only the speaker's own GetIsID names who speaks](#speaker-identity)
 
 ## <a id="engine-fixed-params"></a>Engine-fixed FormID parameters
 
@@ -422,6 +423,7 @@ kept those lines from matching the voices actors actually carry:
 | The exporter never wrote a CREA's `VTCK`, so every robot and creature (`RobotProtectron`, `CreatureSmartSM`, Rex) fell back to a race voice, then to the generated `TES4Cr<folder>Voice` | `VTCK.Voice` exported for CREA (1,045 of 1,578); a creature naming an authored VTYP keeps it through `patch_creature_voices` |
 | 473 creature stubs take their voice from a template, but template flattening keys Traits on `RNAM.Race`, which no CREA has | `inherited_voice` walks the template chain for the voice map |
 | The importer's injected voice gate (voices of NPCs named elsewhere in the topic) was ANDed onto lines that state their own, e.g. children's lines gated to the adults' voices | no injected voice gate when the INFO, or the quest conditions it inherits, already tests `GetIsVoiceType` |
+| The injected identity gate (a `GetIsID` OR-list of the NPCs a topic's other lines name) was ANDed onto lines whose only audience is their voice type, because `has_audience_condition` did not count `GetIsVoiceType`. Fallout 3's birth scene stalled on it: CG00's Mom lines test `FemaleUniqueMom` and got her husband's list, so she never spoke and Dad waited for her turn | an authored voice type counts as an audience: lines with an authored voice test and an injected list went from 64 to 25 in Fallout 3 and 67 to 6 in New Vegas. All 25 and 5 of the 6 author their own `GetIsID`; the sixth is New Vegas's "{Placeholder for toplevel topics}" line. No FormID moved |
 
 Measured on FalloutNV.esm over the voice-only OR groups, against every voice
 type an NPC_ carries: INFOs no actor can speak went from 2,147 to 18, and
@@ -583,3 +585,19 @@ an identity function is likewise dropped: the listener IS the NPC the call
 site addresses, so the authored check is statically satisfied (first hit: the
 restored NPC-conversation head topics, whose GetIsID(listener)[Target]
 otherwise survived as a dead Run On = Target).
+
+## <a id="speaker-identity"></a>Only the speaker's own GetIsID names who speaks
+
+`read_getisid_fids`, `required_speaker_ids` and the origin-gate test read a
+GetIsID as naming the speaker only when it runs on the subject. TES4 marks
+another run-on with type bit 0x02; a Fallout CTDA carries Run On at offset 20
+(0 subject, 1 target, 2 reference, 3 combat target, 4 linked reference). The
+readers used to ignore the Fallout field. In Fallout 3's GenericRaider quest,
+three `DeathResponse` lines test `GetIsID Player` on the combat target ("my
+target died"). The bark sibling gate, which gives a conditionless bark line
+its siblings' speakers, read that as the raider's own identity, so the battle
+cry "Yeaaaaaaaaah!" (`000853C1`) was built with `GetIsID(Player) == 1`: only
+the player could say it. The preflight dialogue audit counted such lines in
+its 145 Fallout 3 lines no placed actor could say. A target-run GetIsID
+also stops counting as a speaker pin for the origin gate
+([origin faction](tes5_import_actors.md#origin-faction)).

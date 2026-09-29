@@ -21,6 +21,7 @@ from ..record_types.common import (get_formid, get_int, get_str,
                                    pack_record, pack_string_subrecord,
                                    pack_subrecord)
 from ..base.conditions import (
+    CHARGEN_CHOICE,
     FUNC_GET_GLOBAL_VALUE,
     FUNC_GET_IN_FACTION,
     FUNC_GET_IS_ID,
@@ -45,7 +46,7 @@ from .converter import (DIAL_TYPE_CONVERSATION, SERVICE_MENU_SCRIPTS,
     is_npc_to_npc_conversation, make_conversation_quest,
     make_generic_quest, register_conversation_chains,
     SCENE_TOPIC, classify_topic, collect_tclt_target_fids,
-    convert_DIAL, convert_INFO, make_dlbr, make_dlvw, service_menu_kind,
+    convert_DIAL, convert_INFO, info_tclt, make_dlbr, make_dlvw, service_menu_kind,
     should_skip_dial, voice_file_prefix,
     GREET_TOPIC_BY_QUEST, EMPTY_DIAL_FIDS, lip_texts, startable_quests)
 from .say_topics import (FORCE_GREET_SLOTS, SAY_TOPIC_DISPOSITIONS,
@@ -54,6 +55,8 @@ from .speak_as import SCENE_QUEST_EDID, scene_quest_fid, speaker_subrecords
 from .topics_falloutnv import has_topic_flags, is_top_level
 from .follow_ups_falloutnv import (FOLLOW_UP_TOPICS, blocking_branch, build_follow_up_topics,
                                    capture_follow_up, opens_with_follow_up, plan_follow_ups)
+from .speech_challenges_falloutnv import (failure_copies, labelled, plan_speech_challenges,
+                                          speech_props, success_gate)
 
 
 def _scan_startable_quests(by_type: dict) -> set:
@@ -423,6 +426,8 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
     skipped_fids = {get_formid(d, 'FormID') for d in dials if should_skip_dial(d)}
     _strip_dead_tclt(infos, skipped_fids)
     print(f"    follow-up topics: {plan_follow_ups(infos, writer, skipped_fids)}")
+    print(f"    speech challenges that can fail: "
+          f"{plan_speech_challenges(infos, by_type.get('GMST', []), writer)}")
     n_conv = sum(1 for d in dials if is_npc_to_npc_conversation(d))
     n_chains = len(conv_plan['chains']) if conv_plan else 0
     print(f"    NPC-to-NPC conversation topics dropped: {n_conv}; "
@@ -831,7 +836,7 @@ def _build_one_topic(dial_rec, info_by_dial, writer, offset,
         unlock_globals=unlock_globals, fid_to_edid=fid_to_edid,
         well_known_props=well_known_props, xref=xref, voice_map=voice_map,
         quest_edid_by_fid=quest_edid_by_fid, edid=edid,
-        quest_fid_by_edid=quest_fid_by_edid,
+        prompt=get_str(dial_rec, 'FULL', ''), quest_fid_by_edid=quest_fid_by_edid,
         quest_dialog_ctdas=quest_dialog_ctdas, vtyp_edid_by_fid=vtyp_edid_by_fid,
         stats=stats, script_vars=script_vars,
         **_topic_audience(child_infos, conversation, service_kind,
@@ -868,80 +873,88 @@ def _convert_topic_infos(child_infos, owner_qfid, ctx):
     """Convert a list of child INFOs for a topic owned by owner_qfid.
 
     Returns (topic_children_bytes, child_count). owner_qfid is the REMAPPED
-    owning quest of the topic these INFOs belong to; a per-INFO GetQuestRunning
-    gate is injected only when an INFO's own quest differs from the owner (this
-    never happens for the per-quest bark split, which passes matching owners)."""
-    topic_children = b''
-    child_count = 0
-    # Chargen-choice fail-open bookkeeping — see _strip_chargen_choice_gate.
-    chargen_gated = 0
-    first_gated_bytes = None
+    owning quest of the topic these INFOs belong to. A speech challenge line
+    is followed by shared copies of its failure lines, and an all-gated
+    chargen-choice topic ends with its fail-open fallback.
+
+    See: docs/commentary/tes5_import_dialogue.md#fallout-speech-challenges
+    """
+    topic_children, child_count, converted, gated = b'', 0, 0, []
     for info_rec in child_infos:
         try:
-            quest_gate_bytes, quest_cond_bytes, bc_gate = _info_gate_bytes(
-                info_rec, owner_qfid, ctx)
-            injected = _build_injected_ctdas(
-                info_rec, ctx['is_bark'], ctx['npc_to_vtyp'],
-                ctx['topic_vtyps'], ctx['topic_npc_fids'],
-                ctx['service_gate_bytes'] + quest_gate_bytes + quest_cond_bytes
-                + bc_gate,
-                ctx['unlock_gate_bytes'], ctx['offset'], ctx['stats'],
-                sibling_factions=ctx.get('sibling_factions'),
-                sibling_npcs=ctx.get('sibling_npcs'),
-                shared_state_bytes=ctx.get('shared_state_bytes', b''))
-            # Revealer INFO: its OnEnd fragment sets the unlock globals; bind
-            # each global name -> GLOB FormID as a VMAD property.
-            reveal_names = ctx['unlock_plan']['info_reveals'].get(
-                get_formid(info_rec, 'FormID') & 0xFFFFFF)
-            reveal_props = None
-            if reveal_names:
-                reveal_props = {n: ctx['unlock_globals'][n] for n in reveal_names
-                                if n in ctx['unlock_globals']}
-                if reveal_props:
-                    ctx['stats']['revealers'] += 1
-            info_bytes = convert_INFO(
-                info_rec, injected_ctdas=injected,
-                fid_to_edid=ctx['fid_to_edid'],
-                well_known_props=ctx['well_known_props'], xref=ctx['xref'],
-                reveal_props=reveal_props, service_menu=ctx['service_kind'],
-                bark_dial_fids=(ctx.get('bark_dial_fids')
-                                if ctx['is_bark'] else None),
-                menu_topic_fids=ctx.get('menu_topic_fids', ()),
-                script_vars=ctx.get('script_vars'),
-                speaker=speaker_subrecords(info_rec, ctx['offset']),
-                follow_up=FOLLOW_UP_TOPICS.get(get_formid(info_rec, 'FormID'), 0))
+            info_rec = labelled(info_rec, ctx.get('prompt', ''))
+            info_bytes = _convert_info(info_rec, owner_qfid, ctx)
             capture_follow_up(get_formid(info_rec, 'FormID'), owner_qfid, info_bytes)
-            topic_children += info_bytes
-            child_count += 1
-            ctx['stats']['infos'] += 1
+            failures, failed = failure_copies(
+                info_rec, info_bytes, lambda rec: _convert_info(rec, owner_qfid, ctx))
+            topic_children += info_bytes + failures
+            converted += 1
+            child_count += 1 + failed
+            ctx['stats']['infos'] += 1 + failed
             if _has_chargen_choice_cond(info_rec):
-                chargen_gated += 1
-                if first_gated_bytes is None:
-                    first_gated_bytes = info_bytes
+                gated.append(info_bytes)
             if ctx['voice_map'] is not None:
                 _record_voice_entry(info_rec, owner_qfid, ctx)
         except Exception as e:
             print(f"  ERROR info under {ctx['edid'] or '?'}: {e}")
+    fallback = _chargen_fallback(ctx, gated, converted)
+    return topic_children + fallback, child_count + bool(fallback)
 
-    # An ALL-gated chargen-choice topic gets an ungated fail-open fallback
-    # appended LAST (engine walks INFOs in order, so the fallback only
-    # speaks when no gated line passes) — see _strip_chargen_choice_gate.
+
+def _convert_info(info_rec, owner_qfid, ctx) -> bytes:
+    """One INFO converted under its topic's gates, with its reveal and speech globals bound.
+
+    See: docs/commentary/tes5_import_dialogue.md#voice-types-conditions
+    """
+    quest_gate_bytes, quest_cond_bytes, bc_gate = _info_gate_bytes(
+        info_rec, owner_qfid, ctx)
+    injected = _build_injected_ctdas(
+        info_rec, ctx['is_bark'], ctx['npc_to_vtyp'],
+        ctx['topic_vtyps'], ctx['topic_npc_fids'],
+        ctx['service_gate_bytes'] + quest_gate_bytes + quest_cond_bytes
+        + bc_gate,
+        ctx['unlock_gate_bytes'], ctx['offset'], ctx['stats'],
+        sibling_factions=ctx.get('sibling_factions'),
+        sibling_npcs=ctx.get('sibling_npcs'),
+        shared_state_bytes=ctx.get('shared_state_bytes', b'')) + success_gate(info_rec)
+    return convert_INFO(
+        info_rec, injected_ctdas=injected,
+        fid_to_edid=ctx['fid_to_edid'],
+        well_known_props=ctx['well_known_props'], xref=ctx['xref'],
+        reveal_props={**_reveal_props(info_rec, ctx), **speech_props(info_rec)} or None,
+        service_menu=ctx['service_kind'],
+        bark_dial_fids=(ctx.get('bark_dial_fids')
+                        if ctx['is_bark'] else None),
+        menu_topic_fids=ctx.get('menu_topic_fids', ()),
+        script_vars=ctx.get('script_vars'),
+        speaker=speaker_subrecords(info_rec, ctx['offset']),
+        follow_up=FOLLOW_UP_TOPICS.get(get_formid(info_rec, 'FormID'), 0))
+
+
+def _reveal_props(info_rec, ctx) -> dict:
+    """{unlock global name: GLOB FormID} a revealer INFO's fragment sets, bound as VMAD properties."""
+    names = ctx['unlock_plan']['info_reveals'].get(get_formid(info_rec, 'FormID') & 0xFFFFFF) or ()
+    props = {n: ctx['unlock_globals'][n] for n in names if n in ctx['unlock_globals']}
+    if props:
+        ctx['stats']['revealers'] += 1
+    return props
+
+
+def _chargen_fallback(ctx, gated: list, converted: int) -> bytes:
+    """The ungated copy of an all-gated chargen-choice topic's first line, appended last; else b''.
+
+    See: docs/commentary/tes5_import_dialogue.md#voice-types-conditions
+    """
     fid_box = ctx.get('chargen_fallback_fids')
-    if (fid_box and first_gated_bytes is not None
-            and chargen_gated == child_count and child_count > 0
-            and fid_box[0] < fid_box[1]):
-        from ..base.conditions import CHARGEN_CHOICE
-        glob_fids = {g for g, _m in CHARGEN_CHOICE.values()}
-        fallback = _strip_chargen_choice_gate(
-            first_gated_bytes, fid_box[0], glob_fids)
-        if fallback:
-            fid_box[0] += 1
-            topic_children += fallback
-            child_count += 1
-            ctx['stats']['infos'] += 1
-            ctx['stats']['chargen_fallbacks'] = \
-                ctx['stats'].get('chargen_fallbacks', 0) + 1
-    return topic_children, child_count
+    if not (fid_box and gated and len(gated) == converted and fid_box[0] < fid_box[1]):
+        return b''
+    fallback = _strip_chargen_choice_gate(
+        gated[0], fid_box[0], {g for g, _m in CHARGEN_CHOICE.values()})
+    if fallback:
+        fid_box[0] += 1
+        ctx['stats']['infos'] += 1
+        ctx['stats']['chargen_fallbacks'] = ctx['stats'].get('chargen_fallbacks', 0) + 1
+    return fallback
 
 
 def _ctdas_scope_audience(ctda_bytes: bytes) -> bool:
@@ -1091,6 +1104,17 @@ def _bark_group_ctx(ctx, g, edid: str) -> dict:
     return group_ctx
 
 
+def greets_with_choices(g, ctx) -> bool:
+    """Whether a GREETING group has a line whose reply links survive, so opens as Blocking.
+
+    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
+    """
+    if (g['edid'] or '').upper() != 'GREETING':
+        return False
+    return any(info_tclt(r, ctx.get('bark_dial_fids'), ctx.get('menu_topic_fids', ()))
+               for r in g['infos'])
+
+
 def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
     """One bark group's DIAL and INFOs, plus a GREETING's arrest force-greet.
 
@@ -1105,7 +1129,7 @@ def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
     if not count:
         return b''
     shape, branch = (g['cat'], subtype, g['snam']), 0
-    if opens_with_follow_up(g['infos']):
+    if opens_with_follow_up(g['infos']) or greets_with_choices(g, ctx):
         shape = (0, 0, b'CUST')
         branch, dlbr = blocking_branch(writer, key, edid, owner_qfid, dial_fid)
         ctx.setdefault('blocking_branches', []).append(dlbr)

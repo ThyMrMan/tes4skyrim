@@ -973,6 +973,22 @@ The attachment node still matters for REST visibility: the authored hidden bit
 is carried onto the shape (the shrink blob must not show on a living ghost)
 without moving it.
 
+### <a id="creature-partitions-are-body"></a>Every creature partition is the body slot
+
+A creature's skin ARMA claims body slot 32 alone, and Skyrim culls any skin
+partition whose slot the ARMA does not claim. `regen_skin_partition` fills a
+`BSDismemberSkinInstance` from the wearing record's slot, and a creature mesh
+has no wearing record, so it fell through to the armor geometry-name guess:
+Fallout 3's Mister Handy hull is the shape `MisterHandy:0`, which contains
+"hand" and was tagged 33 (hands). Andy at the birthday party showed only his
+brain and claws, could not be targeted to talk to, and his cake line (CG02
+stage 15, `SayTo` Amata) never finished, so stage 16 and Amata's present never
+came and the party never ended. `regen_creature_skins` and `_cap_skin_bones`
+now write 32 when no record states a slot. Over the converted bodies, 62 of
+242 in the two Fallout games had a visible partition off 32: every Mister
+Gutsy/Handy body and most of New Vegas's Super Mutant armor (boots 37,
+greaves 49, gauntlets 33, headgear 131).
+
 ### <a id="vis-gated-effect-shapes"></a>The merge drops parent `NiVisController`s
 
 The merge lifts shapes to the root and drops every parent, so a

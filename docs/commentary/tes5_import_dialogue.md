@@ -118,6 +118,81 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
   holding a line with follow-ups is therefore written as a Blocking `CUST`
   topic (same FormID and EditorID, so voice paths and the force greet's PDTO
   are unchanged; lines keep their order, so the first passing one still wins).
+- <a id="greeting-choices-block"></a>**A greeting that offers replies opens
+  as Blocking too (2026-09-28, unconfirmed in game)** (`groups.greets_with_choices`).
+  In FO3's birthday party, Amata's force greet opens CG02's GREETING topic and
+  says "Happy birthday! We really surprised you, didn't we?" (`000319BD`),
+  whose three Choices lead to her present (`setstage CG02 21`). The flight
+  recorder shows the line end and, 8 ms later, a second line from the same
+  Hello topic: "Go on, mingle!" (`000784E0`, Goodbye). The force greet said
+  its line, then the menu opened with an ordinary Hello, and the Goodbye
+  closed the talk before any reply showed. Stage 21 never came, and neither
+  did stage 34, which needs every present. Vanilla never force-greets a Hello
+  topic: its 712 Blocking branches are what it says when dialogue starts, and
+  they carry choices. So a quest's GREETING group is written as the Blocking
+  `CUST` topic above whenever one of its lines keeps a reply link
+  (`info_tclt`, the same filter the INFO writer uses), not only when one has
+  follow-ups. A greeting whose links all lead to menu topics keeps no TCLT
+  and stays a Hello.
+- <a id="fallout-speech-challenges"></a>**FO3/FNV speech challenges can fail
+  (2026-09-28, unconfirmed in game)** (`speech_challenges_falloutnv.py`).
+  A challenge line is an INFO with DATA flag 0x80 (xEdit "Speech Challenge")
+  and a DNAM difficulty, None to Very Hard. `Fallout3.exe` `0x8eca60` checks
+  the flag, rolls `rand() % 100` against the chance below, and on a loss asks
+  `0x7b6440` for a line of the engine topic `SpeechChallengeFailure`
+  (`0x000000FD`). That lookup (`0x7b5fc0`) takes the topic's lines in order,
+  and a line qualifies when its conditions pass and its Link From (TCLF) is
+  empty or names the challenged topic or ANY (`0x000000D3`). The exporter
+  never wrote DNAM and the importer knew nothing of the flag, so every
+  challenge always succeeded. The audit counted about 180 `SpeechChallengeFailure`
+  lines no Skyrim topic reached. Fallout 3 has 249 challenge lines and 187
+  failure lines (74 with Link From). New Vegas has 3 challenge lines (Doc
+  Mitchell's price haggle) and no failure line that answers them, since its
+  checks are plain skill conditions.
+  Skyrim says a topic's first passing INFO, so:
+  - the challenge line gains `GetActorValue Speechcraft >= TES4SpeechNeed<level>`,
+    run on the Target (the player) against a global. That is vanilla's own
+    persuade check (`GetActorValue(Speechcraft) >= <global> UseGlobal [Target]`,
+    at least 71 vanilla INFOs). Speech maps to Speechcraft as every converted Speech
+    condition does, and with the Fallout rules on, Speechcraft holds the better
+    of Barter and Speech ([rules](character_rules.md#fallout-character-creation));
+  - right after it come shared copies (DNAM, as follow-ups do) of each failure
+    line that qualifies, in source order. Each copy leads with Speech below the
+    threshold, then the challenge line's own conditions, then the failure line's
+    as this topic would convert it (its quest gate and speakers). A failure line
+    that names speakers none of the challenge's can be (both all-GetIsID OR
+    chains, disjoint) is left out, which leaves 1,580 copies for Fallout 3's 249
+    challenges, 4 for Doc Barrows' (his own linked line and three generic ones);
+  - the prompt reads `[Speech] <text>`. Fallout shows the live percent, which
+    a Skyrim prompt cannot.
+
+  A challenge with no qualifying failure line keeps today's behavior: it
+  always succeeds, which covers New Vegas's three. Each challenge and failure
+  line's End fragment calls `<GAME>_SpeechChallenge.Reroll`, a helper written
+  per game with its settings baked in. It rolls 0-99 and sets each level's
+  threshold to the Speech that roll needs. A roll therefore holds from when the
+  menu lists the challenge until one is said, and each attempt gets a fresh
+  roll, as in Fallout. Each Skyrim `GetRandomPercent` rolls on its own, so the
+  chance cannot be written as conditions alone.
+  Not modeled: the disposition term (below), a failure's disposition penalty
+  (`fSpeechChallengeFailure*`, `0x601f80`), since Skyrim has no disposition,
+  and the XP for a won challenge (`0x5ca3c0`, [not yet](character_rules.md#fallout-perks)).
+  A DLC's copies use only its own failure lines.
+- <a id="fallout-speech-chance"></a>**The chance, from `Fallout3.exe` `0x601ef0`.**
+  With S the player's Speech (actor value 43), D the disposition toward the
+  player and L the difficulty setting (`iSpeechChallengeDifficulty*`, Fallout 3
+  10/40/55/70/80, the exe's defaults 0/25/50/75/100; None reads -1):
+  p = (1 + (S − `fSpeechChallengeSpeechBase`) × `fSpeechChallengeMultiplier` / 100)
+  × (1 + (D − `fSpeechChallengeDispositionBase`) × `fSpeechChallengeDispositionMultiplier` / 100)
+  × (100 − L) / 100. The chance is 100 when p is strictly above
+  `fSpeechAutoSuccessThreshold`, else p × 100 rounded. Fallout 3's master
+  gives 2.0, 30, 1.0 and 0.9, with the Speech base at the exe's 50 (unset in
+  the master). So Speech 50 at Average is 45% before disposition. A roll r
+  wins when r < chance, which solved for Speech gives each threshold. The
+  disposition term is taken as 1: most Fallout 3 NPCs' base disposition is 35
+  (1,535 of 1,647), which the exe would count as 1.05 before faction and karma
+  changes. `tests/test_speech_challenges_falloutnv.py` checks the thresholds
+  against the exe's formula over every difficulty, roll and Speech.
 - <a id="fallout-follow-ups-resume"></a>**A follow-up chain the player walked
   away from resumes** (`follow_up_marks_falloutnv.py`). FO3/FNV could not
   leave a conversation mid-line; Skyrim can, and then the Invisible Continue

@@ -38,7 +38,8 @@ from .magic_variants import (DELIVERY_CONTACT, MGEF_CAST_FOR_OWNER, RANGE_DELIVE
                              get_seff_variant, menu_object, owner_delivery,
                              written_once)
 from .world_falloutnv import is_fallout_source
-from .equipment_falloutnv import ammo_flags, gun_speed
+from .race_falloutnv import SKYRIM_CHILD_RACES, child_wears
+from .equipment_falloutnv import ammo_flags, embedded_node_subs, gun_speed, weapon_flags
 from .equipment_falloutnv import refine_anim_type as refine_fallout_anim_type
 from .projectile_falloutnv import (ammo_projectile, gun_sheathe_sounds,
                                    gun_sound_subs)
@@ -458,6 +459,7 @@ def convert_WEAP(rec: dict, writer=None) -> bytes:
 
     # KSIZ/KWDA — vendor keyword (TES4 type 4 = Staff)
     subs += pack_keywords([VENDOR_KYWD['Staff' if tes4_type == 4 else 'Weapon']])
+    subs += embedded_node_subs(rec)
 
     subs += pack_formid_subrecord(
         'INAM', get_formid(rec, 'INAM')
@@ -477,7 +479,7 @@ def convert_WEAP(rec: dict, writer=None) -> bytes:
     struct.pack_into('<B', dnam, 0, anim_type)
     struct.pack_into('<f', dnam, 4, gun_speed(rec, WEAPON_ANIM_MULT.get(anim_type, 1.0)))
     struct.pack_into('<f', dnam, 8, reach if reach > 0.0 else 1.0)
-    struct.pack_into('<I', dnam, 12, WEAPON_ANIM_FLAGS.get(anim_type, 0))
+    struct.pack_into('<I', dnam, 12, WEAPON_ANIM_FLAGS.get(anim_type, 0) | weapon_flags(rec))
     struct.pack_into('<B', dnam, 26, max(1, get_int(rec, 'DNAM.ProjectileCount', 1)))
     struct.pack_into('<f', dnam, 44, speed)
     struct.pack_into('<B', dnam, 76, WEAPON_ANIM_STAGGER.get(anim_type, 0)) # Stagger
@@ -693,14 +695,17 @@ def _arma_models(rec: dict, beast_race, use_slider: bool) -> bytes:
     return subs
 
 
-def _arma_races(beast_race, exclude_beast_races: bool) -> bytes:
-    """MODL[]: the additional races that can wear the armature."""
+def _arma_races(beast_race, exclude_beast_races: bool, child: bool = False) -> bytes:
+    """MODL[]: the additional races that can wear the armature; `child` adds
+    Skyrim's child races, for clothing a Fallout child carries."""
     if beast_race:
         race_list = ARMA_BEAST_RACES[beast_race][1]
     elif exclude_beast_races:
         race_list = ARMA_ADDITIONAL_RACES_NONBEAST
     else:
         race_list = ARMA_ADDITIONAL_RACES
+    if child:
+        race_list = [*race_list, *SKYRIM_CHILD_RACES.values()]
     return b''.join(pack_formid_subrecord('MODL', race_fid) for race_fid in race_list)
 
 
@@ -725,7 +730,8 @@ def _build_arma(rec: dict, arma_fid: int, tes5_biped: int, armor_type: int,
     use_slider = bool(tes4_biped & _TES4_BODY_BITS)
     subs += _arma_dnam(use_slider, tes5_biped)
     subs += _arma_models(rec, beast_race, use_slider)
-    subs += _arma_races(beast_race, exclude_beast_races)
+    subs += _arma_races(beast_race, exclude_beast_races,
+                        not beast_race and child_wears(rec))
     if tes4_biped & _TES4_FOOT:
         subs += pack_formid_subrecord('SNDD', _FOOTSTEP_SETS.get(armor_type, CLOTHING_FOOTSTEP_SET))
     return pack_record('ARMA', arma_fid, 0, subs)
