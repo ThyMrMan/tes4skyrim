@@ -59,6 +59,12 @@ FALLOUT_AV_TO_TES5 = {
     67: 73, 68: 74, 69: 75, 70: 76, 71: 77,   # Variable06-10
 }
 
+#: Fallout values the fork's conditions leave unread. See: docs/fork/character.md#condition-actor-values
+FORK_DROPPED_ACTOR_VALUES = frozenset({15, 18, 33, 34, 37, 38, 41, 45, *range(62, 72)})
+
+#: FALLOUT_AV_TO_TES5 without the fork's dropped values: what converted conditions read.
+FORK_FALLOUT_AV = {av: tes5 for av, tes5 in FALLOUT_AV_TO_TES5.items() if av not in FORK_DROPPED_ACTOR_VALUES}
+
 #: Fallout Run On values: Subject, Target, Reference, Combat Target, Linked Ref.
 _RUN_ON_TARGET = 1
 _RUN_ON_REFERENCE = 2
@@ -138,11 +144,11 @@ def mirrored_ctda(type_byte: int, comp_raw: int, func_idx: int, param1: int,
 
 
 def fallout_actor_value(av: int) -> 'int | None':
-    """The Skyrim actor value a Fallout actor value maps to, or None when it has none.
+    """The Skyrim actor value a Fallout one maps to, or None when it has none.
 
     See: docs/commentary/tes5_import_conditions.md#fallout-actor-values
     """
-    return FALLOUT_AV_TO_TES5.get(av)
+    return FORK_FALLOUT_AV.get(av)
 
 
 def fallout_run_on(raw: bytes, remap) -> tuple:

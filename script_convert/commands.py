@@ -19,7 +19,7 @@ argument text -- so those are properties of the CALL and live on it.
 from script_convert import resolve_name as _resolve_name
 from script_convert.constants import (
     ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, ATTRIBUTE_STUB_VALUE, AV_ARGUMENT_NAMES, CASTABLE,
-    FORCE_FLEE_QUEST, FORCE_GREET_QUEST, PLACED_REF_SIGS, PRIMARY_STATS, SPLIT_SKILLS,
+    FORCE_FLEE_QUEST, FORCE_GREET_QUEST, PLACED_REF_SIGS, PRIMARY_STATS,
     TES4_ASSAULT_BOUNTY, TES4_MISC_STAT_NAMES, TES4_MURDER_BOUNTY, TES4_SCRIPT_OWNED_MISC_STATS,
     TES4_STEAL_BOUNTY, is_generated_script_type, mgef_family_keyword_name,
     safe_property_name, papyrus_script_name
@@ -1496,10 +1496,6 @@ def _confidence(ctx, call) -> str:
             f'{FLEE_MARGIN_FACTION}, {CONFIDENCE_FLEE_SPELL}, {FLEE_HEALTH_SCALE})')
 
 
-#: Reads a split skill answers with the higher half; a BASE read feeds a write, so it stays One-Handed.
-_SPLIT_READS = frozenset({'GetActorValue'})
-
-
 def _actor_subject(ref: str, extends: str) -> str:
     """The subject as an Actor expression: `ref`, `Self`, or `(Self as Actor)`."""
     if ref != 'Self' or extends == 'Actor':
@@ -1535,7 +1531,7 @@ def _karma_call(ctx, call) -> str:
 
 @command(*sorted(ACTOR_VALUE_FUNCTIONS))
 def actor_value(ctx, call) -> str:
-    """Get/Set/Mod ActorValue with the AV name quoted; attributes through TES4Polyfill, split skills read the higher.
+    """Get/Set/Mod ActorValue with the AV name quoted; attributes through TES4Polyfill.
 
     See: docs/commentary/script_convert.md#actor-value-reads
     See: docs/commentary/script_convert.md#skyrim-has-no-attributes
@@ -1558,9 +1554,6 @@ def actor_value(ctx, call) -> str:
     if papyrus == 'ForceActorValue' and av.lower() in _AV_SET_ONLY:
         papyrus = 'SetActorValue'
     subject = _av_actor(ctx, call)
-    split = SPLIT_SKILLS.get(raw.lower())
-    if split and papyrus in _SPLIT_READS:
-        return f'TES4Polyfill.HigherActorValue({subject}, "{split[0]}", "{split[1]}")'
     expr = f'{papyrus}({", ".join(args)})'
     return expr if subject == 'Self' else f'{subject}.{expr}'
 

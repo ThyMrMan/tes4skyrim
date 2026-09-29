@@ -330,13 +330,13 @@ class TestCTDAConversion:
         cap = _tes4_ctda(type_byte=0x80, func=277, p1=14)
         assert split_skill_ctdas(cap, b'converted') == [b'converted']
 
-    def test_fallout_splits_melee_weapons_not_critical_chance(self):
-        """FNV's 38 is Melee Weapons and splits; its 14 is Critical Chance and does not."""
+    def test_fallout_melee_weapons_drops_and_critical_chance_does_not_split(self):
+        """FNV's 38, Melee Weapons, is a fork-dropped value; its 14, Critical Chance, does not split."""
         from tes5_import.base.split_skill_conditions import split_skill_ctdas
         crit = _tes4_ctda(type_byte=0x60, func=14, p1=14) + b'\0' * 4
         assert split_skill_ctdas(crit, b'converted') == [b'converted']
         melee = _tes4_ctda(type_byte=0x60, func=14, p1=38) + b'\0' * 4
-        assert len(split_skill_ctdas(melee, convert_ctda(melee, offset=1))) == 2
+        assert convert_ctda(melee, offset=1) is None
 
     def test_split_skill_below_inside_or_group_keeps_one_test(self):
         """An AND pair cannot sit inside an OR group, so One-Handed alone remains."""
@@ -1293,8 +1293,10 @@ class TestFalloutConditions:
         assert convert_ctda(raw, drop_run_on_target=True) is None
 
     def test_actor_values_use_fallouts_table(self):
-        """FNV Speech, Barter, Repair, Guns and Variable01 keep their meaning; Karma drops."""
-        for fnv_av, tes5_av in ((43, 17), (32, 17), (39, 10), (41, 8), (62, 68), (0, 0)):
+        """FNV Speech, Barter and Repair keep their meaning; Karma, Guns and Variable01 drop."""
+        for dropped in (41, 62):
+            assert convert_ctda(_tes4_ctda(func=14, p1=dropped) + b'\0' * 4, offset=1) is None
+        for fnv_av, tes5_av in ((43, 17), (32, 17), (39, 10), (0, 0)):
             raw = _tes4_ctda(func=14, p1=fnv_av) + b'\0' * 4
             assert struct.unpack_from('<I', convert_ctda(raw, offset=1), 12)[0] == tes5_av
         assert convert_ctda(_tes4_ctda(func=14, p1=23) + b'\0' * 4, offset=1) is None
@@ -1322,6 +1324,11 @@ class TestFalloutActorValues:
     def test_shared_values_translate(self, fallout_av, skyrim_av):
         """Speech, Barter, Lockpick and Health read their Skyrim values."""
         assert _av_param(convert_ctda(_av_ctda(14, fallout_av))) == skyrim_av
+
+    @pytest.mark.parametrize('fallout_av', [41, 34, 38, 45, 37, 18, 66])
+    def test_fork_dropped_values_fail_open(self, fallout_av):
+        """Guns, Energy Weapons, Melee, Unarmed, Medicine, Damage Resistance, Variable05."""
+        assert convert_ctda(_av_ctda(14, fallout_av)) is None
 
     @pytest.mark.parametrize('fallout_av', [23, 8, 9, 40, 29])
     def test_values_skyrim_lacks_drop(self, fallout_av):

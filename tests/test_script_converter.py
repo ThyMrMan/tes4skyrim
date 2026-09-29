@@ -2128,12 +2128,12 @@ class TestObseBlockAndCallFixes:
 
 
 class TestSplitSkillReads:
-    """Blade and Blunt read the higher of One-Handed and Two-Handed; writes stay One-Handed."""
+    """Blade and Blunt read and write One-Handed until the rules keep them apart."""
 
-    def test_read_takes_the_higher_half(self, converter):
-        """GetAV Blade goes through TES4Polyfill.HigherActorValue."""
+    def test_read_is_one_handed(self, converter):
+        """GetAV Blade reads One-Handed, not the higher of the two halves."""
         body = TestObseBlockAndCallFixes._poll(converter, 'set n to player.getav blade')
-        assert 'TES4Polyfill.HigherActorValue(Game.GetPlayer(), "OneHanded", "TwoHanded")' in body
+        assert 'GetActorValue("OneHanded")' in body and 'HigherActorValue' not in body
 
     def test_base_read_matches_the_write(self, converter):
         """A trainer's GetBaseAV Blade reads the One-Handed its SetAV writes."""

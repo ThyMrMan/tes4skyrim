@@ -335,6 +335,27 @@ source skill in use**, not the highest:
 - **Scripts and conditions** read the source skill's global, not the Skyrim
   value.
 
+<a id="condition-actor-values"></a>**Until those globals exist, converted
+conditions leave a folded skill unread.** Upstream's `FALLOUT_AV_TO_TES5`
+(merged 0.673) maps Guns, Energy Weapons and Big Guns to Archery, Melee
+Weapons and Unarmed to One-Handed, Medicine to Restoration, and keeps Heal
+Rate, Damage Resistance and `Variable01`-`10`. The fork keeps that table as
+upstream wrote it, so merges stay clean. `FORK_DROPPED_ACTOR_VALUES`
+(`conditions_falloutnv.py`) filters it, and those conditions drop, failing
+open:
+- the weapon skills and Unarmed: the Skyrim value will hold whichever skill is
+  active, not the one the condition names;
+- Medicine: it drives nothing until healing items are built (decision 7);
+- Heal Rate and Damage Resistance: each is on a different scale in the two
+  games;
+- `Variable01`-`10`: the dialogue helpers keep line timing in `Variable05`-`09`
+  ([Papyrus cost](performance.md#papyrus)).
+
+Scripts follow the same rule: a converted `GetAV Blade` reads One-Handed, not
+upstream's `TES4Polyfill.HigherActorValue`. Upstream's condition split
+(`split_skill_conditions.py`: `GetAV Blade` as One-Handed OR Two-Handed) is
+still in place for TES4 sources.
+
 ### <a id="ob"></a>Oblivion (21)
 
 | Skill | Group | Stat | Store | Drives | Effect to supply |
