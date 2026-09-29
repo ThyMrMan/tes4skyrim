@@ -111,6 +111,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [tes_runtime_guns.md](commentary/tes_runtime_guns.md) | tes_runtime/fallout/fire.cpp - the gun shot, reload key and ammo restriction in FalloutRuntime |
 | [tes_runtime_journal.md](commentary/tes_runtime_journal.md) | tes_runtime/tes/journal_objectives.cpp, asset_convert/ui/journal_patch.py - a clicked quest objective shows its stage's text |
 | [tools_portable_build.md](commentary/tools_portable_build.md) | tools/release/build_portable.py - the portable Windows package with its own Python |
+| [tools_preflight.md](commentary/tools_preflight.md) | tools/validate/preflight - stuck quest stages, red error markers and FormID drift, found before play |
 | [version_upgrade_planning.md](commentary/version_upgrade_planning.md) | version.py - which steps a new release owes |
 
 ## `plans/`
@@ -127,6 +128,10 @@ Designed, NOT yet built. Opens with `Status: PLAN`. Becomes commentary when buil
 | [gui_overhaul.md](plans/gui_overhaul.md) | GUI overhaul: setup, MO2 integration and per-world launching |
 | [vanilla_item_swap.md](plans/vanilla_item_swap.md) | Plan — "Vanilla Item Swap" (ingredients, food, clutter) + preview renderer |
 | [bink_movies.md](plans/bink_movies.md) | Source-game Bink 1 movies (FNV intro, Oblivion outro) Skyrim's Bink 2 cannot play |
+| [preflight_audits.md](plans/preflight_audits.md) | Preflight audits: find stuck quests and broken content before play |
+| [papyrus_runtime_cost.md](plans/papyrus_runtime_cost.md) | Papyrus runtime cost: quest and reference polls, dialogue helpers, patrol watchers |
+| [fnv_occlusion_data.md](plans/fnv_occlusion_data.md) | FO3/FNV occlusion planes, rooms and portals: dropped by the import, possible follow-up |
+| [graphics_options.md](plans/graphics_options.md) | Graphics limits and options: draw calls, culling, upscaling, mod lists, RTX Remix, FO4 backports |
 
 ## `audits/`
 

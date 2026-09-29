@@ -35,11 +35,6 @@ import re
 import struct
 import sys
 
-try:
-    import pefile
-except ImportError:
-    sys.exit('pefile required: pip install pefile')
-
 
 def ru32(b, o):
     return struct.unpack_from('<I', b, o)[0]
@@ -176,13 +171,15 @@ def blend_interp_flags(fp):
 
 
 def rtti_names(exe):
-    """Set of class names with RTTI type descriptors in the executable."""
-    pe = pefile.PE(exe, fast_load=True)
-    img = pe.get_memory_mapped_image()
-    names = set()
-    for m in re.finditer(rb'\.\?AV([A-Za-z_][A-Za-z0-9_]*)@@', img):
-        names.add(m.group(1).decode('latin-1'))
-    return names
+    """Set of class names with RTTI type descriptors in the executable.
+
+    The descriptors are plain strings in the file's data sections, so the raw
+    bytes of an unpacked exe hold every one.
+    """
+    with open(exe, 'rb') as fh:
+        img = fh.read()
+    return {m.group(1).decode('latin-1')
+            for m in re.finditer(rb'\.\?AV([A-Za-z_][A-Za-z0-9_]*)@@', img)}
 
 
 def find_exe(explicit):
