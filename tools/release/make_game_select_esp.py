@@ -57,6 +57,7 @@ FID_GLOB_MORROWIND    = 0x01000805
 FID_GLOB_ARKTWEND     = 0x01000806
 #: The game the player is in; every travel button compares its own id against it.
 FID_GLOB_CURRENT      = 0x01000807
+FID_GLOB_FALLOUT3     = 0x01000808
 #: The prompt variants in mask order, which the selector indexes by installed mask.
 FID_FLST_MENUS        = 0x0100080F
 #: 2**gated CONSECUTIVE ids from here, a block that GROWS with each gated game.
@@ -144,6 +145,8 @@ BUTTONS = [
      "A forgotten realm stirs behind monastery walls."),
     ("Mojave", FID_GLOB_FALLOUTNV,
      "A shallow grave stirs beneath a desert sky."),
+    ("Capital Wasteland", FID_GLOB_FALLOUT3,
+     "A child is born behind a vault door that never opens."),
 ]
 
 #: One prompt MESG per subset of the gated games, so each prologue names only those.
@@ -159,6 +162,7 @@ GLOBALS = [
     (FID_GLOB_FALLOUTNV,    'TESGS_HasFalloutNV'),
     (FID_GLOB_MORROWIND,    'TESGS_HasMorrowind'),
     (FID_GLOB_ARKTWEND,     'TESGS_HasArktwend'),
+    (FID_GLOB_FALLOUT3,     'TESGS_HasFallout3'),
 ]
 
 #: The player's TES4 attributes, one GLOB each from here (below the travel FLST): rules write, TES4Polyfill reads.

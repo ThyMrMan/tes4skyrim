@@ -69,12 +69,28 @@ Function Sync()
   EndIf
 EndFunction
 
+; One slot per game. A save made before a game was added holds shorter arrays,
+; which are copied into full-size ones. `new` takes only a literal, so this
+; must equal TESGameSelectQuest.GAME_COUNT.
+Int Property GAME_SLOTS = 8 AutoReadOnly
+
 Function EnsureArrays()
-  If !arraysMade
-    started = new Bool[7]
-    returnPoints = new ObjectReference[7]
-    arraysMade = true
+  If arraysMade && started.Length >= GAME_SLOTS
+    Return
   EndIf
+  Bool[] grownStarted = new Bool[8]
+  ObjectReference[] grownPoints = new ObjectReference[8]
+  If arraysMade
+    Int i = 0
+    While i < started.Length
+      grownStarted[i] = started[i]
+      grownPoints[i] = returnPoints[i]
+      i += 1
+    EndWhile
+  EndIf
+  started = grownStarted
+  returnPoints = grownPoints
+  arraysMade = true
 EndFunction
 
 ; The player is now in `game`, which counts as started from here on.

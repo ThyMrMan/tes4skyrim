@@ -19,6 +19,7 @@ String Property MorroblivionPlugin = "Morrowind_ob.esm"     Auto
 String Property NehrimPlugin       = "Nehrim.esm"           Auto
 String Property ArktwendPlugin     = "Arktwend_English.esm" Auto
 String Property FalloutNVPlugin    = "FalloutNV.esm"        Auto
+String Property Fallout3Plugin     = "Fallout3.esm"         Auto
 
 ; ---------------------------------------------------------------------------
 ; Per-game entry points. GetFormFromFile takes a form's ID *within its own
@@ -60,6 +61,14 @@ Int Property FalloutNVChargenID     = 0x00102037 Auto
 Int Property FalloutNVStartMarkerID = 0x00103E6B Auto
 Int Property FalloutNVChargenStage  = 0          Auto
 
+; Fallout3   CG00 0001F388 — stage 0 IS the whole opening, as VCG00's is: it
+;            moves the parents and Doctor Li to their marks, sets itself to
+;            stage 5 (the birth) and moves the player to CG00PlayerStartMarker
+;            00039562.
+Int Property Fallout3ChargenID     = 0x0001F388 Auto
+Int Property Fallout3StartMarkerID = 0x00039562 Auto
+Int Property Fallout3ChargenStage  = 0          Auto
+
 ; Vanilla Morrowind has NO chargen quest and NO start marker to move to: the
 ; opening is object scripts, set running by the TES3 global CharGenState. The
 ; `Main` start script polls `CharGenState == 1` and launches `CharGen`, which
@@ -96,6 +105,8 @@ Int Property ArktwendChargenStateID  = 0x006472DD Auto
 ;                 `Player`); the robe is put on last so it is the one worn.
 ;   FalloutNV     nothing: VCG00 stage 0 removes the Pip-Boy, the only item
 ;                 its player record carries.
+;   Fallout3      nothing: the player is born, and the CG quests hand out the
+;                 vault suit and Pip-Boy as the years pass.
 ; ---------------------------------------------------------------------------
 Int Property OblivionWristIronsID  = 0x000BE335 Auto
 Int Property OblivionShirtID       = 0x00027319 Auto
@@ -135,6 +146,7 @@ GlobalVariable Property HasMorroblivion Auto
 GlobalVariable Property HasNehrim       Auto
 GlobalVariable Property HasArktwend     Auto
 GlobalVariable Property HasFalloutNV    Auto
+GlobalVariable Property HasFallout3     Auto
 
 ; Set true the moment the prompt has been shown, so a second entry (quest
 ; restart, re-add on an existing save, a stray SetStage) can never re-ask.
@@ -156,7 +168,8 @@ Int Property GAME_MORROBLIVION = 3 AutoReadOnly
 Int Property GAME_NEHRIM       = 4 AutoReadOnly
 Int Property GAME_ARKTWEND     = 5 AutoReadOnly
 Int Property GAME_FALLOUTNV    = 6 AutoReadOnly
-Int Property GAME_COUNT        = 7 AutoReadOnly
+Int Property GAME_FALLOUT3     = 7 AutoReadOnly
+Int Property GAME_COUNT        = 8 AutoReadOnly
 
 ; The GAME_* numbering this save was written with. Saves from before the
 ; reorder load with 0 and are renumbered once by MigrateIds().
@@ -168,7 +181,7 @@ Int Property ID_VERSION = 1 AutoReadOnly
 Int gameCount
 
 ; Bitmask of the installed gated games: bit 0 Oblivion, 1 Morrowind,
-; 2 Morroblivion, 3 Nehrim, 4 Arktwend, 5 FalloutNV.
+; 2 Morroblivion, 3 Nehrim, 4 Arktwend, 5 FalloutNV, 6 Fallout3.
 Int installedMask
 
 ; ---------------------------------------------------------------------------
@@ -287,10 +300,10 @@ Function BeginChosenGame()
   EndIf
 
   ; The TES4 engine popped the race menu (with the name prompt) on every new
-  ; game; Skyrim's only shows it when a script asks. FalloutNV and the TES3
+  ; game; Skyrim's only shows it when a script asks. The Fallouts and the TES3
   ; games show their own from inside their openings (Doc Mitchell's
-  ; reflectron, the census office), so asking here too would put one up
-  ; before any of them had spoken.
+  ; reflectron, Doctor Li's gene projection, the census office), so asking
+  ; here too would put one up before any of them had spoken.
   If ChosenGame == GAME_OBLIVION || ChosenGame == GAME_MORROBLIVION \
      || ChosenGame == GAME_NEHRIM
     Utility.Wait(0.5)
@@ -312,6 +325,8 @@ Bool Function BeginGame(Int game)
     Return BeginArktwend()
   ElseIf game == GAME_FALLOUTNV
     Return BeginFalloutNV()
+  ElseIf game == GAME_FALLOUT3
+    Return BeginFallout3()
   EndIf
   Return false
 EndFunction
@@ -334,6 +349,8 @@ Function DetectInstalledGames()
           IsPluginPresent(ArktwendPlugin, ArktwendChargenStateID), 16)
   SetGate(HasFalloutNV, \
           IsPluginPresent(FalloutNVPlugin, FalloutNVChargenID), 32)
+  SetGate(HasFallout3, \
+          IsPluginPresent(Fallout3Plugin, Fallout3ChargenID), 64)
 
   ; A menu that never appeared, or appeared with the wrong buttons, is ALWAYS
   ; this pass: gameCount 1 means nothing was detected.
@@ -442,6 +459,16 @@ Bool Function BeginFalloutNV()
   EndIf
   HandOff(chargen, FalloutNVChargenStage, \
           GetRefFrom(FalloutNVStartMarkerID, FalloutNVPlugin))
+  Return true
+EndFunction
+
+Bool Function BeginFallout3()
+  Quest chargen = GetQuestFrom(Fallout3ChargenID, Fallout3Plugin)
+  If chargen == None
+    Return false
+  EndIf
+  HandOff(chargen, Fallout3ChargenStage, \
+          GetRefFrom(Fallout3StartMarkerID, Fallout3Plugin))
   Return true
 EndFunction
 
