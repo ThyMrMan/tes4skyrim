@@ -1,6 +1,6 @@
 # Graphics: what limits converted content and what could improve it
 
-Status: PLAN — research notes from 2026-09-28, nothing here is built or measured unless stated. Revisit when the project is more mature.
+Research notes from 2026-09-28, not a plan; nothing here is built or measured unless stated. Revisit when the project is more mature.
 
 **Provenance.** Sections marked (docs) come from this repo's own measurements. Sections marked (web) come from
 searches made 2026-09-28 and were not independently verified. Everything else is general engine
@@ -65,7 +65,7 @@ There is no general automatic occlusion. Coverage depends on authored data.
 - Oblivion likely has little of it (unverified).
 
 **Converter gap.** FO3/FNV occlusion planes, rooms and portals are dropped. Details and follow-up steps:
-[fnv_occlusion_data.md](fnv_occlusion_data.md).
+[fnv_occlusion_data.md](../performance.md#occlusion).
 
 **Cheap wins with no engine work.**
 - Fewer shapes per static, shared materials.
@@ -133,7 +133,7 @@ consistent with the no-redistribution constraint.
   silhouettes, script-extender dependencies).
 - A list should be a manifest (names, links, order, flags) the user downloads themselves, never a bundle.
 - Needs an order, tested combinations, an optional downscale, and re-testing per converter version. The
-  preflight audits ([preflight_audits.md](preflight_audits.md)) are the natural home for that.
+  preflight audits ([preflight_audits.md](../done/preflight_audits.md)) are the natural home for that.
 - Handcrafted first, AI upscale only for what is left.
 
 ## 8. RTX Remix (web)
@@ -169,12 +169,74 @@ Tests for whether it is worth it: is there a Skyrim primitive to hang it on, is 
 it survive runtime updates, does it need assets Skyrim lacks. A custom engine (OpenMW-style) buys
 architectural freedom and stability at multi-year cost, mostly spent on bug-for-bug compatibility.
 
-## 10. Suggested order when this is picked up
+## 10. OpenMW and the later games (web, checked 2026-09-29)
+
+**What works (0.49.0, July 2025).**
+- Reads TES4-format plugins from Oblivion, FO3, FNV and Skyrim; reads FO4/FO76 BA2 archives; parses every
+  official NIF from Oblivion, Skyrim, FO3/NV, FO4 and FO76.
+- World loading, terrain heightmaps, statics, lights, items, doors, containers, flora. Diffuse, normal and
+  glow maps. Basic book and door interaction. Limited NPC rendering (Oblivion and 2011 Skyrim only).
+- Enabled by loading the game's files as "mods" in the launcher plus `load unsupported nif files = true` in
+  `settings.cfg`.
+- The ESM reader came from UESP research (0.48) and was extended to FO4 from xEdit research (0.49).
+
+**What is missing.** Skinned geometry for Skyrim SE, particles, animations, SpeedTree, FaceGen, Havok,
+collision generation for Skyrim SE and FO4/76, and every gameplay system (firearms, AI, dialogue, quests,
+inventory, physics, VATS, scripted events).
+
+**Direction.** Framed as early "walking simulator" prototyping with Morrowind staying primary. 0.51.0 (June
+2026) says nothing about the other games, so visible progress since 0.49 looks slow (unreleased work is
+possible). Older forum posts say the team will not port Skywind; an earlier developer (cc9cii) ported
+Oblivion and FO3/FNV loading in a fork, whose current state was not checked.
+
+**Read for this project.** The cheap layer (formats, world loading, basic rendering) works. The hard layer
+(skeletal animation, physics, AI, scripting, dialogue) is untouched, and that is what this repo's converter
+already solves inside Skyrim. Two things to watch: skinned-mesh and animation support, and the physics
+approach. Not verified: the forum thread on later-game work was blocked, so developer activity is inferred
+from release notes.
+
+Sources: [0.49.0](https://openmw.org/2025/openmw-0-49-0-released/),
+[0.51.0](https://openmw.org/2026/openmw-0-51-0-released/),
+[GamingOnLinux on 0.49](https://www.gamingonlinux.com/2025/07/openmw-0-49-arrives-to-enhanced-morrowind-and-theyre-looking-to-support-later-bethesda-games/),
+[GenerationAmiga on FNV](https://www.generationamiga.com/2026/07/24/fallout-new-vegas-could-escape-its-old-engine-with-openmw/),
+[forum thread](https://forum.openmw.org/viewtopic.php?t=3017&start=440).
+
+## 11. Havok alternatives and work-arounds (general knowledge, unverified)
+
+Havok is three things: rigid-body physics and collision, ragdolls and constraints, and animation with
+behavior graphs. Skyrim also uses Havok cloth.
+
+**Engines.** Bullet (zlib, mature; OpenMW uses it, and the HDT-SMP mods run it inside Skyrim beside Havok),
+Jolt (MIT, modern, multithreaded), PhysX (BSD in recent versions, strong character controller), Rapier, ODE,
+Newton. Havok itself is proprietary and Microsoft-owned; a free SDK is not believed to exist now.
+
+**Work-arounds.**
+- Convert the data, not the engine: read Havok collision shapes from NIFs and HKX, rebuild them as the new
+  engine's shapes, map collision layers and materials to its filter groups, rebuild ragdoll constraints from
+  the joint limits. This repo already does the Havok-native version (collision extraction, 64-bit HKX
+  conversion).
+- Behavior graphs are the hard half: a state machine plus blending and animation compression, not physics.
+  Community tools read and generate them (Pandora, Haviour) but a full replacement runtime is a large project.
+- Expect behavior differences (stacking, friction, sleeping, ragdoll settling) and quirk-dependent gameplay
+  to change.
+
+| Path | Covers | Cost |
+|---|---|---|
+| Stay on Havok (Skyrim engine) | Everything | None, engine limits stay |
+| Bullet beside Havok, as HDT-SMP does | Cloth, hair, extra bodies | Small to medium |
+| Replace collision only, in a new engine | Statics, props, triggers | Medium |
+| Replace ragdolls and character controller | Actor physics | Large |
+| Replace behavior graphs and animation | Actor movement and combat | Very large |
+
+Only matters if the project leaves Skyrim's engine. Collision is the tractable part there; animation and
+behavior is where the time would go.
+
+## 12. Suggested order when this is picked up
 
 1. Measure first: a frame capture (RenderDoc) of a heavy scene showing draw count, and whether it is CPU or
    GPU bound.
 2. Cheap converter fixes from section 2's gaps: glow, actor shader types.
-3. FO3/FNV occlusion data ([fnv_occlusion_data.md](fnv_occlusion_data.md)).
+3. FO3/FNV occlusion data ([fnv_occlusion_data.md](../performance.md#occlusion)).
 4. Optional cached texture upscale stage, with per-category handling for diffuse, normal and alpha.
 5. Procedural mesh smoothing before any AI mesh work.
 6. Curated mod-list manifests once the asset-only import path is proven on real packs.

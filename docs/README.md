@@ -121,20 +121,18 @@ Designed, NOT yet built. Opens with `Status: PLAN`. Becomes commentary when buil
 
 | Doc | Covers |
 |---|---|
-| [classic_character_systems.md](plans/classic_character_systems.md) | Classic character systems for every source game: attributes, skills, leveling, perks, item condition |
 | [character_sheet.md](plans/character_sheet.md) | Character sheet in TESRuntime: attributes, legacy skills, Nehrim leveling takeover; converter bugs found on the way |
 | [horse_rideability.md](plans/horse_rideability.md) | Rideable Horse Conversion: Oblivion CREA → Skyrim Mountable Actor |
 | [navmesh_lattice.md](plans/navmesh_lattice.md) | Lattice navmesh generator: collision columns grown from the pathgrid (experimental, opt-in via `--navmesh-generator lattice`) |
 | [morrowind_object_scripts.md](plans/morrowind_object_scripts.md) | Move TES3 object scripts off the lossy Papyrus path onto the vendored interpreter |
 | [in_app_update.md](plans/in_app_update.md) | In-app update: download only what changed — design plan |
 | [vanilla_creature_swap.md](plans/vanilla_creature_swap.md) | Plan — "Vanilla Creature Swap" ESP generator + GUI |
-| [gui_overhaul.md](plans/gui_overhaul.md) | GUI overhaul: setup, MO2 integration and per-world launching |
 | [vanilla_item_swap.md](plans/vanilla_item_swap.md) | Plan — "Vanilla Item Swap" (ingredients, food, clutter) + preview renderer |
-| [bink_movies.md](plans/bink_movies.md) | Source-game Bink 1 movies (FNV intro, Oblivion outro) Skyrim's Bink 2 cannot play |
-| [preflight_audits.md](plans/preflight_audits.md) | Preflight audits: find stuck quests and broken content before play |
-| [papyrus_runtime_cost.md](plans/papyrus_runtime_cost.md) | Papyrus runtime cost: quest and reference polls, dialogue helpers, patrol watchers |
-| [fnv_occlusion_data.md](plans/fnv_occlusion_data.md) | FO3/FNV occlusion planes, rooms and portals: dropped by the import, possible follow-up |
-| [graphics_options.md](plans/graphics_options.md) | Graphics limits and options: draw calls, culling, upscaling, mod lists, RTX Remix, FO4 backports |
+
+## `fork/`
+
+This fork's own plans, research and finished designs. [fork/ROADMAP.md](fork/ROADMAP.md)
+is the index and the only place their status is kept; a new fork plan goes there, not in `plans/`.
 
 ## `audits/`
 

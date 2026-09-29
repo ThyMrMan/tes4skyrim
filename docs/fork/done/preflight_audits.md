@@ -1,9 +1,9 @@
 # Preflight audits: find stuck quests and broken content before play
 
-**Status: PLAN.** All nine audits are built as `python -m tools.validate.preflight`
+**Built** (kept as the design record; open gaps are in the [roadmap](../ROADMAP.md#stability)). All nine audits are built as `python -m tools.validate.preflight`
 (audit 9 as `--audit logs`),
 with a review ledger for findings the audit cannot judge
-([commentary](../commentary/tools_preflight.md#overview)). Known gaps:
+([commentary](../../commentary/tools_preflight.md#overview)). Known gaps:
 - audit 1 doesn't check stage-item conditions or Say Once lines;
 - audit 2 doesn't evaluate condition-filled aliases, and marks required ones
   for review;
@@ -50,10 +50,10 @@ follows each setter back to how it runs in Skyrim.
 Rules from the setters diagnosed so far:
 - A package change fragment that sets a stage runs only when the actor
   leaves the package. Flag it when the package never ends
-  (the CG02 Andy case, [package fold](../commentary/script_convert.md#run-once-package-change)).
+  (the CG02 Andy case, [package fold](../../commentary/script_convert.md#run-once-package-change)).
 - A greeting line whose replies survive must open as a Blocking branch, or
   its replies never show
-  ([Blocking greeting](../commentary/tes5_import_dialogue.md#greeting-choices-block)).
+  ([Blocking greeting](../../commentary/tes5_import_dialogue.md#greeting-choices-block)).
 - A line with no speaker who can pass its conditions: GetIsID or voice
   type gates that no placed actor satisfies.
 - A Say Once line that gates a stage, flagged as a warning because a save
@@ -84,7 +84,7 @@ pass:
 - every model path on every base record that is placed, worn or held
   exists in a BSA or loose (MODL through MOD5; ARMA, not ARMO);
 - every such NIF passes the block type check, so every block has Skyrim RTTI
-  (the [convex list](../commentary/asset_convert_collision.md#convex-list-shapes)
+  (the [convex list](../../commentary/asset_convert_collision.md#convex-list-shapes)
   case);
 - every texture those NIFs name exists;
 - embedded weapons have their NNAM node in the actor's skeleton.

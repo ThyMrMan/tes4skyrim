@@ -10,7 +10,7 @@
 > - Building toward playing each converted game on its own: one Mod Organizer 2
 >   profile per world, and Oblivion's own systems (attributes, classes,
 >   birthsigns, leveling, menus) generated from your Oblivion files. See the
->   [GUI overhaul plan](docs/plans/gui_overhaul.md). This is planned or in
+>   [fork roadmap](docs/fork/ROADMAP.md). This is planned or in
 >   progress; most of it isn't built yet.
 >
 > **How it relates to upstream:**

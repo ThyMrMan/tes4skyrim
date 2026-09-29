@@ -1,6 +1,6 @@
 # Source-game movies (Bink 1) in Skyrim
 
-Status: PLAN — parked 2026-09-27, not started. Nothing plays today.
+Parked 2026-09-27, not started; status in the [roadmap](ROADMAP.md#parked). Nothing plays today.
 
 ## The problem
 

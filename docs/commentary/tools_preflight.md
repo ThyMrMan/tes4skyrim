@@ -1,7 +1,7 @@
 # tools/validate/preflight — audits that run before a play-test
 
 **Code:** `tools/validate/preflight/__main__.py`, `tools/validate/preflight/findings.py`, `tools/validate/preflight/plugin_index.py`, `tools/validate/preflight/quest_source.py`, `tools/validate/preflight/quest_converted.py`, `tools/validate/preflight/quest_progression.py`, `tools/validate/preflight/quest_start.py`, `tools/validate/preflight/dialogue_loss.py`, `tools/validate/preflight/script_health.py`, `tools/validate/preflight/package_ai.py`, `tools/validate/preflight/world_links.py`, `tools/validate/preflight/log_triage.py`, `tools/validate/preflight/asset_load.py`, `tools/validate/preflight/build_diff.py`, `tools/validate/vmad_property_typecheck.py`, `tools/validate/property_type_audit.py`, `tools/validate/dangling_ref_check.py`
-**History:** [plans/preflight_audits.md](../plans/preflight_audits.md)
+**History:** [fork/done/preflight_audits.md](../fork/done/preflight_audits.md)
 
 ## Contents
 
