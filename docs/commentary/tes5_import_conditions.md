@@ -21,6 +21,7 @@ Parameter remapping and the crash rule are in
 - [GameDaysPassed reads a whole-day copy](#whole-days)
 - [GetIsRace on a plugin-authored race becomes a faction test](#plugin-authored-races)
 - [GetIsVoiceType names the VTYP as written](#authored-voice-types)
+- [Only the speaker's own GetIsID names who speaks](#speaker-identity)
 
 ## <a id="engine-fixed-params"></a>Engine-fixed FormID parameters
 
@@ -584,3 +585,19 @@ an identity function is likewise dropped: the listener IS the NPC the call
 site addresses, so the authored check is statically satisfied (first hit: the
 restored NPC-conversation head topics, whose GetIsID(listener)[Target]
 otherwise survived as a dead Run On = Target).
+
+## <a id="speaker-identity"></a>Only the speaker's own GetIsID names who speaks
+
+`read_getisid_fids`, `required_speaker_ids` and the origin-gate test read a
+GetIsID as naming the speaker only when it runs on the subject. TES4 marks
+another run-on with type bit 0x02; a Fallout CTDA carries Run On at offset 20
+(0 subject, 1 target, 2 reference, 3 combat target, 4 linked reference). The
+readers used to ignore the Fallout field. In Fallout 3's GenericRaider quest,
+three `DeathResponse` lines test `GetIsID Player` on the combat target ("my
+target died"). The bark sibling gate, which gives a conditionless bark line
+its siblings' speakers, read that as the raider's own identity, so the battle
+cry "Yeaaaaaaaaah!" (`000853C1`) was built with `GetIsID(Player) == 1`: only
+the player could say it. The preflight dialogue audit counted such lines in
+its 145 Fallout 3 lines no placed actor could say. A target-run GetIsID
+also stops counting as a speaker pin for the origin gate
+([origin faction](tes5_import_actors.md#origin-faction)).

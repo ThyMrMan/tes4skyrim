@@ -909,32 +909,25 @@ def read_getisid_fids(rec: dict, offset: 'int | None' = None,
     """Collect remapped NPC FormIDs from GetIsID conditions on a record.
 
     positive_only restricts to GetIsID(X) == 1.0 (the "is this NPC" form),
-    ignoring negated/comparison forms.
+    ignoring negated/comparison forms. Only conditions run on the speaker
+    count: a target's identity says nothing about who speaks.
+
+    See: docs/commentary/tes5_import_conditions.md#speaker-identity
     """
     if offset is None:
         offset = get_formid_index_offset()
-    fids = set()
-    i = 0
-    while True:
-        raw_hex = rec.get(f'Condition[{i}].Raw')
-        if raw_hex is None:
-            break
-        i += 1
-        if not raw_hex or len(raw_hex) < 24:
-            continue
-        try:
-            raw = bytes.fromhex(raw_hex)
-            if struct.unpack_from('<H', raw, 8)[0] != FUNC_GET_IS_ID:
-                continue
-            if positive_only:
-                operator = raw[0] & 0xF0
-                comp = struct.unpack_from('<f', raw, 4)[0]
-                if operator != 0x00 or comp != 1.0:
-                    continue
-            fids.add(_remap_formid(struct.unpack_from('<I', raw, 12)[0], offset))
-        except (ValueError, struct.error):
-            continue
-    return fids
+    return {_remap_formid(param1, offset)
+            for func, op, comp, off_subject, param1, _or in _condition_tests(rec)
+            if func == FUNC_GET_IS_ID and not off_subject
+            and (not positive_only or _asserts_membership(op, comp))}
+
+
+def required_speaker_ids(rec: dict) -> 'set | None':
+    """Raw FormIDs the record's all-GetIsID OR chains leave able to speak, or None when anyone may."""
+    chains = [{t[4] for t in clause} for clause in _or_clauses(_condition_tests(rec))
+              if all(t[0] == FUNC_GET_IS_ID and not t[3] and _asserts_membership(t[1], t[2])
+                     for t in clause)]
+    return set.intersection(*chains) if chains else None
 
 
 def has_positive_getisid(rec: dict) -> bool:
@@ -1006,8 +999,14 @@ _AUDIENCE_FUNCS = frozenset({67, 68, 69, 71, 72, 73})
 _PLUGIN_SCOPED_AUDIENCE_FUNCS = frozenset({68, 71, 72, 73})
 
 
+def _off_subject(raw: bytes) -> bool:
+    """Whether a source CTDA runs on anyone but the subject: TES4's target flag, or a Fallout Run On."""
+    return bool(raw[0] & CTDA_RUN_ON_TARGET) or (
+        len(raw) >= FALLOUT_CTDA_SIZE and struct.unpack_from('<I', raw, 20)[0] != 0)
+
+
 def _condition_tests(rec: dict):
-    """Yield (func_idx, operator, comp_value, run_on_target, param1, or_next) per TES4 condition."""
+    """Yield (func_idx, operator, comp_value, off_subject, param1, or_next) per source condition."""
     i = 0
     while True:
         raw_hex = rec.get(f'Condition[{i}].Raw')
@@ -1021,7 +1020,7 @@ def _condition_tests(rec: dict):
             yield (struct.unpack_from('<H', raw, 8)[0],   # function
                    raw[0] & 0xF0,                        # comparison operator
                    struct.unpack_from('<f', raw, 4)[0],  # compare value
-                   bool(raw[0] & CTDA_RUN_ON_TARGET),
+                   _off_subject(raw),
                    struct.unpack_from('<I', raw, 12)[0],
                    bool(raw[0] & CTDA_OR))
         except (ValueError, struct.error):

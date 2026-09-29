@@ -138,6 +138,10 @@ class ConvertedDialogue:
                             if u32(first(r, 'DNAM')) & _OPEN_BRANCH}
         self.external = self._externally_named()
         self.live = self._reachable()
+        self.shared = {}
+        for rec in index.by_type['INFO']:
+            if len(first(rec, 'DNAM')) == 4:
+                self.shared.setdefault(u32(first(rec, 'DNAM')), []).append(rec)
 
     def _externally_named(self) -> set:
         """Custom topics a scene, a package or a script property names."""
@@ -183,6 +187,8 @@ class ConvertedDialogue:
         rec = self.index.by_fid.get(fid)
         if rec is None or rec.type != 'INFO':
             return 'the INFO is missing from the built plugin'
+        if any(c.parent_dial in self.live and self.line_speakable(c) for c in self.shared.get(fid, ())):
+            return ''
         if rec.parent_dial not in self.live:
             return (f'its topic {self.index.edid(rec.parent_dial) or hex(rec.parent_dial)} '
                     'is not reachable in Skyrim')

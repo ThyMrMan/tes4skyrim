@@ -526,6 +526,16 @@ class TestCTDAConversion:
         assert fids == {0x01012345}
         assert has_positive_getisid(rec)
 
+    def test_read_getisid_fids_ignores_other_run_ons(self):
+        """A target's identity never names the speaker: TES4's target flag, a Fallout Run On."""
+        combat_target = _tes4_ctda(func=72, p1=0x7)[:20] + struct.pack('<II', 3, 0)
+        rec = {
+            'Condition[0].Raw': _tes4_ctda(type_byte=0x02, func=72, p1=0x00099999).hex(),
+            'Condition[1].Raw': combat_target.hex(),
+        }
+        assert read_getisid_fids(rec, offset=1) == set()
+        assert needs_origin_gate({**rec, 'FormID': '00012345'})
+
 
 # ---------------------------------------------------------------------------
 # DIAL

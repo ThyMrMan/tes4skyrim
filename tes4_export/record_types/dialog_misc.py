@@ -18,6 +18,7 @@ from .common import (
     emit_script,
     emit_string,
     emit_u8,
+    emit_u32,
     escape_value,
 )
 from .falloutnv import info_result_scripts
@@ -89,6 +90,7 @@ def export_INFO(rec: Record) -> list:
     _emit_formid_list(lines, rec, "TCLF", "LinkFrom")
     _emit_formid_list(lines, rec, "TCFU", "FollowUp")
     emit_string(lines, "Prompt", get_subrecord(rec, "RNAM"))
+    emit_u32(lines, "DNAM.SpeechChallenge", get_subrecord(rec, "DNAM"))
 
     begin, end = info_result_scripts(rec)
     if begin:

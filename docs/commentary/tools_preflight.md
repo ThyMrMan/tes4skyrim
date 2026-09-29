@@ -602,6 +602,8 @@ for each, so the totals slightly overcount lines.
 | Player-topic lines unreachable, almost all `SpeechChallengeFailure`, a topic the source reaches through LinkFrom | about 180 | 7 |
 | No placed actor passes the built GetIsID | 145 | 44 |
 
+The `SpeechChallengeFailure` losses were Fallout 3's speech challenges, which never failed; they now do ([speech challenges](tes5_import_dialogue.md#fallout-speech-challenges)), and the audit counts a line reached when a shared INFO (DNAM) in a reachable topic names it. Ten remain: lines linked only from topics with no challenge line, which Fallout 3 cannot reach either, since it looks for a failure line only after a lost roll. `decode_condition` also reads a short Fallout CTDA ([short CTDAs](tes5_import_conditions.md#fallout-short-ctda)) instead of zeros, so lines whose GetIsID sits in a 20-byte condition now name their speaker.
+
 The Fallout 3 ambient conversations aren't in the build at all: for example,
 `UnderworldTalkGretaDrink3` and its lines are absent, and the plugin holds 7
 scenes. That is why Greta (64 lines), Ahzrukhal (55) and "lines anyone may say

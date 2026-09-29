@@ -26,7 +26,10 @@ not yet played. The karma and infamy of kills and thefts are written in the
 rules as New Vegas's GOG exe does them
 ([karma and infamy](../commentary/character_rules.md#fallout-karma-and-infamy)),
 not yet played. Fallout 3 is TESGameSelect's game 7 and its rules plugin
-builds (2026-09-28), not yet played. Every other piece is unimplemented.
+builds (2026-09-28), not yet played. Fallout 3's speech challenges roll the
+player's Speech by `Fallout3.exe`'s formula and can fail into their failure
+lines ([speech challenges](../commentary/tes5_import_dialogue.md#fallout-speech-challenges)),
+not yet played. Every other piece is unimplemented.
 Every
 piece is meant to land as its own small PR, and every piece is off by
 default.

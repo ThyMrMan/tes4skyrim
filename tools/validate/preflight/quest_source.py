@@ -108,9 +108,11 @@ def find_setters(text: str, quests: dict) -> list:
 
 
 def decode_condition(data: bytes) -> tuple:
-    """(type, comparison value, function, parameter 1, run-on) of a CTDA."""
-    if len(data) < 24:
-        return (0, 0.0, 0, 0, 0)
+    """(type, comparison value, function, parameter 1, run-on) of a CTDA; a short one reads zeros past its end.
+
+    See: docs/commentary/tes5_import_conditions.md#fallout-short-ctda
+    """
+    data = data + bytes(max(0, 24 - len(data)))
     ctype, comp = data[0], struct.unpack_from('<f', data, 4)[0]
     func, param = struct.unpack_from('<HxxI', data, 8)
     return ctype, comp, func, param, struct.unpack_from('<I', data, 20)[0]
