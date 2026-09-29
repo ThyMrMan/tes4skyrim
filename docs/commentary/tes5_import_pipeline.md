@@ -78,6 +78,20 @@ take ids from a FIXED high base rather than from `derive_formid`, so nothing els
 knows about them. Without reserving that span, the header is written below them
 and a derived id can hash straight onto one.
 
+<a id="formid-claims"></a>**Claimed derived ids derive first** (`base/formid_claims.py`,
+called at the start of phase 0). `derive_formid` gives a contested slot to
+whichever key asks first. So a newer generator that runs early can take an
+older record's id, and the older record rehashes and moves, breaking saves.
+Merging upstream 0.673 did exactly that in FalloutNV.esm. The combat-approach
+pool (phase 0) hashed `TES4CombatApproach13Melee` onto `019D4FA3`, the id of
+the magic-effect clone `TES4IncreaseDamageResistanceConstantSelf`
+(`MGEF_DELIVERY`, key `(0x1015170, 0, 0, 0)`), which is derived later, during
+record conversion. The clone moved to `01A5F7CF`. `CLAIMS` lists such
+older keys per plugin, and they derive before any generator. It is a
+checked-in list, so ids stay identical on every machine; a local record of
+past builds would not be. The preflight build audit (`--audit build`) reports
+each new case as a moved or retyped id.
+
 **AddTopic unlock globals** are created before the QUST pass so quest VMADs can
 bind them as properties: gated topics get `GetGlobalValue` conditions and one
 GLOB each, which revealer INFO/stage fragments set.

@@ -24,7 +24,7 @@ from .cell_family import expand_cell_families, or_groups
 from .constants import ENGINE_GLOBAL_FORMIDS
 from .ctda_bool import bool_outcomes
 from .equivalents import TES4_ITEM_FORMID_TO_SKYRIM
-from .conditions_falloutnv import (FALLOUT_AV_TO_TES5, FALLOUT_CTDA_SIZE,
+from .conditions_falloutnv import (FALLOUT_CTDA_SIZE, FORK_FALLOUT_AV,
                                    fallout_ctda, fallout_function,
                                    fallout_run_on, mirrored_ctda, PLAYER_REF)
 from ..generated.ctda_param_types import CTDA_FORMID_PARAMS
@@ -668,7 +668,7 @@ def convert_ctda(raw: bytes, offset: 'int | None' = None,
         type_byte, func_idx, gfid = fame
         params, fields = (gfid, 0), (type_byte, 0, 0)
     else:
-        av_table = FALLOUT_AV_TO_TES5 if len(raw) >= FALLOUT_CTDA_SIZE else _TES4_AV_TO_TES5
+        av_table = FORK_FALLOUT_AV if len(raw) >= FALLOUT_CTDA_SIZE else _TES4_AV_TO_TES5
         params = _convert_params(func_idx, param1, param2, offset, av_table)
         fields = _run_on_fields(type_byte, func_idx, run_on, reference,
                                 run_on_target_ref, drop_run_on_target)

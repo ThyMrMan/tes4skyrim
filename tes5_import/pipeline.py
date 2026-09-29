@@ -62,6 +62,7 @@ from .runtime_sidecars import begin_sidecar_run
 from .base.adopted_records import adopt_master_special_records
 from .base.cell_family import set_cell_families
 from .base.conditions import set_whole_day_global
+from .base.formid_claims import claim_existing
 from .base.objectives_falloutnv import create_objective_globals
 from .record_types.equipment_falloutnv import create_weapon_anim_lists
 from .record_types.note_falloutnv import index_note_speakers
@@ -1167,6 +1168,7 @@ def _run_prescans(st: ImportState, all_records: list, num_new_masters: int,
     """
     by_type, ctx, writer = st.by_type, st.ctx, st.writer
     _register_run_tables(by_type, ctx, writer)
+    claim_existing(writer, export_dir)
     _prescan_special_records(by_type, ctx, writer, export_dir, _step_done)
     st.npc_to_vtyp = _prescan_npc_voice_map(by_type, ctx, writer,
                                             num_new_masters, _step_done)
