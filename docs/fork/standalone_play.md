@@ -1,8 +1,8 @@
-# GUI overhaul: setup, MO2 integration and per-world launching - design plan
+# Standalone play: setup, MO2 integration and per-world launching
 
-**Status: PLAN, unimplemented.** No code has been written. Each piece below is
-meant to land as its own small PR, useful on its own; nothing here needs the
-whole plan to be accepted.
+Design only; status is in the [roadmap](ROADMAP.md#standalone-play). Each piece
+lands as its own branch, useful on its own. Written first as upstream PR #65
+(`docs/gui-overhaul-plan`); this copy is the fork's and no longer tracks it.
 
 Goal: a new user downloads the converter, converts a game and plays it without
 typing a command, copying files by hand, or fighting their mod manager.
@@ -13,8 +13,8 @@ typing a command, copying files by hand, or fighting their mod manager.
 - [The pieces](#pieces)
 - [Suggested order](#order)
 - [Constraints every piece follows](#constraints)
-- [Related, not in this plan: a world picker on the main menu](#main-menu-picker)
-- [Open questions for the maintainer](#open-questions)
+- [Candidate: a world picker on the main menu](#main-menu-picker)
+- [Open questions](#open-questions)
 
 ## <a id="where-it-stands"></a>Where the GUI stands
 
@@ -173,15 +173,15 @@ the menu when only one converted world is loaded.
 
 ## <a id="constraints"></a>Constraints every piece follows
 
-- **One PR per piece**, each mergeable and useful alone.
+- **One branch per piece**, each useful alone.
 - **New modules, not growth** of `runner.py` or `app.py`.
 - **`gui` stays importable headless**; tkinter is imported inside functions
   (`tests/test_gui_startup.py` asserts it).
-- **No new runtime DLL work.** A world picker on Skyrim's main menu would need
-  it and is deliberately left out ([below](#main-menu-picker)).
+- **No new runtime DLL work**, except the world picker if it is taken up
+  ([below](#main-menu-picker)).
 - **No writes into a mod manager's files while it is running.**
 
-## <a id="main-menu-picker"></a>Related, not in this plan: a world picker on the main menu
+## <a id="main-menu-picker"></a>Candidate: a world picker on the main menu
 
 Recorded here because the all-worlds profile (D) is where it matters; it would
 be its own proposal.
@@ -205,7 +205,7 @@ all-worlds profile cannot.
    Choosing another world stops Skyrim's opening and hands off to that world's
    start, as TESGameSelect's handoff does today.
 
-**Why it is not in this plan.**
+**What it costs.**
 
 - It is new DLL functionality, which the project treats as a last resort
   needing sign-off. (`TESRuntime.dll` is already required, so it extends an
@@ -218,7 +218,7 @@ all-worlds profile cannot.
   before the main menu appears, so it cannot give the isolation per-world
   profiles do.
 
-## <a id="open-questions"></a>Open questions for the maintainer
+## <a id="open-questions"></a>Open questions
 
 1. Is MO2 the mod manager to integrate first, with Vortex kept on the zip route?
 2. Should the standalone launcher (H) exist at all, or should the converter

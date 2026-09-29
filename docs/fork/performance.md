@@ -1,11 +1,47 @@
-# Papyrus runtime cost: polls and dialogue helpers that run all game
+# Performance: runtime cost and culling
 
-**Status: PLAN, unimplemented.** This comes from a review on 2026-09-28 of the
+Design only; status is in the [roadmap](ROADMAP.md#performance).
+
+- [Rules every new system follows](#rules)
+- [Papyrus runtime cost](#papyrus)
+- [FO3/FNV occlusion data](#occlusion)
+
+## <a id="rules"></a>Rules every new system follows
+
+The DLL side is cheap when it is event-driven. Measured so far: the Morrowind
+tick costs 0.03 ms over the real Morrowind, Tribunal and Bloodmoon sidecars
+(10,640 placements), about 0.015 ms per frame at 60 fps. The one fps incident
+was a timer that re-ran the tick back to back after about 156 hours of uptime
+([whole milliseconds](../commentary/morrowind_runtime.md#the-tick-sleeps-whole-milliseconds)),
+not the tick's own work.
+
+Papyrus is the bigger risk: `Oblivion.esm`'s scripts carry 1,327 `GameMode`
+blocks (Fallout 3 524, New Vegas 663, [counted](research/character_findings.md#checked)), each converted
+into an `OnUpdate` poll ([scope](../commentary/script_convert.md#scope)). The systems layer
+therefore never polls from Papyrus: its Papyrus runs only when a Story Manager
+event fires, and anything that needs more lives in C++. Either way it:
+
+1. reacts to engine events (skill increases, kills, casts, locks, sales)
+   rather than polling; any poll in C++ runs at most every 33 ms and does
+   nothing unless something changed;
+2. precomputes tables at import and resolves FormIDs once per load;
+3. applies effects when values change, never per frame;
+4. writes a GLOB only when its value changes;
+5. keeps a custom menu's per-frame callback trivial;
+6. does nothing when its game's plugin is not loaded;
+7. sleeps in whole milliseconds with at most one tick queued
+   ([one queued tick](../commentary/morrowind_runtime.md#one-queued-tick));
+8. records a headless benchmark and an in-game frame-time comparison, DLL on
+   and off, in each piece's commentary doc.
+
+## <a id="papyrus"></a>Papyrus runtime cost: polls and dialogue helpers that run all game
+
+Unbuilt. This comes from a review on 2026-09-28 of the
 fixes made while play-testing Fallout 3 and New Vegas. The counts were measured
 from the generated scripts in `output/<game>/scripts/source`. None of it has
 been profiled in game.
 
-## What is already in its best form
+### What is already in its best form
 
 These fixes are record changes the engine handles natively, so nothing runs
 repeatedly. Leave them as they are:
@@ -20,7 +56,7 @@ repeatedly. Leave them as they are:
 | Follow-ups (TCFU) become hidden topics reached with an invisible continue | Records only |
 | The `TES4SetStage` wrapper | One `IsRunning()` per stage set |
 
-## 1. Quest scripts poll far more often than the source games did
+### 1. Quest scripts poll far more often than the source games did
 
 The biggest saving, and it also fixes a behavior bug.
 
@@ -68,7 +104,7 @@ The source games ran only the running quests, at 0.2 per second each.
   but the source quests that need speed set `fQuestDelayTime` themselves,
   which the variable now honors.
 
-## 2. Object and actor GameMode loops pay extra on every tick
+### 2. Object and actor GameMode loops pay extra on every tick
 
 Safe, contained in `script_convert/assemble.py`, and it helps every game.
 
@@ -94,7 +130,7 @@ Polling reference scripts: about 530 in Fallout 3, 790 in New Vegas and
   accurate. Keep 0.1 s only for `moves_in_poll`, the scripts that glide
   references.
 
-## 3. Dialogue state lives in actor values read many times per second
+### 3. Dialogue state lives in actor values read many times per second
 
 **Now:**
 - `TES4Polyfill.LineBegan`/`LineEnded` run on every spoken line.
@@ -116,7 +152,7 @@ which the script engine reads directly without a native call.
 rebuilding the scripts of every game
 ([static scripts](../../CLAUDE.md#static-scripts-rebuild-all)).
 
-## 4. Patrol points check for arrivals every 0.5 s
+### 4. Patrol points check for arrivals every 0.5 s
 
 `patrol_scripts._WATCH` runs `Game.FindClosestActorFromRef` twice a second
 on each loaded patrol marker; New Vegas generates 101 of these scripts.
@@ -126,7 +162,7 @@ on each loaded patrol marker; New Vegas generates 101 of these scripts.
 actor holding one of the marker's patrol packages is in the cell. This is
 the lowest priority of the four.
 
-## Order
+### Order
 
 1. Item 2: safest, entirely in the converter.
 2. Item 1, after the Creation Kit check. The largest saving, and it fixes the
@@ -136,3 +172,48 @@ the lowest priority of the four.
 
 Items 1 and 2 need `--scripts-only` for each game; item 3 rebuilds every
 game's scripts together.
+
+## <a id="occlusion"></a>FO3/FNV occlusion planes, rooms and portals
+
+Noted 2026-09-28 as a possible follow-up, not started. Nothing below is measured.
+
+### The observation
+
+FO3/FNV cull with hand-placed occlusion planes (exteriors) and rooms and portals
+(interiors). Skyrim uses the same scheme. A code search found no stage that carries
+any of it across:
+
+- `XORD`, `XPOD`, `XRMR`, `XLRM` are never read by `tes4_export/` nor written by
+  `tes5_import/`.
+- `RoomMarker` (679 REFRs in FalloutNV.esm) and `MultiBoundMarker` (2) are swapped
+  for an invisible `XMarker` (`tes5_import/record_types/world_falloutnv.py`). That hides
+  the marker and drops what it stood for.
+- `XPRM` primitives are copied raw, but only as trigger volumes
+  (`world.py`, `_refr_head`).
+- `nif_converter.py` has no `BSMultiBoundNode` handling. Only `lod/terrain_nif.py`
+  builds them, for generated LOD.
+
+Oblivion has no such data, so it loses nothing.
+
+### Guess to test
+
+Converted FO3/FNV interiors draw everything in the frustum, and converted
+exterior cities lose their occlusion planes. The cost in play is unmeasured.
+
+### Steps if pursued
+
+1. Extend the export to dump `XORD`, `XPOD`, `XRMR`, `XLRM` and `XMBR` from FO3/FNV
+   cells and refs (raw hex, as `XPRM.Raw` does).
+2. Count them from the dump: cells and refs affected.
+3. Compare the layouts against Skyrim's in `references/xEdit`, then census
+   Skyrim.esm for how vanilla writes them. Byte-copy only if they match.
+4. Check whether converted NIFs keep or drop `BSMultiBoundNode`; room and portal
+   refs point at multibound nodes.
+5. Measure in game or by frame capture before and after on one dense interior.
+6. Add a preflight check: rooms, portals and planes in the source cell against the
+   converted cell (see [preflight_audits.md](done/preflight_audits.md)).
+
+### Open questions
+
+- Whether Oblivion interiors would benefit from generated portals. Nothing authored to convert.
+- Whether the room bound refs need their multibound base objects in the output.

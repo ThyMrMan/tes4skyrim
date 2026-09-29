@@ -205,7 +205,7 @@ Papyrus log carried. None fixed yet unless marked.
 | Enemy AI glitchy | Seen in the third run. Two causes fixed above (stubs' AI data and level; corpses loading alive); anything left is untraced. Sixth run: still rough. |
 | Sunny's path to the wells is rough | Sixth run: she crosses mountains and gets stuck on terrain; the player had to disable rocks. Not looked into. |
 | Tutorial ending (VCG01) | **Works** (flight recorder, second run): the whole follow-up chain plays, VCG01 reaches 200, and VMQ01 10 and VCG02 5 start at the same moment. |
-| Intro movie | [bink_movies.md](../plans/bink_movies.md). |
+| Intro movie | [bink_movies.md](../fork/bink_movies.md). |
 | Tutorial help text shows raw tokens | The top-left tutorial messages print FNV's key-name tokens verbatim: `&sUActnJump;`, `&sUActnGrab;`, the `&sXB...;` gamepad names (about 40 in MESG `DESC`). Fallout's engine swaps in the bound key; Skyrim needs its own key-name markup there, or the words ("the Jump key"). |
 | Screen fades missing | ImageSpace-modifier properties never bind (IMAD not converted). |
 | Log spam | Second run: 3,279 Papyrus error lines in 15 minutes (590 more dropped at startup), almost all `FALLOUTNV_LuckyNLightScript.GetAnimationVariableBool("bAnimPlaying")` on the Goodsprings lights. First run: about 400 errors from `Lucky38LightScript` (`bAnimPlaying`) and 260 from ammo and other inventory item scripts calling `GetParentCell` while in a container. |
