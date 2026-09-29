@@ -516,13 +516,16 @@ def _analyze_without_base(cell, entry, now, pad, out):
                    bbox, zlo, zhi, out)
 
 
-def analyze(idx, entry, pad, out, listing=False):
-    """Diff one correction against its base and score the generator NOW."""
+def analyze(idx, entry, pad, out, listing=False, lattice=False):
+    """Diff one correction against its base and score the generator NOW.
+
+    `lattice` scores the prototype lattice generator as NOW instead.
+    """
     cell = idx.cell(re.sub(r'\.\d+$', '', entry['cell']))
     if cell is None:
         print('%s: cell not found' % entry['cell'])
         return
-    now_v, now_t = cell.build()
+    now_v, now_t = cell.build(lattice=lattice)
     print('=' * 72)
     same = mesh_hash(now_v, now_t) == entry.get('base_hash')
     base = entry.get('base')
@@ -566,6 +569,8 @@ def main():
     ap.add_argument('--out', help='PNG path (default temp/fix_<cell>.png)')
     ap.add_argument('--no-png', action='store_true')
     ap.add_argument('--list', action='store_true', help='print every changed vertex/tri')
+    ap.add_argument('--lattice', action='store_true',
+                    help='score the prototype lattice generator as "now"')
     a = ap.parse_args()
     targets = [(a.plugin, a.cell)] if a.cell else fixed_cells()
     by_plugin = {}
@@ -579,7 +584,7 @@ def main():
                 print('%s/%s: no fix on disk' % (plugin, cell))
                 continue
             out = None if a.no_png else (a.out or 'temp/fix_%s.png' % cell)
-            analyze(idx, entry, a.pad, out, listing=a.list)
+            analyze(idx, entry, a.pad, out, listing=a.list, lattice=a.lattice)
     return 0
 
 

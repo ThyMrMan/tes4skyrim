@@ -11,11 +11,14 @@ from asset_convert.character.hair_plan import (mesh_name_family, output_model_pa
                                                output_tri_path, variant_edid,
                                                variant_tag)
 from ..actors import hair_variants
+from ..actors.combat_style import actor_combat_style
+from ..actors.confidence import flee_memberships, flee_spells
 from ..base.constants import TES5_SKILL_ORDER
 from ..actors.creature_races import TES5_HEALTH_LEVEL_BONUS
 from ..actors.npc_face_mapper import build_face_tail_subs, build_pnam_subs
 from ..actors.outfits import split_inventory
-from ..packages.actor_wiring import CSTY_DEFAULT, DPLT_NPC_LIST, npc_packages
+from ..packages.actor_wiring import (CSTY_DEFAULT, DPLT_NPC_LIST, authored_packages,
+                                     npc_packages)
 from ..base.equivalents import map_hair_color
 from ..base.race_factions import race_faction
 from .actor_common import (GOLD001_FID, NAM5_UNKNOWN, SOUND_LEVEL_NORMAL,
@@ -56,32 +59,28 @@ _AUTO_CALC_STATS = 0x10
 # ---------------------------------------------------------------------------
 
 
+#: TES4 NPC_ DATA skill -> the TES5 skills it feeds (the higher value wins). See: docs/plans/character_sheet.md#folding
+_TES4_SKILL_TO_TES5 = {
+    "Armorer": ("Smithing",), "Blade": ("OneHanded", "TwoHanded"), "Block": ("Block",),
+    "Blunt": ("OneHanded", "TwoHanded"), "HandToHand": ("OneHanded",),
+    "HeavyArmor": ("HeavyArmor",), "Alchemy": ("Alchemy",),
+    "Alteration": ("Alteration",), "Conjuration": ("Conjuration",),
+    "Destruction": ("Destruction",), "Illusion": ("Illusion",),
+    "Mysticism": ("Alteration",), "Restoration": ("Restoration",),
+    "LightArmor": ("LightArmor",), "Marksman": ("Marksman",),
+    "Mercantile": ("Speechcraft",), "Security": ("Lockpicking",),
+    "Sneak": ("Sneak", "Pickpocket"), "Speechcraft": ("Speechcraft",),
+    "Enchant": ("Enchanting",),
+}
+
+
 def npc_skills_dnam(rec: dict) -> bytes:
     """Build TES5 NPC_ DNAM subrecord (52 bytes, skills + stats)."""
     dnam = bytearray(52)
     skill_vals = {}
-    skill_names_tes4 = [
-        "Armorer", "Athletics", "Blade", "Block", "Blunt",
-        "HandToHand", "HeavyArmor", "Alchemy", "Alteration",
-        "Conjuration", "Destruction", "Illusion", "Mysticism",
-        "Restoration", "Acrobatics", "LightArmor", "Marksman",
-        "Mercantile", "Security", "Sneak", "Speechcraft"
-    ]
-    tes4_to_tes5_skill = {
-        "Armorer": "Smithing", "Blade": "OneHanded", "Block": "Block",
-        "Blunt": "OneHanded", "HandToHand": "OneHanded",
-        "HeavyArmor": "HeavyArmor", "Alchemy": "Alchemy",
-        "Alteration": "Alteration", "Conjuration": "Conjuration",
-        "Destruction": "Destruction", "Illusion": "Illusion",
-        "Mysticism": "Illusion", "Restoration": "Restoration",
-        "LightArmor": "LightArmor", "Marksman": "Marksman",
-        "Mercantile": "Pickpocket", "Security": "Lockpicking",
-        "Sneak": "Sneak", "Speechcraft": "Speechcraft",
-    }
-    for tes4_name in skill_names_tes4:
+    for tes4_name, tes5_names in _TES4_SKILL_TO_TES5.items():
         val = get_int(rec, f'DATA.{tes4_name}')
-        tes5_name = tes4_to_tes5_skill.get(tes4_name)
-        if tes5_name and val:
+        for tes5_name in tes5_names if val else ():
             skill_vals[tes5_name] = max(skill_vals.get(tes5_name, 0), val)
     for i, skill_name in enumerate(TES5_SKILL_ORDER):
         dnam[i] = min(skill_vals.get(skill_name, 15), 255)
@@ -174,6 +173,8 @@ def _npc_snams(rec: dict, vendor_fids: list, trainer_clas_fid: int) -> bytes:
         subs += _pack_snam(get_trainer_faction_fid())
     for origin_fid in origin_memberships():
         subs += _pack_snam(origin_fid)
+    for flee_fid, rank in flee_memberships(rec):
+        subs += _pack_snam(flee_fid, rank)
     race_fact = race_faction(get_formid(rec, 'RNAM.Race'))
     if race_fact:
         subs += _pack_snam(race_fact)
@@ -206,6 +207,7 @@ def _spell_subs(rec: dict) -> bytes:
     """SPCT + SPLO for the actor's spell list (b'' when it has none)."""
     fids = [get_formid(rec, f'Spell[{i}]')
             for i in range(get_int(rec, 'SpellCount'))]
+    fids += flee_spells(rec)
     fids = [f for f in fids if f]
     if not fids:
         return b''
@@ -237,9 +239,9 @@ def _inventory_subs(carried: list, barter_gold: int) -> bytes:
 def _appearance_subs(rec: dict, race_edid: str, gender: str, writer) -> bytes:
     """Head parts, hair color, combat style and the four required NAM slots.
 
-    ZNAM is forced to the vanilla default combat style: CSTY is skipped, so
-    the TES4 reference would dangle. NAM6/NAM7 are neutral 1.0 so the race's
-    own scale applies.
+    ZNAM is the converted combat style; a source whose styles are not
+    converted keeps the vanilla default for an authored one. NAM6/NAM7 are
+    neutral 1.0 so the race's own scale applies.
 
     See: docs/commentary/tes5_import_actors.md#required-nam-subrecords
     """
@@ -251,8 +253,9 @@ def _appearance_subs(rec: dict, race_edid: str, gender: str, writer) -> bytes:
             else map_hair_color(*rgb))
     subs += pack_formid_subrecord('HCLF', hclf)
 
-    if get_formid(rec, 'ZNAM.CombatStyle'):
-        subs += pack_formid_subrecord('ZNAM', CSTY_DEFAULT)
+    style = actor_combat_style(rec) or (CSTY_DEFAULT if get_formid(rec, 'ZNAM.CombatStyle') else 0)
+    if style:
+        subs += pack_formid_subrecord('ZNAM', style)
 
     subs += pack_subrecord('NAM5', NAM5_UNKNOWN)
     subs += pack_subrecord('NAM6', struct.pack('<f', 1.0))
@@ -285,9 +288,7 @@ def _identity_subs(rec: dict, skyrim_race: int, gender: str, carried: list,
                             get_int(rec, 'ACBS.BarterGold') if vendor_fid else 0)
     subs += pack_subrecord('AIDT', build_aidt(rec))
 
-    pack_fids = [get_formid(rec, f'AIPackage[{i}]')
-                 for i in range(get_int(rec, 'AIPackageCount'))]
-    for pfid in npc_packages(pack_fids):
+    for pfid in npc_packages(authored_packages(rec)):
         subs += pack_formid_subrecord('PKID', pfid)
 
     cnam = trainer_clas_fid or get_formid(rec, 'CNAM.Class')

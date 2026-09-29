@@ -9,7 +9,8 @@ sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 from tes5_import.base.tes5_reader import REC_HDR, walk
 from tools.navmesh.navm_patch import (
     carry_doors, carry_water_flags, drop_links_to, enclosing_groups,
-    grid_of, remap, seam_plane, splice, TRI_FLAG_WATER,
+    grid_of, records_of, remap, seam_plane, splice, xndp_edits,
+    TRI_FLAG_WATER,
 )
 
 VERTS = [(0.0, 0.0, 0.0), (10.0, 0.0, 0.0), (10.0, 10.0, 0.0),
@@ -136,6 +137,35 @@ def test_a_door_on_a_vanished_triangle_is_dropped():
     """An index past the replaced mesh cannot be re-aimed, so it goes."""
     old = FakeNvnm(VERTS, [_tri(0, 1, 2)], doors=[(7, 0x0100ABCD)])
     assert carry_doors(old, VERTS, TRIS) == []
+
+
+def test_a_door_refrs_xndp_is_re_aimed_in_place():
+    """Only the NAVM id and triangle change; the record keeps its size.
+
+    See: docs/commentary/tes5_import_navmesh.md#patching-a-navmesh-into-a-built-esm
+    """
+    xndp = b'XNDP' + struct.pack('<HIhxx', 8, 0x01000001, 3)
+    refr = _record(b'REFR', 0x0100ABCD, b'NAME' + struct.pack('<HI', 4, 7) + xndp)
+    raw = _tes4_header() + _group(b'REFR', 0, refr)
+    (start, end, blob), = xndp_edits(raw, {0x0100ABCD: (0x01000002, 9)})
+    out = splice(raw, [(start, end, blob)])
+    assert len(out) == len(raw)
+    assert struct.unpack_from('<Ih', out, start) == (0x01000002, 9)
+
+
+# ---------------------------------------------------------------------------
+# Split cells
+# ---------------------------------------------------------------------------
+
+def test_each_piece_goes_back_to_the_record_it_lies_over():
+    """Components vote by their triangles' nearest old record."""
+    assert records_of([0, 0, 1, 1], 2, [1, 1, 0, 0], 2) == [1, 0]
+
+
+def test_a_merge_or_extra_piece_is_refused():
+    """Two components over one record, or one over two, cannot keep the FormIDs."""
+    assert records_of([0, 0, 1, 1], 2, [0, 0, 0, 0], 2) is None
+    assert records_of([0, 0, 0, 0], 1, [0, 0, 1, 1], 2) is None
 
 
 # ---------------------------------------------------------------------------

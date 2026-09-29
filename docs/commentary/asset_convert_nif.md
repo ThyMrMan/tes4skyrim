@@ -318,12 +318,32 @@ serializer always emits an empty inline pool with
 Every vanilla Skyrim particle system also carries a `BSPSysLODModifier`
 (**498/498** census), without which the system culls at all distances.
 
-### <a id="billboard-axis-fix"></a>Oblivion and Skyrim disagree on the billboard axis
+### <a id="billboard-axis-fix"></a>Billboards ship as authored — both engines run the same billboard math
 
-Oblivion mode-1 billboards keep local +Y up and +Z at the camera; Skyrim keeps
-local +Z up and −Y at the camera. Oblivion-authored flat-XY quads therefore need
-a −90° about-X rotation on their billboard node — byte-identical to vanilla
-`campfire01burning` "Plane05".
+A pure-geometry billboard keeps its authored rotation and mode; no axis
+correction is applied. Disassembled `NiBillboardNode`'s rotate-to-camera in
+`Oblivion.exe` (Nehrim install; `0x721b70`, called from the cull override at
+vtable slot 31) and SkyrimSE 1.6.1170 (`0xd3e650`, from slot 52's `0xd3f720`):
+
+- Both build `world = parent × local` with the **full local rotation**, pick the
+  case from `mode & 7` (Oblivion `+0xdc`, Skyrim `+0x128`), and finish with
+  `world = world × face`, `face` starting at identity.
+- **Mode 1 (rotate about up)** is term-for-term identical: the camera offset is
+  taken into the billboard's own frame and `face = [[z',0,x'],[0,1,0],[-x',0,z']]`
+  spins about **local +Y**. The node's rotation decides which axis that is, so it
+  is live data: `sky\sunbeam01.nif` authors −90°X, which stands its downward
+  quad (local −Y) vertical.
+- **Modes 0/3 and 2/4** (face camera / face center) build `face` from the
+  camera's columns taken into the same frame (both read −col0, col1, col2), so
+  the node's rotation cancels. **Mode 5** resets world rotation to identity and
+  spins about world Z in both.
+
+Vanilla authors the same way: 112 Skyrim mode-1 billboards carry −90°X over a
+flat-XY quad (thin axis Z), and every mode's quads are flat-XY in both games'
+meshes. The removed "Oblivion +Y up / Skyrim +Z up" correction composed −90°X
+onto every such node: a no-op for modes 0/2/3/4/5, and for mode 1 a second turn
+— the sunbeam shipped at 180°, lying flat. Removing it changed only mode-1
+billboards: 74 in Oblivion's meshes, 48 in Nehrim's, none of them `Fire\*.nif`.
 
 **A wrapper this converter builds carries NO axis correction.** These meshes are
 authored +Y-up and their PLACED REFERENCES carry the stand-up rotation: censused
@@ -332,8 +352,7 @@ across Oblivion.esm, **494** REFRs of the `Fire\*.nif` lights use RotX = ±90°
 — quads AND emitter markers — shares that one +Y-up frame, and the REFR rotates
 all of it together. Pre-rotating the quad to +Z-up made it the ONLY part in a
 different frame, so the REFR's −90° then laid it flat: the "third flame component
-on its side", with the smoke and flame beside it looking correct. Such wrappers
-are tagged so the later pass leaves them alone.
+on its side", with the smoke and flame beside it looking correct.
 
 ### <a id="billboard-demotion"></a>Demoting a billboard that contains particles
 
@@ -341,11 +360,13 @@ A billboard whose subtree holds a particle system is DEMOTED to a plain `NiNode`
 — a billboarding ancestor would spin the emitters — and its direct geometry
 children are wrapped in fresh billboard nodes instead.
 
-**The demoted node does NOT inherit the billboard's rotation.** A
-`NiBillboardNode` DISCARDS its own rotation at runtime and substitutes identity in
-view space — NifSkope's `BillboardNode::viewTrans` (`glnode.cpp`):
-`t = parent->viewTrans() * local; t.rotation = Matrix();`. So the authored
-rotation was never used for orientation, and copying it onto the plain
+**The demoted node does NOT inherit the billboard's rotation.** In the
+face-camera modes (0/2/3/4) and mode 5 the engine's camera-facing matrix cancels
+a `NiBillboardNode`'s own rotation ([billboard-axis-fix](#billboard-axis-fix));
+NifSkope's `BillboardNode::viewTrans` (`glnode.cpp`) models every mode that way:
+`t = parent->viewTrans() * local; t.rotation = Matrix();`. Mode 1 is the
+exception — its rotation picks the spin axis. For the face-camera cases the
+authored rotation was never used for orientation, and copying it onto the plain
 replacement RESURRECTS a dead value: `firetorchsmall`'s "Sparks-Emitter" and
 `firecandleflame`'s "FlameParticles-Emitter" are billboards carrying
 +Z=(0,−1,0), and reviving that aims the emitter sideways — the horizontal jet
@@ -367,11 +388,11 @@ the reference dangles ("block is missing from the nif tree") and the sim breaks.
 ## NIF FlameNode → grafted converted flame (rewritten 2026-07-05, replaces the MPS/AddonNode substitution)
 <a id="nif-flamenode-grafted-converted-flame"></a>
 - Oblivion marks where a flame burns with an empty `FlameNode*` NiNode (a bare marker: name + transform, no children) and attaches a flame NIF there at RUNTIME (`fire\firecandleflame.nif` for candles/sconces/lamps/etc., torch flame for torches). 108 Oblivion meshes have them.
-- **Conversion (`_convert_flame_nodes` + `_load_converted_flame` in nif_converter.py)**: the flame NIF for each marker's socket (see the FlameNode STAT table below) is run through the FULL converter once per worker (cached as serialized bytes; deep copies by re-reading — requires the patched-PyFFI NiPSysData `read`), and the converted root's children are grafted under each empty FlameNode marker. Marker keeps TRANSLATION, SCALE **and ROTATION** — all three are authored. The rotation is the hook-up between two model frames: the flame NIFs are +Y-up, and a +Z-up host carries the −90°X correction on its marker (`uppersilverplatecandles01`'s FlameNode0 is `[1,0,0][0,0,1][0,-1,0]`, i.e. `_BB_AXIS_FIX` itself — that host is a flat plate, extent X=23 Y=23 Z=2, and all 121 of its REFRs use RotX=0, so nothing else would stand the flame up). Zeroing it laid the candle flames on their side; +Y-up hosts author an identity marker and are unaffected. Host root gets BSX bit 0 OR'd in (grafted controllers must tick); the flame's flip-book atlas jobs are merged into the host stats so `convert_nif` writes the atlas into every output tree that needs it. Graft runs in `convert_nif` BEFORE the atlas build step.
+- **Conversion (`_convert_flame_nodes` + `_load_converted_flame` in nif_converter.py)**: the flame NIF for each marker's socket (see the FlameNode STAT table below) is run through the FULL converter once per worker (cached as serialized bytes; deep copies by re-reading — requires the patched-PyFFI NiPSysData `read`), and the converted root's children are grafted under each empty FlameNode marker. Marker keeps TRANSLATION, SCALE **and ROTATION** — all three are authored. The rotation is the hook-up between two model frames: the flame NIFs are +Y-up, and a +Z-up host carries the −90°X correction on its marker (`uppersilverplatecandles01`'s FlameNode0 is `[1,0,0][0,0,1][0,-1,0]`, i.e. −90°X — that host is a flat plate, extent X=23 Y=23 Z=2, and all 121 of its REFRs use RotX=0, so nothing else would stand the flame up). Zeroing it laid the candle flames on their side; +Y-up hosts author an identity marker and are unaffected. Host root gets BSX bit 0 OR'd in (grafted controllers must tick); the flame's flip-book atlas jobs are merged into the host stats so `convert_nif` writes the atlas into every output tree that needs it. Graft runs in `convert_nif` BEFORE the atlas build step.
 - **The earlier "embedding crashes the engine" lesson is OBSOLETE**: that crash (`vmovntdq` past page end, `BSEffectShaderProperty "CandleFat02Fake"`) was actually the PyFFI NiPSysData 66-vs-70-byte misalignment (+ uv_scale=(0,0)) — both long fixed. The interim `BSValueNode`/`AddOnNode` MPS substitution (`_ADDN_CANDLE_FLAME`=49 / `_ADDN_TORCH_FIRE`=46 / BSX bit 0x10) is deleted per user directive: convert, don't substitute.
-- **Billboard handling is now GENERAL (any tree depth, `_skyrimize_billboard`)**: firecandleflame.nif nests its particle emitter under TWO levels of NiBillboardNode, so root-only handling was insufficient. Every non-root NiBillboardNode on the walk (and root's direct children — they use a separate loop in `_convert_nif` that needs the same hook): contains a NiParticleSystem anywhere in its subtree → DEMOTE to plain NiNode + wrap its direct geometry children via `_wrap_in_billboard` (fresh NiBillboardNode, source mode, `_BB_AXIS_FIX` −90°X rotation); pure-geometry billboard → keep but COMPOSE the axis fix into its rotation (Oblivion billboards are authored identity over flat-XY quads). **When demoting, remap `emitter_object`/`gravity_object` refs that pointed at the old billboard node to the replacement** — else they dangle ("block is missing from the nif tree") and the particle sim breaks.
+- **Billboard handling is now GENERAL (any tree depth, `_skyrimize_billboard`)**: firecandleflame.nif nests its particle emitter under TWO levels of NiBillboardNode, so root-only handling was insufficient. Every non-root NiBillboardNode on the walk (and root's direct children — they use a separate loop in `_convert_nif` that needs the same hook): contains a NiParticleSystem anywhere in its subtree → DEMOTE to plain NiNode + wrap its direct geometry children via `_wrap_in_billboard` (fresh identity NiBillboardNode, source mode); pure-geometry billboard → keep as authored ([billboard-axis-fix](#billboard-axis-fix)). **When demoting, remap `emitter_object`/`gravity_object` refs that pointed at the old billboard node to the replacement** — else they dangle ("block is missing from the nif tree") and the particle sim breaks.
 
-- **FLAME QUADS STAY IN THE MODEL FRAME — no axis fix on the wrapper (fixed 2026-08-20)**: `_wrap_in_billboard` used to compose `_BB_AXIS_FIX` (−90°X) into every wrapper it built. That is wrong for these meshes: they are authored **+Y-up and their PLACED REFERENCES carry the stand-up rotation** — censused across `Oblivion.esm`, **494 REFRs** of the `Fire\*.nif` lights use `RotX = ±90°` (10/10 for `FireTorchLargeSmoke`, 188+51 of 395 for `FireOpenSmall`). The whole model — quads AND emitter markers — shares that one frame and the REFR rotates all of it together. Pre-rotating only the quad made it the sole part in a different frame, so the REFR's −90° then laid it flat: reported in game as "a third flame component on its side" beside a correct-looking flame and smoke. `_wrap_in_billboard` now applies NO fix and only tags `bb._axis_fixed = True`, so the later `_skyrimize_billboard` pass leaves its wrappers alone (that guard still fires — measured 27 times over 81 billboard meshes — and without it the pure-geometry branch would compose the fix back in). `_compose_axis_fix` remains live for genuinely Oblivion-authored pure-geometry billboards (249 calls over the same 81 meshes). Guarded by `test_flame_keeps_the_authored_model_frame`.
+- **FLAME QUADS STAY IN THE MODEL FRAME — no axis fix on the wrapper (fixed 2026-08-20)**: `_wrap_in_billboard` used to compose `_BB_AXIS_FIX` (−90°X) into every wrapper it built. That is wrong for these meshes: they are authored **+Y-up and their PLACED REFERENCES carry the stand-up rotation** — censused across `Oblivion.esm`, **494 REFRs** of the `Fire\*.nif` lights use `RotX = ±90°` (10/10 for `FireTorchLargeSmoke`, 188+51 of 395 for `FireOpenSmall`). The whole model — quads AND emitter markers — shares that one frame and the REFR rotates all of it together. Pre-rotating only the quad made it the sole part in a different frame, so the REFR's −90° then laid it flat: reported in game as "a third flame component on its side" beside a correct-looking flame and smoke. `_wrap_in_billboard` now applies NO fix. The axis fix itself was later removed for every billboard ([billboard-axis-fix](#billboard-axis-fix)). Guarded by `test_flame_keeps_the_authored_model_frame`.
 - **A DEMOTED BILLBOARD INHERITS IDENTITY — except emitter markers**: a `NiBillboardNode` DISCARDS its own rotation at runtime and substitutes identity in view space (NifSkope `BillboardNode::viewTrans`, glnode.cpp: `t = parent->viewTrans() * local; t.rotation = Matrix();`). Copying that dead rotation onto the plain replacement resurrects a value the engine never used. **But a `NiPSysEmitter` reads its `emitter_object` node's orientation as the emission DIRECTION**, which is live data — `firecandleflame` authors quad and emitter in one +Y-up frame (quad identity, local extent `[1.3, 2.6, 0.0]`; emitter `[1,0,0][0,0,-1][0,1,0]`, local +Z → model +Y), and zeroing the emitter made it +Z-up while the quad stayed +Y-up: an upright flame with a second, sideways particle jet, most visible once a FlameNode marker rotated the mismatched pair into a +Z-up host. `_is_emitter_marker()` keeps the rotation for nodes referenced as `emitter_object`/`gravity_object`; every other demoted billboard still gets identity. Guarded by `test_emitter_and_quad_agree_on_up`.
 - **WHICH FLAME BURNS AT A SOCKET IS AUTHORED — read the FlameNode STATs**: Oblivion ships one STAT per socket (WorldObjects/Static, EditorID `FlameNode<N>`) whose MODL is the flame to attach: `FlameNode0` `0x1E` FireCandleFlame, `1` `0x1F` FireTorchSmall, `2` `0x20` FireTorchLarge, `3` `0x21` FireTorchLargeSmoke, `4` `0x22` FireOpenSmall, `5` `0x23` FireOpenSmallSmoke, `6` `0x24` FireOpenMedium, `7` `0x25` FireOpenMediumSmoke, `8` `0x26` FireOpenLarge, `9` `0x27` FireOpenLargeSmoke. Those FormIDs are the keys `Oblivion.exe` hardcodes — the socket-name table at `0xB06818` is walked in lockstep with `0xB067C0` holding `0x1E..0x32`, looked up in the form map at `0xB0613C` — so the **plugin owns the mapping and a mod may repoint it**; `flame_socket_map()` parses it from the export's `STAT.txt` (cached per export root). Keying on the host FILENAME instead ('torch' in the name) put the 1.3×2.6-unit candle flame on every lamp in the game: `castlelight02` is a 105-unit fixture on socket 2, i.e. FireTorchLarge (32×64). Resolution is **per marker** — `lecternworkstation1` mixes FlameNode0 candles with a FlameNode1 torch. Guarded by `test_flame_comes_from_the_flamenode_stat`.
 - **A ZERO-PADDED SOCKET BURNS NOTHING**: the engine matches socket names EXACTLY, and its table holds only unpadded `FlameNode<N>` — `Oblivion.exe` contains `FlameNode7` and `FlameNode1` but neither `FlameNode07` nor `FlameNode01`, and the STATs are likewise unpadded. Two vanilla meshes are authored with padded markers and show **no flame in the original game**: `clutter/metalsmith/forgeopen01.nif` (`FlameNode07`) and `clutter/lecternworkstation1.nif` (`FlameNode01`). Matching them loosely put a 468-unit FireOpenMediumSmoke on the forge. `_FLAME_SOCKET_RE` is `^FlameNode(0|[1-9][0-9]*)(?![0-9])` and an unmatched socket grafts NOTHING — there is no default-flame fallback. Guarded by `test_zero_padded_socket_burns_nothing`.
@@ -572,6 +593,28 @@ is defensive, for plugins whose exporter did not follow the convention.
 
 `None` means no accum root, or one whose authored transform is identity, where
 the pose is a no-op either way.
+
+**At rest the root rotation moves to NonAccum** (`_bake_accum_root_pose`).
+When the accum root is the FILE root, its entry is dropped and its identity pose
+is baked onto the root node. NonAccum's rest transform is identity; the real
+pose exists only as its frame-0 key, which applies only while a sequence plays.
+A mesh with no load sequence (see `_start_state_id` in `hkx_animobject.py`)
+starts in the graph's Rest state, plays nothing, and showed the bare rest pose,
+so its authored rotation was lost. Nehrim's torch posts (`cplog01`, 168.6°) lay
+tipped over with their braziers floating; confirmed fixed in game.
+
+Census over the Oblivion and Nehrim exports: **127** meshes bake a root pose over
+a non-identity root rotation (59 Oblivion, 68 Nehrim). In **all 127**, NonAccum's
+rest is identity and `root · NonAccum rest` equals NonAccum's frame 0 exactly, so
+moving the rotation changes nothing during playback. 29 of them (non-menu) start
+in Rest and looked wrong in game: the cave logs, swing-blade traps (40°), the
+harrada plants, claw switch, mine and spike traps, root gate, blacksap tank, and
+the Open/Close doors (benirus, Leyawiin middle/upper interior, rootskin). The rest
+play Idle/SpecialIdle at load and never showed the rest pose.
+
+A pyffi `Matrix33` is the transpose of the column-vector quaternion matrix;
+`_apply_rotation` writes that layout. No mesh in either export has a
+non-identity dataless root pose, so the layout fix changed no output.
 
 ## Sequence controller retargeting
 <a id="sequence-controller-retargeting"></a>
@@ -1909,7 +1952,7 @@ authored FlameNodes with ~2x scale that the attached flame NIF expects). The
 rotation is the authored hook-up between two DIFFERENT model frames: the flame
 NIFs are authored +Y-up, and a host authored +Z-up carries exactly the −90°X
 correction on its marker. `uppersilverplatecandles01`'s FlameNode0 is
-`[1,0,0][0,0,1][0,-1,0]` — `_BB_AXIS_FIX` itself, mapping the flame's +Y onto the
+`[1,0,0][0,0,1][0,-1,0]` — a −90°X turn, mapping the flame's +Y onto the
 plate's +Z. That host is a flat plate (extent X=23 Y=23 Z=2) and all 121 of its
 REFRs use `RotX=0`, so nothing else would stand the flame up. Zeroing it laid the
 candle flames on their side. Hosts that are themselves +Y-up author an identity

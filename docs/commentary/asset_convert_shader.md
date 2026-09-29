@@ -30,10 +30,16 @@ clutter elsewhere in the tree.
 | `stars.nif`, `stars_oblivion.nif`, `sestars.nif` | `SKY_STARS` (5) |
 | `clouds.nif`, `clouds_oblivion.nif` | `SKY_CLOUDS` (3) |
 | `atmosphere.nif`, `sky.nif` | `SKY_BASE` (2) |
-| `sunbeam01-03.nif` | `SKY_SUNGLARE` (1) |
 
-`SKY_TEXTURE` (0) and `SKY_MOON_STARS_MASK` (7) complete the engine's enum; no
-Oblivion mesh maps onto either.
+`SKY_TEXTURE` (0), `SKY_SUNGLARE` (1) and `SKY_MOON_STARS_MASK` (7) complete the
+engine's enum; no Oblivion mesh maps onto any of them.
+
+**`sky\sunbeam01-03.nif` are NOT sky geometry**, despite the folder. No CLMT or
+WTHR record references them (0 in Oblivion.esm and Nehrim.esm); their only users
+are the placed `SkySunBeam01-03` activators, set inside caves and mines. Routed
+through the sky shader they lost their alpha, z-buffer and double-sided
+properties and showed through walls; they take the ordinary FX path instead
+(effect shader, z-test on, z-write off, double-sided).
 
 ## Lit or unlit: choosing the Effect shader
 <a id="fx-shader-discriminator"></a>

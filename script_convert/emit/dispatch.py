@@ -98,20 +98,16 @@ def _is_known(name: str) -> bool:
 
 
 def _promote_receiver(conv, call):
-    """A zero-argument command's first argument is its RECEIVER.
+    """The call's receiver; a zero-argument command drops a comma-led argument.
 
-    Oblivion tolerated a comma between a command and its first argument, and
-    Nehrim's scripts use the style constantly -- but for a command that takes
-    NO arguments the token after that comma is the subject: `StopCombat,
-    Player` means Player's combat state, the same as `Player.StopCombat`.
-    Treating it as an argument emitted `IsInCombat(Player)` ("takes 0
-    parameters not 1") and `(Self as Actor).StopCombat()`, which silently
-    acted on the wrong actor.
+    Oblivion's compiler discards the token after the comma: `StopCombat,
+    Player` compiles to a bare `StopCombat` on the calling reference.
+
+    See: docs/commentary/script_convert.md#comma-argument-is-discarded
     """
     if (conv._leading_comma and not call.ref
             and call.name in ZERO_ARG_REF_FUNCTIONS
             and len(call) == 1 and isinstance(call.args[0], N.Ident)):
-        call.ref = call.args[0].name
         call.args = ()
         conv._arg_nodes = ()
     return call.ref

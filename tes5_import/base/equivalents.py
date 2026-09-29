@@ -11,6 +11,8 @@ NPC preset templates, voice types, head parts, hair colors, etc.
 
 import struct
 
+from tes4_export.record_types.morrowind import MW_ENCHANT_SKILL
+
 from .tes5_reader import records
 from .writer import pack_record, pack_string_subrecord, pack_subrecord
 
@@ -623,7 +625,7 @@ _FORTIFY_SKILL = {
     13: 0x0003EAF9,  # Athletics → AlchFortifyStamina
     14: 0x0003EB19,  # Blade → AlchFortifyOneHanded
     15: 0x0003EB1C,  # Block → AlchFortifyBlock
-    16: 0x0003EB19,  # Blunt → AlchFortifyOneHanded
+    16: 0x0003EB1A,  # Blunt → AlchFortifyTwoHanded (as magic.SKILL_TO_AV)
     17: 0x0003EB19,  # HandToHand → AlchFortifyOneHanded
     18: 0x0003EB1E,  # HeavyArmor → AlchFortifyHeavyArmor
     19: 0x0003EB18,  # Alchemy → AlchFortifyAlchemy
@@ -631,7 +633,7 @@ _FORTIFY_SKILL = {
     21: 0x0003EB25,  # Conjuration → AlchFortifyConjuration
     22: 0x0003EB26,  # Destruction → AlchFortifyDestruction
     23: 0x0003EB27,  # Illusion → AlchFortifyIllusion
-    24: 0x0003EB27,  # Mysticism → AlchFortifyIllusion
+    24: 0x0003EB24,  # Mysticism → AlchFortifyAlteration
     25: 0x0003EB28,  # Restoration → AlchFortifyRestoration
     26: 0x0003EAF9,  # Acrobatics → AlchFortifyStamina
     27: 0x0003EB1F,  # LightArmor → AlchFortifyLightArmor
@@ -655,32 +657,28 @@ MGEF_AV_CODE_TO_SKYRIM = {
 # (e.g. when no writer is available). ArrowIronProjectile [PROJ:0003BE11]
 DEFAULT_ARROW_PROJECTILE = 0x0003BE11
 
-# TES4 skill index → TES5 Actor Value index for BOOK teaching
-# TES4 uses absolute indices (12-32), TES5 uses AV indices (6-23)
-# AV 6=OneHanded, 7=TwoHanded, 8=Marksman, 9=Block, 10=Smithing,
-# 11=HeavyArmor, 12=LightArmor, 13=Pickpocket, 14=Lockpicking, 15=Sneak,
-# 16=Alchemy, 17=Speechcraft, 18=Alteration, 19=Conjuration, 20=Destruction,
-# 21=Illusion, 22=Restoration, 23=Enchanting
+#: TES4 BOOK DATA.Teaches, a 0-20 skill index (xEdit wbSkillEnum) -> the TES5 actor value it teaches.
 TES4_SKILL_TO_TES5_INDEX = {
-    12: 10,  # Armorer → Smithing (AV 10)
-    14: 6,   # Blade → OneHanded (AV 6)
-    15: 9,   # Block → Block (AV 9)
-    16: 6,   # Blunt → OneHanded (AV 6)
-    17: 6,   # HandToHand → OneHanded (AV 6)
-    18: 11,  # HeavyArmor → HeavyArmor (AV 11)
-    19: 16,  # Alchemy → Alchemy (AV 16)
-    20: 18,  # Alteration → Alteration (AV 18)
-    21: 19,  # Conjuration → Conjuration (AV 19)
-    22: 20,  # Destruction → Destruction (AV 20)
-    23: 21,  # Illusion → Illusion (AV 21)
-    24: 21,  # Mysticism → Illusion (AV 21)
-    25: 22,  # Restoration → Restoration (AV 22)
-    27: 12,  # LightArmor → LightArmor (AV 12)
-    28: 8,   # Marksman → Archery (AV 8)
-    29: 13,  # Mercantile → Pickpocket (AV 13)
-    30: 14,  # Security → Lockpicking (AV 14)
-    31: 15,  # Sneak → Sneak (AV 15)
-    32: 17,  # Speechcraft → Speech (AV 17)
+    0: 10,   # Armorer → Smithing
+    2: 6,    # Blade → OneHanded
+    3: 9,    # Block → Block
+    4: 6,    # Blunt → OneHanded
+    5: 6,    # HandToHand → OneHanded
+    6: 11,   # HeavyArmor → HeavyArmor
+    7: 16,   # Alchemy → Alchemy
+    8: 18,   # Alteration → Alteration
+    9: 19,   # Conjuration → Conjuration
+    10: 20,  # Destruction → Destruction
+    11: 21,  # Illusion → Illusion
+    12: 18,  # Mysticism → Alteration
+    13: 22,  # Restoration → Restoration
+    15: 12,  # LightArmor → LightArmor
+    16: 8,   # Marksman → Archery
+    17: 17,  # Mercantile → Speech
+    18: 14,  # Security → Lockpicking
+    19: 15,  # Sneak → Sneak
+    20: 17,  # Speechcraft → Speech
+    MW_ENCHANT_SKILL: 23,  # Morrowind Enchant → Enchanting
 }
 
 # ---------------------------------------------------------------------------

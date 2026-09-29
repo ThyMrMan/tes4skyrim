@@ -15,18 +15,19 @@ import numpy as np
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 
+from tes5_import.base.navmesh_frozen import covered_by
 from tes5_import.base.navmesh_pins import (
-    cell_key, pins_for, save as save_pins, welds_for,
+    apply_hand_edits, cell_key, hand_edits_for, remove_patch, save as save_pins,
 )
-from tes5_import.base.text_reader import parse_export_file
 from tes5_import.navmesh import corridor
 from tools.cellview import plugins, progress, seams
 from tools.navmesh.draw import tri_class
 from tools.navmesh.meshedit import (
-    free_cell_name, is_stale, load_fix, make_entry, replay, save_fix,
+    free_cell_name, is_stale, load_fix, make_entry, rebase_ops, replay,
+    result_marks, save_fix,
 )
 from tools.navmesh.navm_patch import patch as navm_patch
-from tools.navmesh.index import master_export_dirs_of
+from tools.navmesh.index import master_export_dirs_of, wrld_records
 from tools.navmesh.transplant import index_for
 
 #: Baked geometry per cell, so switching back is instant.
@@ -63,21 +64,12 @@ def worlds(plugin):
     if export not in _WORLDS:
         out = {}
         for d in master_export_dirs_of(export) + [export]:
-            for rec in _wrld_records(d):
+            for rec in wrld_records(d):
                 if rec.get('EditorID'):
                     out[rec['EditorID'].lower()] = (rec.get('FormID') or
                                                     '').upper()
         _WORLDS[export] = out
     return _WORLDS[export]
-
-
-def _wrld_records(export):
-    """One export's WRLD records, read straight from its WRLD.txt.
-
-    See: docs/commentary/tes5_import_navmesh.md#cellview-open-is-cached
-    """
-    path = os.path.join(export, 'WRLD.txt')
-    return parse_export_file(path) if os.path.isfile(path) else []
 
 
 def parse_coords(text):
@@ -243,7 +235,26 @@ def cell_grid(src):
     return _grid(src.rec)
 
 
-def neighbour_builder(plugin, wfid, tick=None):
+def generate(src, lattice, ledges=None, edits=None):
+    """This cell's `(verts, tris)` with the committed `edits`; empty with no pathgrid.
+
+    Cuts and frozen patches apply after the build, exactly as
+    `from_pgrd._cell_geometry` does.
+    See: docs/commentary/tes5_import_navmesh.md#frozen-navmesh-patches
+    """
+    if not src.has_pathgrid:
+        return [], []
+    edits = edits or {}
+    raw = []
+    verts, tris = src.build(ledges_out=raw, lattice=lattice)
+    verts, tris, got = apply_hand_edits(
+        [tuple(float(c) for c in v[:3]) for v in verts], tris, raw, edits)
+    if ledges is not None:
+        ledges.extend(got)
+    return verts, [tuple(int(i) for i in t[:3]) for t in tris]
+
+
+def neighbour_builder(plugin, wfid, tick=None, lattice=False):
     """`f(gx, gy) -> (verts, tris) | None` for seam matching.
 
     Each neighbour costs a full navmesh generation, so results are cached for
@@ -253,11 +264,11 @@ def neighbour_builder(plugin, wfid, tick=None):
 
     def build(gx, gy):
         """That neighbour's geometry, generated on first request."""
-        key = ('nb', plugin, wfid, gx, gy)
+        key = ('nb', plugin, wfid, gx, gy, lattice)
         if key not in CACHE:
             rec = grid_of(plugin, wfid).get((gx, gy))
             ctx = index_of(plugin).cell(rec['FormID']) if rec else None
-            CACHE[key] = (ctx.build() if ctx is not None and ctx.has_pathgrid
+            CACHE[key] = (generate(ctx, lattice) if ctx is not None and ctx.has_pathgrid
                           else None)
         state['n'] += 1
         if tick is not None:
@@ -266,14 +277,14 @@ def neighbour_builder(plugin, wfid, tick=None):
     return build
 
 
-def seams_for(plugin, cell, job=''):
+def seams_for(plugin, cell, job='', lattice=False):
     """The seam report for one exterior cell, built on demand.
 
     Separate from `mesh_bake` because each of the four neighbours costs a full
     navmesh generation: measured, 44s for the cell alone against 178s with its
     seams.  The cell draws first; the seams arrive after.
     """
-    ck = ('seams', plugin, cell)
+    ck = ('seams', plugin, cell, lattice)
     if ck in CACHE:
         return CACHE[ck]
     src, why = resolve_cell(plugin, cell)
@@ -283,7 +294,7 @@ def seams_for(plugin, cell, job=''):
     wfid = (src.rec.get('ParentWRLD') or '').upper()
     if grid is None or not wfid or not src.has_pathgrid:
         return {'grid': list(grid) if grid else None, 'seams': []}
-    verts, tris = src.build()
+    verts, tris = generate(src, lattice)
     total = len(seams.NEIGHBOURS)
 
     def tick(done):
@@ -291,13 +302,13 @@ def seams_for(plugin, cell, job=''):
         progress.step(job, 0, float(done) / total)
 
     out = seams.seam_report(verts, tris, grid,
-                            neighbour_builder(plugin, wfid, tick))
-    out['neighbours'] = neighbour_meshes(plugin, wfid, grid)
+                            neighbour_builder(plugin, wfid, tick, lattice))
+    out['neighbours'] = neighbour_meshes(plugin, wfid, grid, lattice)
     CACHE[ck] = out
     return out
 
 
-def neighbour_meshes(plugin, wfid, grid):
+def neighbour_meshes(plugin, wfid, grid, lattice=False):
     """Flat triangles of each adjacent cell's mesh, for context.
 
     They are generated for seam matching anyway, so drawing them costs only
@@ -306,7 +317,7 @@ def neighbour_meshes(plugin, wfid, grid):
     """
     out = []
     for (side, dx, dy, _axis) in seams.NEIGHBOURS:
-        got = CACHE.get(('nb', plugin, wfid, grid[0] + dx, grid[1] + dy))
+        got = CACHE.get(('nb', plugin, wfid, grid[0] + dx, grid[1] + dy, lattice))
         if not got:
             continue
         nverts, ntris = got
@@ -316,8 +327,8 @@ def neighbour_meshes(plugin, wfid, grid):
     return out
 
 
-def cell_corrections(plugin, src, cell):
-    """`(pins, welds, key)` committed for this cell, or empty lists.
+def cell_corrections(plugin, src):
+    """`(edits by section, key)` committed for this cell; `({}, '')` when it has no key.
 
     See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
     """
@@ -325,24 +336,88 @@ def cell_corrections(plugin, src, cell):
     wrld = int(src.rec.get('ParentWRLD') or '0', 16)
     key = cell_key(src.rec, wrld, grid)
     if not key:
-        return [], [], ''
-    return pins_for(plugin, key), welds_for(plugin, key), key
+        return {}, ''
+    return hand_edits_for(plugin, key), key
 
 
-def mesh_bake(plugin, cell, job='', pinned=True):
+def live_mesh(plugin, src, lattice, pinned, ledges=None):
+    """`(verts, tris)` as the page shows it, which the page's ops index."""
+    edits = cell_corrections(plugin, src)[0] if pinned else None
+    return generate(src, lattice, ledges, edits)
+
+
+def edit_basis(plugin, cell, src, payload, lattice=False, pinned=True):
+    """`(verts, tris, doors, links, ops)` the page's edits apply to, or an error string.
+
+    On "Current mesh" that is the live mesh and the session's ops.  On "Saved
+    result" it is the correction's stored base with its own ops followed by
+    the session's, rebased: the saved edit is replayed, never re-guessed
+    against a generator that may have moved.
+
+    See: docs/commentary/tes5_import_navmesh.md#editing-a-saved-result
+    """
+    ops = payload.get('ops') or []
+    if payload.get('source') != 'saved':
+        ledges = []
+        verts, tris = live_mesh(plugin, src, lattice, pinned, ledges)
+        return (verts, tris, our_doors(src, verts, tris),
+                [(int(a), int(b)) for (a, b, _d) in ledges], ops)
+    fix = load_fix(plugin, cell)
+    if not fix:
+        return 'no saved correction for %s' % cell
+    verts = [tuple(p) for p in fix['base']['verts']]
+    tris = [tuple(t) for t in fix['base']['tris']]
+    doors, links = result_marks(verts, tris, fix['ops'], fix['result'])
+    return verts, tris, doors, links, rebase_ops(verts, tris, fix['ops'], ops)
+
+
+def _centroid(pts):
+    """Centroid of three points."""
+    return tuple(sum(p[k] for p in pts) / 3.0 for k in range(3))
+
+
+def same_triangle_as(tris_pts):
+    """`f(pts) -> bool`: is this triangle one of `tris_pts` (centroids within 1u)?
+
+    A frozen corner may snap up to half a unit onto a generated vertex, so
+    identity is a near centroid, not equal corners.
+    """
+    want = {}
+    for pts in tris_pts:
+        c = _centroid(pts)
+        want.setdefault((int(c[0] // 1.0), int(c[1] // 1.0)), []).append(c)
+
+    def match(pts):
+        """True when `pts` has a stored centroid within 1u."""
+        c = _centroid(pts)
+        bx, by = int(c[0] // 1.0), int(c[1] // 1.0)
+        near = [w for dx in (-1, 0, 1) for dy in (-1, 0, 1)
+                for w in want.get((bx + dx, by + dy), ())]
+        return any(sum((a - b) ** 2 for a, b in zip(c, w)) <= 1.0 for w in near)
+    return match
+
+
+def frozen_indices(verts, tris, frozen):
+    """Indices of `tris` that are a frozen patch triangle or a stitched piece of one."""
+    inside = covered_by(frozen)
+    return [i for i, t in enumerate(tris) if inside(_centroid([verts[k] for k in t]))]
+
+
+def mesh_bake(plugin, cell, job='', pinned=True, lattice=False):
     """Our mesh, its collision and any saved correction, in the CELL's frame.
 
     Refuses a plugin whose collision cache is missing: the cell would open
     with a pathgrid and no walls at all, which reads as a generation bug.
     `pinned` false rebuilds WITHOUT the committed corrections, which is how
-    the page shows what they actually changed.
+    the page shows what they actually changed.  `lattice` builds with the
+    prototype lattice generator.
 
     See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
     """
     why = plugins.preconditions(plugin)
     if why:
         return {'error': why}
-    ck = ('mesh', plugin, cell, bool(pinned))
+    ck = ('mesh', plugin, cell, bool(pinned), bool(lattice))
     if ck in CACHE:
         return CACHE[ck]
     progress.step(job, 0)
@@ -353,11 +428,8 @@ def mesh_bake(plugin, cell, job='', pinned=True):
         return {'error': why}
     progress.step(job, 2)
     ledges = []
-    pins, welds, pin_key = cell_corrections(plugin, src, cell)
-    verts, tris = (src.build(ledges_out=ledges,
-                             pins=pins if pinned else None,
-                             welds=welds if pinned else None)
-                   if src.has_pathgrid else ([], []))
+    edits, pin_key = cell_corrections(plugin, src)
+    verts, tris = generate(src, lattice, ledges, edits if pinned else None)
     walk, block = src.collision()
     progress.step(job, 3)
     fix = load_fix(plugin, cell)
@@ -381,15 +453,19 @@ def mesh_bake(plugin, cell, job='', pinned=True):
         'saved': (fix or {}).get('result'),
         'grid': cell_grid(src),
         'pinned': bool(pinned),
+        'lattice': bool(lattice),
         'pin_key': pin_key,
-        'pin_tris': len(pins) // 3,
-        'pin_welds': len(welds),
+        'pin_cuts': len(edits.get('cuts', ())),
+        'pin_frozen': len(edits.get('frozen', ())),
+        'pin_voids': len(edits.get('voids', ())),
+        'frozen_tris': (frozen_indices(verts, tris, edits.get('frozen', ()))
+                        if pinned else []),
     }
     CACHE[ck] = out
     return out
 
 
-def mesh_save(plugin, cell, payload):
+def mesh_save(plugin, cell, payload, lattice=False, pinned=True):
     """Commit a correction's ops, re-baking `result` from the live mesh.
 
     `mode` "new" writes a numbered sibling rather than replacing the existing
@@ -398,23 +474,27 @@ def mesh_save(plugin, cell, payload):
     src, why = resolve_cell(plugin, cell)
     if src is None:
         return {'error': why}
-    ledges = []
-    verts, tris = (src.build(ledges_out=ledges) if src.has_pathgrid
-                   else ([], []))
-    ops = payload.get('ops') or []
+    basis = edit_basis(plugin, cell, src, payload, lattice, pinned)
+    if isinstance(basis, str):
+        return {'error': basis}
+    verts, tris, doors, links, ops = basis
     target = (free_cell_name(plugin, cell)
               if payload.get('mode') == 'new' else cell)
-    entry = make_entry(plugin, target, verts, tris, ops,
-                       our_doors(src, verts, tris),
-                       [(int(a), int(b)) for (a, b, _d) in ledges])
+    entry = make_entry(plugin, target, verts, tris, ops, doors, links)
     path = save_fix(plugin, target, entry)
-    for variant in (True, False):
-        CACHE.pop(('mesh', plugin, cell, variant), None)
+    _forget(plugin, cell)
     return {'saved': path, 'ops': len(ops), 'cell': target,
             'tris': len(entry['result']['tris'])}
 
 
-def mesh_to_esm(plugin, cell, payload):
+def _forget(plugin, cell):
+    """Drop every cached bake of this cell, pinned or not, from either generator."""
+    for pinned in (True, False):
+        for lattice in (True, False):
+            CACHE.pop(('mesh', plugin, cell, pinned, lattice), None)
+
+
+def mesh_to_esm(plugin, cell, payload, lattice=False, pinned=True):
     """Apply the page's ops to the live mesh and patch it into the built ESM.
 
     Replays against a FRESH build rather than the saved correction's result, so
@@ -427,14 +507,13 @@ def mesh_to_esm(plugin, cell, payload):
     src, why = resolve_cell(plugin, cell)
     if src is None:
         return {'error': why}
-    ledges = []
-    verts, tris = (src.build(ledges_out=ledges) if src.has_pathgrid
-                   else ([], []))
+    basis = edit_basis(plugin, cell, src, payload, lattice, pinned)
+    if isinstance(basis, str):
+        return {'error': basis}
+    verts, tris, doors, links, ops = basis
     if not tris:
         return {'error': '%s has no generated navmesh to patch' % cell}
-    rv, rt, rd, rl = replay(verts, tris, payload.get('ops') or [],
-                            our_doors(src, verts, tris),
-                            [(int(a), int(b)) for (a, b, _d) in ledges])
+    rv, rt, rd, rl = replay(verts, tris, ops, doors, links)
     result = {'verts': rv, 'tris': rt, 'doors': rd, 'links': rl}
     return navm_patch(plugin, int(src.fid, 16), cell, result,
                       export=plugins.export_dir(plugin))
@@ -469,58 +548,85 @@ def _op_verts(op, added):
     return ()
 
 
-def changed_triangles(rv, rt, ops, nbase):
-    """Edited result triangles, as corner positions; no ops pins the lot."""
-    hot = touched_verts(ops, nbase)
-    keep = [t for t in rt if not hot or any(v in hot for v in t)]
-    return [tuple(rv[v]) for t in keep for v in t]
+def _points(verts, t):
+    """Triangle `t` as three corner positions."""
+    return tuple(tuple(float(c) for c in verts[v][:3]) for v in t[:3])
 
 
-def weld_pairs(verts, ops):
-    """Each snap_vert as a (from, to) position pair the GENERATOR will have.
+def frozen_patch(verts, tris, ops):
+    """`(frozen, voids)` world triangles for one session's edits over the mesh on screen.
 
-    BOTH endpoints come from the pre-replay verts.  Reading either one after
-    replay records where the human dragged it, which no fresh build reproduces
-    -- measured, a target read post-replay landed 59u from the nearest
-    generated vertex and the weld silently never applied.
-
-    See: docs/commentary/tes5_import_navmesh.md#weld-pins
+    Frozen: every result triangle using a vertex the ops moved, welded or
+    made.  Voids: every on-screen triangle deleted or using such a vertex --
+    the ground the human took over.  No ops at all freezes the whole mesh.
+    See: docs/commentary/tes5_import_navmesh.md#frozen-navmesh-patches
     """
-    out = []
-    for op in ops or ():
-        if op.get('op') != 'snap_vert':
-            continue
-        i, j = int(op['v']), int(op['to_v'])
-        if 0 <= i < len(verts) and 0 <= j < len(verts):
-            out.append((tuple(verts[i]), tuple(verts[j])))
+    rv, rt, _d, _l = replay(verts, tris, ops)
+    hot = touched_verts(ops, len(verts))
+    dead = {int(op['tri']) for op in ops or () if op.get('op') == 'del_tri'}
+    frozen = [_points(rv, t) for t in rt
+              if not ops or any(v in hot for v in t)]
+    voids = [_points(verts, t) for i, t in enumerate(tris)
+             if not ops or i in dead or any(v in hot for v in t)]
+    return frozen, voids
+
+
+def merge_patches(old_frozen, old_voids, frozen, voids):
+    """`(frozen, voids)`: new edits over committed patches, voided frozen dropped."""
+    replaced = same_triangle_as(voids)
+    keep = [t for t in old_frozen if not replaced(t)]
+    return _unique(keep + list(frozen)), _unique(list(old_voids) + list(voids))
+
+
+def _unique(tris):
+    """`tris` with repeats (corners equal at 0.01u) removed, order kept."""
+    seen, out = set(), []
+    for t in tris:
+        k = tuple(sorted(tuple(round(c, 2) for c in p) for p in t))
+        if k not in seen:
+            seen.add(k)
+            out.append(t)
     return out
 
 
-def mesh_pin(plugin, cell, payload):
-    """Pin the edited triangles of this cell to the committable pin file.
+def mesh_pin(plugin, cell, payload, lattice=False, pinned=True):
+    """Freeze this cell's edited triangles as a patch in the committable pin file.
 
-    See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
+    See: docs/commentary/tes5_import_navmesh.md#frozen-navmesh-patches
     """
     src, why = resolve_cell(plugin, cell)
     if src is None:
         return {'error': why}
-    ledges = []
-    verts, tris = (src.build(ledges_out=ledges) if src.has_pathgrid
-                   else ([], []))
-    if not tris:
-        return {'error': '%s has no generated navmesh to pin' % cell}
-    ops = payload.get('ops') or []
-    rv, rt, _rd, _rl = replay(verts, tris, ops,
-                              our_doors(src, verts, tris),
-                              [(int(a), int(b)) for (a, b, _d) in ledges])
-    pts = changed_triangles(rv, rt, ops, len(verts))
-    welds = weld_pairs(verts, ops)
-    key = cell_key(src.rec, int(src.rec.get('ParentWRLD') or '0', 16),
-                   cell_grid(src))
+    edits, key = cell_corrections(plugin, src)
     if not key:
         return {'error': 'cannot name %s for the pin file' % cell}
-    path, n, nw = save_pins(plugin, key, pts, welds)
-    for variant in (True, False):
-        CACHE.pop(('mesh', plugin, cell, variant), None)
-    return {'pinned': path, 'key': key, 'points': n, 'welds': nw,
-            'tris': n // 3, 'ops': len(ops)}
+    basis = edit_basis(plugin, cell, src, payload, lattice, pinned)
+    if isinstance(basis, str):
+        return {'error': basis}
+    verts, tris, _doors, _links, ops = basis
+    if not tris:
+        return {'error': '%s has no generated navmesh to pin' % cell}
+    frozen, voids = merge_patches(edits.get('frozen', ()), edits.get('voids', ()),
+                                  *frozen_patch(verts, tris, ops))
+    path, n = save_pins(plugin, key, frozen=frozen, voids=voids)
+    _forget(plugin, cell)
+    return {'pinned': path, 'key': key, 'tris': n['frozen'],
+            'voids': n['voids'], 'ops': len(ops)}
+
+
+def mesh_unpin(plugin, cell, payload):
+    """Remove the frozen patch at `payload['point']`, or every patch when it names none.
+
+    See: docs/commentary/tes5_import_navmesh.md#frozen-navmesh-patches
+    """
+    src, why = resolve_cell(plugin, cell)
+    if src is None:
+        return {'error': why}
+    key = cell_corrections(plugin, src)[1]
+    if not key:
+        return {'error': 'cannot name %s for the pin file' % cell}
+    point = payload.get('point')
+    path, nf, nv = remove_patch(plugin, key,
+                                tuple(float(c) for c in point) if point else None)
+    _forget(plugin, cell)
+    return {'pinned': path, 'key': key, 'frozen': nf, 'voids': nv}

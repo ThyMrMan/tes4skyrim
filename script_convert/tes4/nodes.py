@@ -105,11 +105,7 @@ class Call(Expr):
     name: str
     args: tuple[Expr, ...] = ()
     receiver: Expr | None = None
-    #: The argument list opened with a COMMA (`StopCombat, Player`).  For a
-    #: command that takes no arguments the token after that comma is the
-    #: RECEIVER, not an argument -- `StopCombat, Player` means Player's
-    #: combat, the same as `Player.StopCombat`.  Recorded because the comma is
-    #: the only thing that says so, and dropping it acted on the wrong actor.
+    #: The argument list opened with a COMMA (`StopCombat, Player`); a zero-arg command discards it.
     leading_comma: bool = False
 
 

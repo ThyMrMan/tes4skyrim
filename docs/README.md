@@ -37,6 +37,7 @@ What a format or contract IS. Stable; no dates, no status.
 | [havok_contact_hook.md](reference/havok_contact_hook.md) | The engine's contact callback: classes, slot 8, stable IDs |
 | [item_swap_table.md](reference/item_swap_table.md) | Oblivion → Skyrim Item Swap Table (MISC + Ingredients/Food) |
 | [morrowind_dialogue_format.md](reference/morrowind_dialogue_format.md) | TES3 DIAL/INFO export vocabulary the Morrowind runtime reads |
+| [navmesh_engine_contracts.md](reference/navmesh_engine_contracts.md) | How the pathfinder reads NVNM: neighbour slots, point lookup, lookup grid, clearance |
 | [package_ai_contracts.md](reference/package_ai_contracts.md) | PACK / AI Package & CTDA Engine Contracts |
 | [pipeline.md](reference/pipeline.md) | Pipeline Reference — orchestration, caching, layout, export format |
 | [prior_art_php_scriptconverter.md](reference/prior_art_php_scriptconverter.md) | PHP ScriptConverter (Skyblivion) — Comprehensive Analysis |
@@ -81,6 +82,7 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [ck_vs_game_missing_objects.md](commentary/ck_vs_game_missing_objects.md) | tes5_import/ - objects in the CK, missing in game |
 | [ck_warnings.md](commentary/ck_warnings.md) | tes5_import/ - what the CK complains about |
 | [core_run_log.md](commentary/core_run_log.md) | core/run_log.py - per-run logs and their profiling timestamps |
+| [core_setup_check.md](commentary/core_setup_check.md) | TES Auto-Convert.cmd, core/setup_check.py - the launcher and its install checks |
 | [ingame_testing.md](commentary/ingame_testing.md) | tools/dialog/ - in-game test methodology |
 | [morrowind_runtime.md](commentary/morrowind_runtime.md) | tes_runtime/morrowind/, external/openmw/ - Morrowind dialogue and MWScript in-engine |
 | [performance.md](commentary/performance.md) | the whole pipeline - performance and parallelism |
@@ -110,7 +112,6 @@ Why the SHIPPED code is the way it is. Named after the code it explains; opens w
 | [tes_runtime_crime.md](commentary/tes_runtime_crime.md) | tes_runtime/tes/crime.cpp, tes5_import/record_types/crime.py - bounty realms, jails and the arrest |
 | [tes_runtime_guns.md](commentary/tes_runtime_guns.md) | tes_runtime/fallout/fire.cpp - the gun shot, reload key and ammo restriction in FalloutRuntime |
 | [tes_runtime_journal.md](commentary/tes_runtime_journal.md) | tes_runtime/tes/journal_objectives.cpp, asset_convert/ui/journal_patch.py - a clicked quest objective shows its stage's text |
-| [tools_portable_build.md](commentary/tools_portable_build.md) | tools/release/build_portable.py - the portable Windows package with its own Python |
 | [tools_preflight.md](commentary/tools_preflight.md) | tools/validate/preflight - stuck quest stages, red error markers and FormID drift, found before play |
 | [version_upgrade_planning.md](commentary/version_upgrade_planning.md) | version.py - which steps a new release owes |
 
@@ -121,7 +122,9 @@ Designed, NOT yet built. Opens with `Status: PLAN`. Becomes commentary when buil
 | Doc | Covers |
 |---|---|
 | [classic_character_systems.md](plans/classic_character_systems.md) | Classic character systems for every source game: attributes, skills, leveling, perks, item condition |
+| [character_sheet.md](plans/character_sheet.md) | Character sheet in TESRuntime: attributes, legacy skills, Nehrim leveling takeover; converter bugs found on the way |
 | [horse_rideability.md](plans/horse_rideability.md) | Rideable Horse Conversion: Oblivion CREA → Skyrim Mountable Actor |
+| [navmesh_lattice.md](plans/navmesh_lattice.md) | Lattice navmesh generator: collision columns grown from the pathgrid (experimental, opt-in via `--navmesh-generator lattice`) |
 | [morrowind_object_scripts.md](plans/morrowind_object_scripts.md) | Move TES3 object scripts off the lossy Papyrus path onto the vendored interpreter |
 | [in_app_update.md](plans/in_app_update.md) | In-app update: download only what changed — design plan |
 | [vanilla_creature_swap.md](plans/vanilla_creature_swap.md) | Plan — "Vanilla Creature Swap" ESP generator + GUI |

@@ -15,8 +15,7 @@ from script_convert.constants import FORCE_GREET_QUEST
 from script_convert.pipeline import build_vmad_package_fragment
 from ..packages.converter import (ANY_TIME_PSDT, build_pkdt,
                                   FORCEGREET_INTERRUPT, force_greet_inputs,
-                                  package_markers, SPEED_RUN)
-from ..packages.templates import FORCE_GREET
+                                  Inputs, package_markers, SPEED_RUN)
 from ..record_types.common import (get_formid, get_int, get_str,
                                    pack_formid_subrecord, pack_record,
                                    pack_string_subrecord, pack_subrecord,
@@ -67,37 +66,49 @@ def _topic_input(key: str, dials: dict) -> tuple:
     return (0, get_formid(rec, 'FormID'))
 
 
-def _package(edid: str, fid: int, alias_id: int, quest_fid: int,
-             topic: tuple) -> bytes:
-    """One slot's ForceGreet PACK: EDID VMAD PKDT PSDT QNAM PKCU <inputs> markers."""
+def pool_package(edid: str, fid: int, alias_id: int, quest_fid: int,
+                 inputs: Inputs, pkdt: bytes) -> bytes:
+    """One pool slot's PACK: EDID VMAD PKDT PSDT QNAM PKCU <inputs> markers."""
     subs = pack_string_subrecord('EDID', edid)
     subs += pack_subrecord('VMAD', build_vmad_package_fragment(
         DONE_SCRIPT, {'Slot': ('int', alias_id)}))
-    subs += pack_subrecord('PKDT', build_pkdt(0, SPEED_RUN,
-                                              FORCEGREET_INTERRUPT))
+    subs += pack_subrecord('PKDT', pkdt)
     subs += pack_subrecord('PSDT', ANY_TIME_PSDT)
     subs += pack_formid_subrecord('QNAM', quest_fid)
     subs += pack_subrecord('PKCU', struct.pack(
-        '<III', len(FORCE_GREET.inputs), FORCE_GREET.formid,
-        FORCE_GREET.version))
-    subs += force_greet_inputs(topic).emit()
+        '<III', len(inputs.t.inputs), inputs.t.formid, inputs.t.version))
+    subs += inputs.emit()
     subs += package_markers()
     return pack_record('PACK', fid, 0, subs)
 
 
-def _quest(fid: int, pack_fids: list) -> bytes:
+def _package(edid: str, fid: int, alias_id: int, quest_fid: int,
+             topic: tuple) -> bytes:
+    """One slot's ForceGreet PACK."""
+    return pool_package(edid, fid, alias_id, quest_fid, force_greet_inputs(topic),
+                        build_pkdt(0, SPEED_RUN, FORCEGREET_INTERRUPT))
+
+
+def pool_quest(fid: int, edid: str, full: str, pack_fids: list) -> bytes:
     """The QUST owning one empty, runtime-filled alias per package."""
-    subs = pack_string_subrecord('EDID', FORCE_GREET_QUEST)
-    subs += pack_string_subrecord('FULL', 'TES4 Force Greets')
+    return alias_quest(fid, edid, full, [pack_formid_subrecord('ALPC', p) for p in pack_fids])
+
+
+def alias_quest(fid: int, edid: str, full: str, alias_bodies: list, vmad: bytes = b'') -> bytes:
+    """A start-game QUST with one empty, runtime-filled alias per body (its subrecords after FNAM)."""
+    subs = pack_string_subrecord('EDID', edid)
+    if vmad:
+        subs += pack_subrecord('VMAD', vmad)
+    subs += pack_string_subrecord('FULL', full)
     subs += pack_subrecord('DNAM', struct.pack('<HBBII', _SGE_FLAGS,
                                                _PRIORITY, 0, 0, 0))
     subs += pack_subrecord('NEXT', b'')
-    subs += pack_uint32_subrecord('ANAM', len(pack_fids))
-    for alias_id, pfid in enumerate(pack_fids):
+    subs += pack_uint32_subrecord('ANAM', len(alias_bodies))
+    for alias_id, body in enumerate(alias_bodies):
         subs += pack_uint32_subrecord('ALST', alias_id)
         subs += pack_string_subrecord('ALID', f'Slot{alias_id}')
         subs += pack_uint32_subrecord('FNAM', _ALIAS_FNAM)
-        subs += pack_formid_subrecord('ALPC', pfid)
+        subs += body
         subs += pack_subrecord('ALED', b'')
     return pack_record('QUST', fid, 0, subs)
 
@@ -121,5 +132,6 @@ def write_force_greet_quest(writer, slots: dict, dials: dict) -> int:
             writer.add_record('PACK', _package(edid, fid, first + n,
                                                quest_fid, topic))
             pack_fids.append(fid)
-    writer.add_record('QUST', _quest(quest_fid, pack_fids))
+    writer.add_record('QUST', pool_quest(quest_fid, FORCE_GREET_QUEST,
+                                         'TES4 Force Greets', pack_fids))
     return quest_fid

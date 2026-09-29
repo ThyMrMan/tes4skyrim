@@ -19,6 +19,7 @@ STAGES = {
              ('resolving cell + collision', 0.36),
              ('generating navmesh', 0.15)),
     'seams': (('generating neighbour cells', 1.0),),
+    'collision': (('scanning mesh collision (waits for any running build)', 1.0),),
 }
 
 #: job id -> live state; see read().

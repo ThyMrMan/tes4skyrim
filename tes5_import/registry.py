@@ -25,6 +25,7 @@ def _init_dispatch() -> None:
 
     See: docs/reference/record_mapping.md#dispatch-table-membership
     """
+    from .actors.combat_style import convert_CSTY
     from .record_types.actor_common import (convert_CLAS, convert_FACT)
     from .record_types.common import (convert_GLOB, convert_GMST)
     from .record_types.creature import convert_CREA
@@ -141,6 +142,7 @@ def _init_dispatch() -> None:
         'APPA': convert_APPA,
         'NPC_': convert_NPC_,
         'CREA': convert_CREA,
+        'CSTY': convert_CSTY,
         'FACT': convert_FACT,
         'EYES': convert_EYES,
         'HAIR': convert_HAIR,
@@ -185,7 +187,6 @@ def _init_dispatch() -> None:
         'SKIL',   # Hardcoded in TES5
         'BSGN',   # Birthsigns → no equivalent
         'RACE',   # NPCs map to Skyrim races
-        'CSTY',   # Combat Style -> Completely restructured
         'IDLE',   # Animation system different
         'GMST',   # Game settings differ between TES4/TES5
         'EYES',   # Do not convert — NPCs map to Skyrim head parts

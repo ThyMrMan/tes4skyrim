@@ -141,6 +141,24 @@ def changed_paths(base: str, head: str) -> list[str]:
     return [p for p in out.splitlines() if p]
 
 
+def feeds_tag(path: str) -> bool:
+    """True when the file's bytes enter the published tag: a top-level navmesh .py, or a native source.
+
+    The published cache is the corridor's, whose tag hashes
+    `tes5_import/navmesh/*.py` only (pool.tag_sources); the experimental
+    `lattice/` package feeds only its own local cache and never gates a push.
+    """
+    if path in NAVMESH_EXCLUDE:
+        return False
+    for prefix in NAVMESH_PATHS:
+        if prefix.endswith('/') and path.startswith(prefix):
+            rest = path[len(prefix):]
+            return '/' not in rest and rest.endswith('.py')
+        if path == prefix:
+            return True
+    return False
+
+
 _HUNK_FUNC = re.compile(r"^@@ .*? @@\s*(?:def\s+)?([A-Za-z_]\w*)")
 
 
@@ -152,9 +170,7 @@ def touches_navmesh(paths: list[str], base: str = None,
     NAVMESH_FUNCS only count when a hunk lands in one of the listed functions --
     otherwise an unrelated dialogue fix in import_main.py would block the push.
     """
-    hits = [p for p in paths
-            if any(p.startswith(n) or p == n for n in NAVMESH_PATHS)
-            and p not in NAVMESH_EXCLUDE]
+    hits = [p for p in paths if feeds_tag(p)]
     for path in paths:
         funcs = NAVMESH_FUNCS.get(path)
         if funcs and (base is None

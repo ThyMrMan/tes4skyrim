@@ -22,6 +22,43 @@ _GET_DISPOSITION = 76
 #: The player's reference, the one whose karma the mirror global holds.
 PLAYER_REF = 0x14
 
+#: FO3/FNV actor value -> TES5; any other drops. See: docs/commentary/tes5_import_conditions.md#fallout-actor-values
+FALLOUT_AV_TO_TES5 = {
+    0: 0, 1: 1, 2: 2, 3: 3, 4: 4,   # Aggression, Confidence, Energy, Responsibility, Mood
+    13: 32,   # Carry Weight
+    14: 33,   # Critical Chance
+    15: 27,   # Heal Rate
+    16: 24,   # Health
+    17: 34,   # Melee Damage
+    18: 39,   # Damage Resistance
+    19: 40,   # Poison Resistance
+    21: 30,   # Speed Multiplier
+    32: 17,   # Barter           -> Speech
+    33: 8,    # Big Guns         -> Archery (guns convert to crossbows)
+    34: 8,    # Energy Weapons   -> Archery
+    36: 14,   # Lockpick         -> Lockpicking
+    37: 22,   # Medicine         -> Restoration
+    38: 6,    # Melee Weapons    -> OneHanded (and TwoHanded, split_skill_conditions)
+    39: 10,   # Repair           -> Smithing
+    41: 8,    # Guns             -> Archery
+    42: 15,   # Sneak
+    43: 17,   # Speech
+    45: 6,    # Unarmed          -> OneHanded
+    46: 31,   # Inventory Weight
+    47: 53,   # Paralysis
+    48: 54,   # Invisibility
+    49: 54,   # Chameleon        -> Invisibility
+    50: 55,   # Night Eye
+    52: 41,   # Fire Resistance
+    53: 57,   # Water Breathing
+    56: 35,   # Unarmed Damage
+    57: 5,    # Assistance
+    58: 42,   # Electric Resistance -> ResistShock
+    59: 43,   # Frost Resistance
+    62: 68, 63: 69, 64: 70, 65: 71, 66: 72,   # Variable01-05
+    67: 73, 68: 74, 69: 75, 70: 76, 71: 77,   # Variable06-10
+}
+
 #: Fallout Run On values: Subject, Target, Reference, Combat Target, Linked Ref.
 _RUN_ON_TARGET = 1
 _RUN_ON_REFERENCE = 2
@@ -46,39 +83,6 @@ _GET_GLOBAL_VALUE, _OPERATOR_AND_OR = 74, 0xE1
 
 #: TES4/FO3/FNV CTDA type bit: the comparison value is a GLOB.
 _USE_GLOBAL = 0x04
-
-#: Actor value name -> (FO3/FNV index, Skyrim index); same meaning and scale in both games only.
-_FALLOUT_AV = {
-    'Aggression': (0, 0),
-    'Confidence': (1, 1),
-    'Energy': (2, 2),
-    'Mood': (4, 4),
-    'Carry Weight': (13, 32),
-    'Critical Chance': (14, 33),
-    'Health': (16, 24),
-    'Melee Damage': (17, 34),
-    'Poison Resistance': (19, 40),
-    'Speed Multiplier': (21, 30),
-    'Barter': (32, 17),
-    'Lockpick': (36, 14),
-    'Repair': (39, 10),
-    'Sneak': (42, 15),
-    'Speech': (43, 17),
-    'Inventory Weight': (46, 31),
-    'Paralysis': (47, 53),
-    'Invisibility': (48, 54),
-    'Night Eye': (50, 55),
-    'Fire Resistance': (52, 41),
-    'Water Breathing': (53, 57),
-    'Unarmed Damage': (56, 35),
-    'Assistance': (57, 5),
-    'Electric Resistance': (58, 42),
-    'Frost Resistance': (59, 43),
-}
-
-#: FO3/FNV actor-value index -> Skyrim's, from _FALLOUT_AV.
-_FALLOUT_AV_TO_TES5 = {fo: tes5 for fo, tes5 in _FALLOUT_AV.values()}
-
 
 def fallout_ctda(raw: bytes) -> bytes:
     """`raw`, padded to the full 28 bytes when it is a Fallout CTDA.
@@ -134,16 +138,11 @@ def mirrored_ctda(type_byte: int, comp_raw: int, func_idx: int, param1: int,
 
 
 def fallout_actor_value(av: int) -> 'int | None':
-    """The Skyrim actor value a Fallout condition's actor-value parameter names.
+    """The Skyrim actor value a Fallout actor value maps to, or None when it has none.
 
-    None drops the condition, failing open as TES4's attributes do: the
-    S.P.E.C.I.A.L. stats, karma and the skills Skyrim lacks have no Skyrim
-    value, and the limb conditions and the values on another scale are left
-    out. Fallout numbers its actor values its own way, so TES4's table must
-    never be applied to them.
     See: docs/commentary/tes5_import_conditions.md#fallout-actor-values
     """
-    return _FALLOUT_AV_TO_TES5.get(av)
+    return FALLOUT_AV_TO_TES5.get(av)
 
 
 def fallout_run_on(raw: bytes, remap) -> tuple:

@@ -268,3 +268,48 @@ def test_land_slit_skips_non_terrain_sheets():
     from tes5_import.navmesh import corridor_union as cu
     poly = Polygon([(0, 0), (10, 0), (10, 10), (0, 10)])
     assert cu._close_land_slits(poly, [{}], lambda _p: True) is poly
+
+
+#: Four triangles on one edge p-q (vertices 1, 2): a floor stacked in layers.
+_STACK_VERTS = [[0.0, 0.0, 0.0], [100.0, -100.0, 0.0], [100.0, 100.0, 0.0],
+                [200.0, 0.0, 0.0], [200.0, 0.0, 10.0], [150.0, 0.0, 5.0]]
+_STACK_TRIS = [(0, 1, 2), (3, 2, 1), (4, 2, 1), (5, 2, 1)]
+
+
+def _fan_state(tris, replaced):
+    """The `_open_fan` state tuple for `tris`, with `replaced` pre-seeded."""
+    from tes5_import.navmesh import union_mesh as um
+    from tes5_import.navmesh.union_geom import _tri_components
+    comp = _tri_components(tris)
+    vtris = {}
+    for ti, t in enumerate(tris):
+        for v in t:
+            vtris.setdefault(v, []).append(ti)
+    return (comp, vtris, um._border_index(tris)[0], {}, replaced, {})
+
+
+def test_opening_a_fan_splits_every_triangle_on_the_edge():
+    """Splitting a shared edge for one owner only cuts the others off.
+
+    On Morrowind_ob's ArkngthandVSHallSofSCentrifuge each such split added a
+    component, the stitch never converged, and the cell reached 88,048
+    triangles, past what NVNM's 16-bit indices hold.
+    See: docs/commentary/tes5_import_navmesh.md#sheet-stitching-runs-to-convergence
+    """
+    from tes5_import.navmesh import union_mesh as um
+    from tes5_import.navmesh.union_geom import _tri_components
+    verts = [list(v) for v in _STACK_VERTS]
+    state = _fan_state(_STACK_TRIS, {})
+    assert um._open_fan(verts, _STACK_TRIS, state, 0, state[0][0])
+    out = [p for ti, t in enumerate(_STACK_TRIS) for p in state[4].get(ti, [t])]
+    assert len(out) == 8
+    assert len(set(_tri_components(out))) == 1
+
+
+def test_a_fan_whose_edge_was_already_split_this_round_waits():
+    """An owner replaced earlier in the round cannot be re-split, so the fan waits."""
+    from tes5_import.navmesh import union_mesh as um
+    verts = [list(v) for v in _STACK_VERTS]
+    state = _fan_state(_STACK_TRIS, {2: [_STACK_TRIS[2]]})
+    assert not um._open_fan(verts, _STACK_TRIS, state, 0, state[0][0])
+    assert set(state[4]) == {2}

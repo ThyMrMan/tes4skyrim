@@ -653,6 +653,24 @@ registers `Fallout` the way Nehrim registers `N` and `L`. Fallout3 registers
 assets ever extracted were Tale of Two Wastelands' `Fallout3 - *.bsa` from the
 New Vegas folder, which leave out every file New Vegas already ships.
 
+### <a id="bsa-formats"></a>One reader for every BSA version
+
+**Code:** `read_bsa_directory`, `iter_bsa` and `_open_archive` in
+`asset_convert/sources/bsa_extract.py`
+
+`read_bsa_directory` is the only parser for v103 (Oblivion), v104 (FO3/FNV,
+Skyrim LE) and v105 (Skyrim SE). Extraction, `read_bsa_files` and
+`tools/misc/bsa_list_names.py` all go through it. Morrowind's archive shares no
+structure with these (flat path list, no folders, no compression), so
+`_open_archive` routes it to `bsa_extract_morrowind` by its first four bytes.
+
+There used to be two copies. The extractor's copy only knew v103/104's 16-byte
+folder records, while v105's are 24 bytes (64-bit offset) and compress with LZ4
+rather than zlib. On an SSE-format archive it read garbage file counts and
+walked off the end of the file (`struct.error: unpack_from requires a buffer…`),
+reported for a user's `Tamriel_Data.bsa`. Entries are read by seeking, not by
+loading the whole archive (that one was 1.5 GB).
+
 ### <a id="same-named-plugins"></a>Same-named plugins from different Data folders
 
 **Code:** `home_directory`, `claim_home`, `directory_for`, `variant_folder`,

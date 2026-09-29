@@ -43,6 +43,22 @@ def _seam_mesh(wrld, gx, gy, at_max_x):
     return _nvnm(wrld, gx, gy, verts, tris)
 
 
+def test_a_stub_crossing_the_seam_band_is_not_a_border_edge():
+    """Both ends in SEAM_BAND but running across the seam: never a portal edge.
+
+    See: docs/commentary/tes5_import_navmesh.md#seam-edges-run-along-the-seam
+    """
+    x = edge_links.CELL_SIZE
+    stub = _nvnm(0x3C, 0, 0, [(x - 23.0, 500.0, 0.0), (x, 505.0, 0.0),
+                              (x - 500.0, 300.0, 0.0)],
+                 [(0, 1, 2, -1, -1, -1, 0, 0)])
+    seam = _seam_mesh(0x3C, 0, 0, True)
+
+    assert edge_links.border_edges(edge_links.NavMeshView(1, stub), 0, x) == []
+    assert len(edge_links.border_edges(
+        edge_links.NavMeshView(2, seam), 0, x)) == 1
+
+
 def _packed(blob):
     """Wrap an NVNM blob in an uncompressed NAVM record."""
     sub = b'NVNM' + struct.pack('<H', len(blob)) + blob

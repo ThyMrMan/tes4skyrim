@@ -197,7 +197,7 @@ def test_scoped_rebuild_reaches_a_current_cache(tmp_path, monkeypatch):
     frags.close_fragments()
     monkeypatch.setattr(pipeline, 'assets_for', lambda _d: Path(assets))
 
-    assert pipeline._rescan_mesh_caches('unused', str(meshes))
+    assert pipeline.rescan_mesh_caches('unused', str(meshes))
 
     cache = json.loads((assets / 'mesh_bounds_cache.json').read_text())
     assert cache['traps/cavein.nif'] == [0, 0, 0, 1, 1, 1, 2]
@@ -206,4 +206,4 @@ def test_scoped_rebuild_reaches_a_current_cache(tmp_path, monkeypatch):
     assert ce.collision_cache_is_current(str(assets / 'collision_cache.bin'))
     assert not os.path.isdir(frags.fragment_dir(assets)) or \
         not os.listdir(frags.fragment_dir(assets))
-    assert not pipeline._rescan_mesh_caches('unused', str(meshes))
+    assert not pipeline.rescan_mesh_caches('unused', str(meshes))

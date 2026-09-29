@@ -34,6 +34,11 @@
   animations, sounds, dialogue, and scripts.
 </p>
 
+<p align="center">
+  <img src="docs/assets/readme_img.png" alt="An Oblivion Vista" width="720">
+</p>
+
+
 ---
 
 **This project is pre-alpha. Expect issues.** Conversions are incomplete, and some features are only half implemented. Bugs are common across every stage, and output can change or break between releases. Updates will likely break your saves from converted games, so expect to start a new game after updating. Back up your saves before installing converted content.
@@ -55,7 +60,7 @@ This is a full data-conversion pipeline. It takes an `.esm`/`.esp` (plus its BSA
 
 ### Which games
 
-Four source games are supported: **Morrowind**, **Oblivion**, **Fallout 3** and **Fallout: New Vegas**. Total conversions such as **Nehrim** are also supported.
+Four source games are supported: **Morrowind**, **Oblivion**, **Fallout 3** and **Fallout: New Vegas**. Total conversions such as **Nehrim** and **Arktwend** are also supported.
 
 Morrowind is the odd one out and has [its own section](#morrowind) below.
 
@@ -104,66 +109,40 @@ Morroblivion mode needs a compatibility patch. Choosing **Settings ▸ Morrowind
 for you from your Morrowind `Data Files` if it doesn't exist yet (convert `Morrowind_ob.esm` first). Choose it again while
 it's selected to rebuild the patch.
 
-On the command line:
-
-```bash
-python convert.py --build-morrowind-patch "C:\path\to\Morrowind\Data Files"
-```
-<p align="center">
-  <img src="docs/assets/readme_img.png" alt="An Oblivion Vista" width="720">
-</p>
-
----
-
-## Requirements
-
-A decent PC. More cores make it faster, but each core also uses more RAM. Tested on a 7950X3D with 32 GB of RAM (converting Oblivion.esm peaks at about 16 GB).
-
-**The easy way: the portable package.** Download `TESAutoConvert-<version>-win64.zip` from the latest [release](https://github.com/bryantmh/tes4skyrim/releases), unzip it anywhere you can write to (not `Program Files`), and double-click `TES Auto-Convert.cmd`. It carries its own Python with every package installed, so steps 1 and 2 below are already done. You still need steps 3 and 4.
-
-Running from a source checkout instead, you need four things:
-
-1. **Python 3.14.** Use exactly 3.14. Other versions need you to compile the navmesh module yourself (see `native/dist/README.md`).
-2. **The Python packages.** Open PowerShell in this folder and paste:
-
-   ```bash
-   pip install -r requirements.txt
-   ```
-
-   It installs the tested versions, including the optional `tkinterdnd2` for
-   dragging mod archives onto the GUI.
-3. **The Skyrim SE Creation Kit**, free on Steam. It provides lip sync and the files scripts are compiled against.
-4. **xWMAEncode.exe**, for voice files. See the note below.
-
-> **xWMAEncode.exe** ships with the [Microsoft DirectX SDK (June 2010)](https://www.microsoft.com/en-us/download/details.aspx?id=6812)
-> and cannot be redistributed. You should extract it from the SDK installer using 7-zip to avoid having to do a full install.
-> Then, copy it to `external/xwmaencode/`. (If you choose to install the SDK instead, find it in `Utilities\bin\x86\`.)
-
-If anything is missing, the conversion stops and tells you what to install.
-Run `python preflight.py` to check without starting a conversion.
-
 ---
 
 ## Quick start
 
-The easiest way to run a conversion is the GUI. In the portable package, double-click `TES Auto-Convert.cmd`. From a source checkout, double-click gui.pyw or, in the terminal:
+### Setting up
 
-```bash
-python gui.py
-```
+1. **Install the Skyrim Special Edition Creation Kit**, free on Steam.
+2. **Install [SKSE](https://skse.silverlock.org/)** by copying its files straight into your Skyrim folder.
+3. **Install the [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444)** with your mod manager.
+4. **Download the converter:** on the latest [release](https://github.com/bryantmh/tes4skyrim/releases), click **Source code (zip)**, then unzip it somewhere like your Documents folder (not `Program Files`).
+5. **Double-click `TES Auto-Convert.cmd`** in the unzipped folder.
 
-Or run the full conversion from the command line:
+The first time, it sets itself up. That needs internet and takes a few minutes, and it asks to download a free
+Microsoft tool used for voice lines; say yes. After that, double-clicking it just opens the converter.
 
-```bash
-python convert.py -f Oblivion.esm
-```
+You'll want a strong PC: it was tested with 32 GB of RAM, and converting Oblivion uses about 16 GB.
 
-In the GUI:
+### Converting
 
-- Your Oblivion install is found automatically. Add Morrowind and Fallout installs
-  with `+` under **Source**.
-- Pick a plugin, tick the steps you want (**Default** is the usual choice), and run.
-- **Help ▸ Check Dependencies** tells you what's missing before you start.
+1. **Convert a game.** Your Oblivion install is found automatically; add Morrowind and Fallout installs with `+`
+   under **Source**. Pick the game, leave the steps on **Default**, and click **Run Selected Steps**. If anything is missing, the
+   converter tells you what to install.
+2. **Click each of these buttons once** (click them again after converting another game or updating the converter):
+   - **Pack SKSE Mod**: the converter's SKSE plugins. Converted games don't work without it.
+   - **Pack Start Mod**: the new-game menu where you pick which world to start in.
+   - **Body Slot Patch**: splits Skyrim's body into torso, legs and each hand, so converted armor pieces like
+     greaves or a single gauntlet hide only the part they cover.
+   - **Create LOD**, then **Pack LOD**: the distant view of the converted worlds.
+3. **Install everything in `output/Finished Mods/`** with your mod manager.
+4. **Start the game through SKSE** (`skse64_loader.exe`, or your mod manager's SKSE button) and pick your world
+   from the new-game menu.
+
+Also in the converter:
+
 - **Build ▸ Quest Journal Stage Text** makes a quest's objectives clickable in Skyrim's journal: clicking
   one shows the journal text the quest had when that objective appeared, and clicking it again returns to
   the current text. It works for every quest, converted or not. It patches whichever journal you run
@@ -191,27 +170,20 @@ A copy of the archive is kept under `export/<plugin>/_source/` so steps can be
 re-run after you delete the download. **Plugins ▸ Manage Imported Mods…** removes
 them. If a master has not been converted yet, the import says so.
 
-```bash
-python convert.py --import-mod "C:\Downloads\SomeMod.rar"
-python convert.py -f SomeMod.esp          # then convert it normally
-python convert.py --list-mods
-python convert.py --remove-mod SomeMod.esp
-```
-
 ### What to install
 
 Everything you install ends up in **`output/Finished Mods/`**. Install these with
 your mod manager:
 
-- One `.zip` per converted game or mod
-- `TESRuntime.zip`, required (see [TESRuntime](#tesruntime-skse-plugin)). It needs
+- One `.zip` per converted game or mod, from **Run Selected Steps**
+- `TESRuntime.zip`, from **Pack SKSE Mod**, required (see [TESRuntime](#tesruntime-skse-plugin)). It needs
   [SKSE](https://skse.silverlock.org/) and the
   [Address Library for SKSE Plugins](https://www.nexusmods.com/skyrimspecialedition/mods/32444)
   installed, and the game launched through SKSE (`skse64_loader.exe`, or your mod
   manager's SKSE entry). Without them the runtime DLLs never load.
-- `TESGameSelect.zip`, the new-game menu (see [Starting a converted game](#starting-a-converted-game))
-- `AutoConvertLOD.zip`, the distant-view LOD. Install it after the mods it covers.
-- `Slot44 Patch.esp`
+- `TESGameSelect.zip`, from **Pack Start Mod**: the new-game menu (see [Starting a converted game](#starting-a-converted-game))
+- `Body Slots Patch.zip`, from **Body Slot Patch**
+- `AutoConvertLOD.zip`, from **Create LOD** then **Pack LOD**: the distant view. Install it after the mods it covers.
 
 The rest of `output/` is working space. Don't install anything from it directly.
 
@@ -305,6 +277,9 @@ game after editing it. Omit a key, or the file entirely, to keep the default.
 ---
 
 ## Command line
+
+Open a terminal in this folder and run `.venv\Scripts\activate` first, so `python`
+is the converter's own.
 
 ### Run the full pipeline
 
@@ -463,7 +438,7 @@ covered by this project's MIT license.
 | [OpenMW](https://openmw.org/) | The Morrowind dialogue engine and MWScript interpreter, vendored into `external/openmw/` and linked into `MorrowindRuntime.dll` | **GPL-3.0** — see the GPL note below. Vendored by `tools/generators/vendor_openmw.py`; license text in `external/openmw/LICENSE` |
 | [figment — hkxcmd](https://github.com/figment/hkxcmd) | Havok packfile XML↔binary compiler, `external/hkxcmd/hkxcmd.exe`, used to build skeleton/behavior/animation `.hkx` | **BSD-3-Clause** for hkxcmd's own sources (© 2011; text in `external/hkxcmd/LICENSE.TXT`). **Statically links Havok** — see the Havok note below |
 | [Monitor221hz — HKX2-Enhanced-Library](https://github.com/Monitor221hz/HKX2-Enhanced-Library) | Skyrim SE 64-bit Havok packfile ↔ XML, `external/hkxconv/hkxconv.exe`, used to patch the vanilla humanoid behavior graphs (`hkxcmd` cannot read 64-bit files). Forked from [ret2end](https://github.com/ret2end/HKX2Library), in turn from [katalash](https://github.com/katalash/DSMapStudio) / [krenyy](https://gitlab.com/HKX2/HKX2Library); bundles `BinaryReaderEx` from [JKAnderson — SoulsFormats](https://github.com/JKAnderson/SoulsFormats) | **No stated license** anywhere in that chain (no LICENSE file upstream) — community project, publicly distributed and freely forked; redistributed here on that basis. Full chain and rebuild steps in `external/hkxconv/README.md` |
-| [Microsoft DirectX SDK (June 2010)](https://www.microsoft.com/en-us/download/details.aspx?id=6812) | `external/xwmaencode/xWMAEncode.exe`, xWMA voice compression | Microsoft — **not redistributed**; obtain from the SDK (see [Requirements](#requirements)) |
+| [Microsoft DirectX SDK (June 2010)](https://www.microsoft.com/en-us/download/details.aspx?id=6812) | `external/xwmaencode/xWMAEncode.exe`, xWMA voice compression | Microsoft — **not redistributed**; the launcher fetches it from Microsoft (see [Quick start](#quick-start)) |
 | [FFmpeg](https://ffmpeg.org/) | `external/ffmpeg/ffmpeg.exe`, decoding MP3/WAV voice and sound files | **LGPL v2.1 or later** — redistributed; license text in `external/ffmpeg/COPYING.LGPLv2.1`. See the LGPL note below |
 | Oblivion banner font ([dafont](https://www.dafont.com/oblivion.font)) | Project banner | *Free for personal use only*, based on Bethesda's trademarked logo. **Not** bundled in this repo; the banner ships as pre-rendered vector outlines. |
 

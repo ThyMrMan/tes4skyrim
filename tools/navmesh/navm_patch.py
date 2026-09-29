@@ -9,7 +9,8 @@ and ONAM so NAVI, XNDP and the neighbours' edge links stay valid.
     python tools/navmesh/navm_patch.py --plugin Oblivion.esm --cell ICMarket
     python tools/navmesh/navm_patch.py --plugin Nehrim.esm --cell "wrldnehrim 3 -5"
 
-A cell the importer split into several NAVM records is refused.
+A cell the importer split into several NAVM records is re-split onto those
+same records; an edit that changes how the pieces connect is refused.
 
 See: docs/commentary/tes5_import_navmesh.md#patching-a-navmesh-into-a-built-esm
 """
@@ -18,12 +19,17 @@ import argparse
 import os
 import struct
 import sys
+from collections import Counter
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
     os.path.abspath(__file__)))))
 
+from scipy.spatial import cKDTree
+
 from output_layout import plugin_esm
-from tes5_import.base.tes5_reader import GRP_HDR, REC_HDR, masters, walk
+from tes5_import.base.tes5_reader import (
+    FLAG_COMPRESSED, GRP_HDR, REC_HDR, SUB_HDR, masters, walk,
+)
 from tes5_import.base.writer import pack_subrecord
 from tes5_import.navmesh.edge_links import (
     CELL_SIZE, NavMeshView, border_edges, extract_nvnm, match_seam,
@@ -31,7 +37,7 @@ from tes5_import.navmesh.edge_links import (
 from tes5_import.navmesh.from_pgrd import (
     compute_adjacency, pack_navm_record, pack_nvnm,
 )
-from tes5_import.navmesh.split import Nvnm
+from tes5_import.navmesh.split import Nvnm, components, pack_component_nvnm
 
 #: Triangle flag the water pass sets; carried over from the replaced mesh.
 TRI_FLAG_WATER = 0x0200
@@ -261,7 +267,7 @@ def splice(raw, edits):
 
 
 def edits_for(target, verts, tris, ledges, neighbours):
-    """Every `(offset, end, bytes)` one corrected mesh implies."""
+    """`(edits, {door: (NAVM, triangle)})` one corrected mesh implies."""
     flags = carry_water_flags(target.nv, verts, tris)
     doors = carry_doors(target.nv, verts, tris)
     ours = target.rebuilt(verts, tris, flags, doors, ledges)
@@ -269,6 +275,106 @@ def edits_for(target, verts, tris, ledges, neighbours):
     out = [(target.offset, target.end, target.repack(ours))]
     out += [(nb.offset, nb.end, nb.repack(view))
             for (nb, view) in changed.values()]
+    return out, {fid: (target.fid, ti) for (ti, fid) in doors}
+
+
+def whole_mesh(found, verts, tris, ledges):
+    """The corrected mesh of a split cell as ONE decode, framed as its first record.
+
+    Water flags and doors are carried from every piece it replaces.
+    """
+    root = found[0]
+    flags = [max(f) for f in zip(*(carry_water_flags(n.nv, verts, tris)
+                                   for n in found))]
+    doors = [d for n in found for d in carry_doors(n.nv, verts, tris)]
+    return Nvnm(pack_nvnm(verts, tris, compute_adjacency(tris), flags,
+                          root.nv.wrld, root.nv.cell, 0, 0, False,
+                          door_tris=doors, ledges=ledges, navm_fid=root.fid))
+
+
+def piece_of(found, verts, tris):
+    """For each corrected triangle, the index in `found` of the record nearest it."""
+    owner, cents = [], []
+    for r, n in enumerate(found):
+        for t in n.nv.tris:
+            owner.append(r)
+            cents.append(centroid(n.nv.verts, t))
+    near = cKDTree(cents).query([centroid(verts, t) for t in tris])[1]
+    return [owner[int(i)] for i in near]
+
+
+def records_of(comp, ncomp, piece, nrec):
+    """`[record index per component]` by majority vote, or None unless one-to-one."""
+    votes = [Counter() for _ in range(ncomp)]
+    for ti, c in enumerate(comp):
+        votes[c][piece[ti]] += 1
+    out = [v.most_common(1)[0][0] for v in votes]
+    return out if sorted(out) == list(range(nrec)) else None
+
+
+def same_neighbours(rec, door_refs, link_fids):
+    """True when a re-cut piece keeps its record's doors and sibling links."""
+    old_links = {lk[1] for lk in rec.nv.links} - {rec.fid}
+    return (door_refs == sorted({fid for (_t, fid) in rec.nv.doors})
+            and set(link_fids) - {rec.fid} == old_links)
+
+
+def split_edits(found, verts, tris, ledges):
+    """`(edits, {door: (NAVM, triangle)})` re-cutting a split cell, or an error string.
+
+    Each component of the corrected mesh replaces the record it lies over, so
+    FormIDs, EDIDs, ONAMs and NAVI stay valid.
+    See: docs/commentary/tes5_import_navmesh.md#patching-a-navmesh-into-a-built-esm
+    """
+    nv = whole_mesh(found, verts, tris, ledges)
+    comp, ncomp = components(nv.tris)
+    rec_of = records_of(comp, ncomp, piece_of(found, verts, tris), len(found))
+    if rec_of is None:
+        return ('the edit left %d separate pieces where the build has %d NAVM '
+                'records' % (ncomp, len(found)))
+    fid_of_tri = [found[rec_of[c]].fid for c in comp]
+    members = [[] for _ in range(ncomp)]
+    for ti, c in enumerate(comp):
+        members[c].append(ti)
+    tri_local = {ti: k for m in members for k, ti in enumerate(m)}
+    edits, placed = [], {}
+    for c, m in enumerate(members):
+        rec = found[rec_of[c]]
+        blob, _center, links, refs, door_local = pack_component_nvnm(
+            nv, m, tri_local, fid_of_tri, found[0].fid)
+        if not same_neighbours(rec, refs, links):
+            return ('the edit moved a door or drop-down link between NAVM %08X '
+                    'and its siblings' % rec.fid)
+        placed.update((fid, (rec.fid, ti)) for fid, ti in door_local.items())
+        subs = rec.prefix + pack_subrecord('NVNM', blob) + rec.suffix
+        edits.append((rec.offset, rec.end, pack_navm_record(rec.fid, subs)))
+    return edits, placed
+
+
+def xndp_at(raw, rec):
+    """Offset of an uncompressed record's XNDP payload in `raw`, or None."""
+    if rec.flags & FLAG_COMPRESSED:
+        return None
+    pos = rec.offset + REC_HDR
+    while pos + SUB_HDR <= rec.end:
+        tag, size = struct.unpack_from('<4sH', raw, pos)
+        if tag == b'XNDP':
+            return pos + SUB_HDR
+        pos += SUB_HDR + size
+    return None
+
+
+def xndp_edits(raw, placed):
+    """`(offset, end, bytes)` re-aiming each door REFR's XNDP at `placed[door]`.
+
+    XNDP names the triangle a door stands on, so renumbering the mesh stales it.
+    See: docs/commentary/tes5_import_navmesh.md#patching-a-navmesh-into-a-built-esm
+    """
+    out = []
+    for rec, _stack in walk(raw, b'REFR', bodies=()):
+        at = xndp_at(raw, rec) if rec.form_id in placed else None
+        if at is not None:
+            out.append((at, at + 6, struct.pack('<Ih', *placed[rec.form_id])))
     return out
 
 
@@ -289,20 +395,29 @@ def patch(plugin, cell_fid, cell_name, result, export=None,
     if not found:
         return {'error': '%s has no NAVM in %s -- the cell was not navmeshed '
                          'in this build' % (cell_name, os.path.basename(esm))}
-    if len(found) > 1:
-        return {'error': '%s was split into %d NAVM records; only python '
-                         'convert.py -f %s --import-only can rebuild a split '
-                         'cell' % (cell_name, len(found), plugin)}
-    target = found[0]
     verts = [tuple(float(c) for c in p) for p in result['verts']]
     tris = [tuple(int(i) for i in t[:3]) for t in result['tris']]
     ledges = [(int(a), int(b), 0.0) for (a, b) in result.get('links') or ()]
-    neighbours = (exterior_navms(raw, target.wrld) if target.grid else {})
-    edits = edits_for(target, verts, tris, ledges, neighbours)
+    got = cell_edits(raw, found, verts, tris, ledges)
+    if isinstance(got, str):
+        return {'error': '%s: %s -- only python convert.py -f %s --import-only '
+                         'can re-split it' % (cell_name, got, plugin)}
+    edits, placed = got
+    doors = xndp_edits(raw, placed)
     with open(esm, 'wb') as fh:
-        fh.write(splice(raw, edits))
-    return {'esm': esm, 'navm': '%08X' % target.fid, 'tris': len(tris),
-            'verts': len(verts), 'restitched': len(edits) - 1}
+        fh.write(splice(raw, edits + doors))
+    return {'esm': esm, 'navm': ', '.join('%08X' % n.fid for n in found),
+            'tris': len(tris), 'verts': len(verts),
+            'restitched': len(edits) - len(found), 'doors': len(doors)}
+
+
+def cell_edits(raw, found, verts, tris, ledges):
+    """`(edits, {door: (NAVM, triangle)})` for one cell's NAVM records, or an error string."""
+    if len(found) > 1:
+        return split_edits(found, verts, tris, ledges)
+    target = found[0]
+    neighbours = exterior_navms(raw, target.wrld) if target.grid else {}
+    return edits_for(target, verts, tris, ledges, neighbours)
 
 
 def main():

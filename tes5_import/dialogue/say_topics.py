@@ -23,11 +23,14 @@ _PLAYER_FORMID = 0x14
 #: The script tokens that name the player as a call's target.
 PLAYER_TOKENS = ('player', 'playerref')
 
-#: Most actors one force-greet topic can greet at once (one alias each).
-_MAX_FORCE_GREET_SLOTS = 8
+#: Most actors one force-greet topic or flee destination serves at once (one alias each).
+_MAX_POOL_SLOTS = 8
 
-#: Say-driven topics: raw24 DIAL fid -> ('ref', fid) or ('drop', None) for RunOn=Target.
+#: Say-driven topics: raw24 DIAL fid -> ('ref', fid), ('drop', None) or ('target', None) for RunOn=Target.
 SAY_TOPIC_DISPOSITIONS: dict = {}
+
+#: Disposition of a script-spoken topic the engine also fires: only identity RunOn=Target tests drop.
+ENGINE_TARGET = ('target', None)
 
 #: build_force_greet_slots' answer for the plugin being imported.
 FORCE_GREET_SLOTS: dict = {}
@@ -37,24 +40,31 @@ _SAY_RE = re.compile(r'\bsay[\s,]+(\w+)', re.IGNORECASE)
 _STARTCONV_RE = re.compile(r'\bstartconversation[\s,]+(\w+)(?:[\s,]+(\w+))?',
                            re.IGNORECASE)
 
+#: A statement calling ForceFlee/Flee, with up to two arguments (cell, reference).
+_FLEE_RE = re.compile(r'^\s*(?:"?\w+"?\s*\.\s*)?(?:forceflee|flee)\b'
+                      r'[\s,]*("?\w+"?)?(?:[\s,]+("?\w+"?))?\s*$', re.IGNORECASE)
 
-def build_say_topic_dispositions(by_type: dict) -> dict:
-    """raw24 DIAL fid -> ('ref', fid) or ('drop', None) per script-driven topic.
+
+def build_say_topic_dispositions(by_type: dict,
+                                 engine_fired: frozenset = frozenset()) -> dict:
+    """raw24 DIAL fid -> ('ref', fid), ('drop', None) or ENGINE_TARGET per script-driven topic.
 
     A topic whose call sites name ONE target has its RunOn=Target conditions
     retargeted onto that reference; mixed or unresolvable targets drop them,
-    as does a Morrowind `Say` topic, which has no target at all.
-    See: docs/commentary/tes5_import_dialogue.md#script-driven-type-1-topics
+    as does a Morrowind `Say` topic, which has no target at all.  A dropping
+    topic in `engine_fired` (raw24 fids of engine barks) drops only identity
+    tests: the engine supplies its real target for the rest.
+    See: docs/commentary/tes5_import_dialogue.md#engine-fired-say-topics
     """
     votes = _scan_say_votes(collect_script_texts(by_type),
                             *_index_say_targets(by_type))
     out = dict.fromkeys(say_topic_fids(by_type), ('drop', None))
     for dfid, tgts in votes.items():
         real = {t for t in tgts if t is not None}
-        if len(real) == 1:
-            out[dfid] = ('ref', next(iter(real)))
-        else:
-            out[dfid] = ('drop', None)
+        out[dfid] = ('ref', next(iter(real))) if len(real) == 1 else ('drop', None)
+    for dfid in engine_fired & out.keys():
+        if out[dfid][0] == 'drop':
+            out[dfid] = ENGINE_TARGET
     return out
 
 
@@ -115,38 +125,60 @@ def _scan_say_votes(texts: list, dial_by_edid: dict,
         return ref_by_edid.get(t)
 
     votes = defaultdict(set)
-    for line in _script_lines(texts):
+    for line in script_lines(texts):
         low = line.lower()
         if 'say' in low or 'startconversation' in low:
             _scan_say_line(line, votes, dial_by_edid, target_fid)
     return votes
 
 
-def _script_lines(texts: list):
+def script_lines(texts: list):
     """Every script line of `texts` with its `;` comment stripped."""
     for text in texts:
         for raw in (text or '').replace('\\r\\n', '\n').splitlines():
             yield raw.split(';', 1)[0]
 
 
+def _alias_pools(counts: dict) -> dict:
+    """{key: (first alias id, slot count)}: keys sorted, ids contiguous, at most _MAX_POOL_SLOTS each."""
+    slots, first = {}, 0
+    for key in sorted(counts):
+        n = min(counts[key], _MAX_POOL_SLOTS)
+        slots[key] = (first, n)
+        first += n
+    return slots
+
+
 def build_force_greet_slots(by_type: dict) -> dict:
     """Force-greet pool per `StartConversation Player [<topic>]` topic.
 
     Returns {lowercased topic token, '' when none: (first alias id, slot
-    count)}, keys in sorted order and ids contiguous, so the importer's alias
-    quest and every converted call site agree from the same export.
+    count)}, so the importer's alias quest and every converted call site
+    agree from the same export.
     """
     counts = defaultdict(int)
-    for line in _script_lines(collect_script_texts(by_type)):
+    for line in script_lines(collect_script_texts(by_type)):
         for m in _STARTCONV_RE.finditer(line):
             if m.group(1).lower() in PLAYER_TOKENS:
                 counts[(m.group(2) or '').lower()] += 1
-    slots, first = {}, 0
-    for key in sorted(counts):
-        n = min(counts[key], _MAX_FORCE_GREET_SLOTS)
-        slots[key] = (first, n)
-        first += n
-    return slots
+    return _alias_pools(counts)
+
+
+def flee_key(args: list) -> str:
+    """`cell|ref`, lowercased and unquoted, from a ForceFlee call's argument sources."""
+    toks = [(a or '').strip(' \t,"').lower() for a in list(args)[:2]]
+    toks += [''] * (2 - len(toks))
+    return '|'.join(toks)
+
+
+def build_force_flee_slots(by_type: dict) -> dict:
+    """ForceFlee pool per destination: {flee_key: (first alias id, slot count)}."""
+    counts = defaultdict(int)
+    for line in script_lines(collect_script_texts(by_type)):
+        m = _FLEE_RE.match(line)
+        if m:
+            counts[flee_key(m.groups())] += 1
+    return _alias_pools(counts)
 
 
 def _scan_say_line(line: str, votes: dict, dial_by_edid: dict,

@@ -98,6 +98,9 @@
       <label class="chk meshOnly"
              title="Rebuild honoring navmesh_pins/ — uncheck for the RAW generator">
         <input type="checkbox" id="cPin" checked>pinned edits</label>
+      <label class="chk meshOnly"
+             title="Build with the experimental lattice generator instead of the corridor one (the pipeline default)">
+        <input type="checkbox" id="cLat">lattice generator</label>
       <label class="chk corpusOnly"><input type="checkbox" id="cNav" checked>authored</label>
       <label class="chk corpusOnly"><input type="checkbox" id="cGen">ours</label>
     </div>
@@ -115,7 +118,7 @@
             title="Write this mesh into output/&lt;plugin&gt; so it loads in-game"
             disabled>To ESM</button>
     <button id="pin" class="meshOnly"
-            title="Commit the edited triangles to navmesh_pins/ so the generator never cuts them"
+            title="Freeze the edited triangles into navmesh_pins/: kept exactly, the generator attaches around them"
             disabled>Pin edits</button>
     <button id="undo" disabled>Undo</button>
     <button id="reset">Reload</button>
@@ -161,6 +164,7 @@
     <div><i style="background:#3ba0ff"></i>pathgrid / <i
         style="background:#b46cff"></i>in mesh mode</div>
     <div><i style="background:#7ee0a0"></i>edited / added</div>
+    <div><i style="background:#3fc8e0"></i>frozen (pinned) — <kbd>u</kbd> unpins</div>
     <div><i style="background:#e0a33c"></i>node off mesh</div>
     <div><i style="background:#cf4b45"></i>edge crosses void</div>
   </div>
@@ -194,6 +198,8 @@ scene.add(sun);
    by hand rather than pulling OrbitControls, because dragging a NODE and
    orbiting share the same pointer and the interaction has to arbitrate. */
 const orbit = { target: new THREE.Vector3(), dist: 3000, yaw: -0.9, pitch: 0.95 };
+/* Camera speeds in world units: per wheel deltaY unit, and per dragged pixel. */
+const ZOOM_UNITS = 2, PAN_UNITS = 4, MIN_DIST = 50;
 
 function applyCamera() {
   const cp = Math.cos(orbit.pitch), sp = Math.sin(orbit.pitch);
@@ -226,7 +232,9 @@ function triLayer(flat, color, opacity) {
 
 /* draw.py's shape contract, worst first: red / orange / yellow mean a MESH
    DEFECT and nothing else, so these hues must not appear on any other layer. */
-const TRI_CLASS = [0xdc2828, 0xe18728, 0xd7d72d, 0x32a064, 0xff8adf];
+const TRI_CLASS = [0xdc2828, 0xe18728, 0xd7d72d, 0x32a064, 0xff8adf, 0x3fc8e0];
+//: TRI_CLASS slot drawing a triangle that belongs to a frozen (pinned) patch.
+const FROZEN_CLASS = 5;
 
 function classedLayer(flat, cls, opacity) {
   const mesh = triLayer(flat, 0xffffff, opacity);
@@ -666,8 +674,8 @@ el.addEventListener('pointermove', ev => {
     applyCamera(); return;
   }
   if (panning && lastPtr) {
-    const dx = (ev.clientX - lastPtr[0]) * orbit.dist * 0.0013;
-    const dy = (ev.clientY - lastPtr[1]) * orbit.dist * 0.0013;
+    const dx = (ev.clientX - lastPtr[0]) * PAN_UNITS;
+    const dy = (ev.clientY - lastPtr[1]) * PAN_UNITS;
     const right = new THREE.Vector3().crossVectors(
       camera.getWorldDirection(new THREE.Vector3()), camera.up).normalize();
     const up = new THREE.Vector3().crossVectors(right,
@@ -716,8 +724,15 @@ el.addEventListener('contextmenu', e => e.preventDefault());
 
 el.addEventListener('wheel', ev => {
   ev.preventDefault();
-  orbit.dist = Math.max(80, Math.min(60000,
-    orbit.dist * Math.exp(ev.deltaY * 0.0012)));
+  /* Fixed speed: each wheel step moves the camera the same world distance.
+     Past the orbit target, the target is carried forward so zoom never stalls. */
+  const px = ev.deltaMode === 1 ? 33 : ev.deltaMode === 2 ? 800 : 1;
+  const d = orbit.dist + ev.deltaY * px * ZOOM_UNITS;
+  if (d < MIN_DIST) {
+    orbit.target.addScaledVector(camera.getWorldDirection(new THREE.Vector3()),
+                                 MIN_DIST - d);
+  }
+  orbit.dist = Math.max(MIN_DIST, Math.min(60000, d));
   applyCamera();
 }, { passive: false });
 
@@ -831,7 +846,7 @@ async function loadMesh(plugin, cell, keepCamera) {
   try {
     d = await (await fetch('/mesh?plugin=' + encodeURIComponent(plugin) +
                            '&cell=' + encodeURIComponent(cell) +
-                           '&pinned=' + ($('cPin').checked ? '1' : '0') +
+                           genQ() +
                            '&job=' + encodeURIComponent(job))).json();
   } finally { stopPoll(); }
   if (d.error) { showError(d.error); return; }
@@ -877,7 +892,7 @@ async function loadSeams(plugin, cell) {
   let d;
   try {
     d = await (await fetch('/seams?plugin=' + encodeURIComponent(plugin) +
-                           '&cell=' + encodeURIComponent(cell) +
+                           '&cell=' + encodeURIComponent(cell) + genQ() +
                            '&job=' + encodeURIComponent(job))).json();
   } catch (e) { return; }
   if (!M || M.cell !== cell || d.error) { status(); return; }
@@ -968,16 +983,33 @@ function frameMesh() {
   applyCamera();
 }
 
+/* Which mesh the session's ops index: the live generator, or the saved
+   correction's result -- the server replays them onto the same one.
+   See: docs/commentary/tes5_import_navmesh.md#editing-a-saved-result */
+function meshSource() { return showSaved() ? 'saved' : 'live'; }
+
+/* Re-reads the cell and goes back to its (now rewritten) saved result. */
+async function reloadSaved() {
+  await loadMesh(M.plugin, M.cell, true);
+  if (!M || !M.saved) return;
+  $('meshSrc').value = 'saved';
+  meshReset(); meshRebuild(); status();
+}
+
 async function meshSave(mode) {
   $('busy').style.display = 'grid';
   $('busy').textContent = 'saving mesh …';
   try {
     const r = await fetch('/mesh_save?plugin=' + encodeURIComponent(M.plugin) +
-                          '&cell=' + encodeURIComponent(M.cell), {
+                          '&cell=' + encodeURIComponent(M.cell) + genQ(), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ops: mOps, mode: mode })
+      body: JSON.stringify({ ops: mOps, mode: mode, source: meshSource() })
     });
     const d = await r.json();
+    /* Overwriting the correction on screen folds this session's ops INTO it,
+       so they must not stay pending over the new result or they apply twice. */
+    if (!d.error && showSaved() && mode !== 'new') await reloadSaved();
+    $('busy').style.display = 'grid';
     $('busy').textContent = d.error ||
       ('saved ' + d.ops + ' ops to ' + d.cell);
     mHistory = [];
@@ -1000,10 +1032,10 @@ async function meshToEsm() {
   let d;
   try {
     d = await (await fetch('/esm_patch?plugin=' + encodeURIComponent(M.plugin) +
-                           '&cell=' + encodeURIComponent(M.cell) +
+                           '&cell=' + encodeURIComponent(M.cell) + genQ() +
                            '&job=' + encodeURIComponent(job), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ops: mOps })
+      body: JSON.stringify({ ops: mOps, source: meshSource() })
     })).json();
   } catch (err) { stopPoll(); showError('patch FAILED: ' + err); return;
   } finally { stopPoll(); }
@@ -1024,17 +1056,47 @@ async function meshPin() {
   let d;
   try {
     d = await (await fetch('/pin_save?plugin=' + encodeURIComponent(M.plugin) +
-                           '&cell=' + encodeURIComponent(M.cell) +
+                           '&cell=' + encodeURIComponent(M.cell) + genQ() +
                            '&job=' + encodeURIComponent(job), {
       method: 'POST', headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ ops: mOps })
+      body: JSON.stringify({ ops: mOps, source: meshSource() })
     })).json();
   } catch (err) { stopPoll(); showError('pin FAILED: ' + err); return;
   } finally { stopPoll(); }
   if (d.error) { showError(d.error); return; }
-  $('busy').textContent = 'pinned ' + d.tris + ' tris' +
-    (d.welds ? ' + ' + d.welds + ' weld' + (d.welds > 1 ? 's' : '') : '') +
-    ' as "' + d.key + '" in ' + d.pinned;
+  /* With pins on, the edits are now part of what the generator produces, so
+     the re-bake replaces this session's ops rather than stacking them twice. */
+  if ($('cPin').checked) await loadMesh(M.plugin, M.cell, true);
+  $('busy').style.display = 'grid';
+  $('busy').textContent = 'froze ' + d.tris + ' tris over ' + d.voids +
+    ' replaced as "' + d.key + '" in ' + d.pinned;
+  setTimeout(() => { $('busy').style.display = 'none'; }, 3000);
+}
+
+/* Unpins the frozen patch under the selected triangle or vertex, or -- with
+   `all` -- every patch in the cell.  A re-bake follows, so unsaved edits
+   would index a mesh that no longer exists: they must be pinned or undone first.
+   See: docs/commentary/tes5_import_navmesh.md#frozen-navmesh-patches */
+async function meshUnpin(all) {
+  if (mOps.length) { showError('Pin or undo this session\'s edits before unpinning.'); return; }
+  const point = all ? null : mSelTri >= 0 ? centroid(mSelTri)
+                           : mSelVert >= 0 ? mVerts[mSelVert] : undefined;
+  if (point === undefined) { showError('Select a triangle or vertex of the pinned area first.'); return; }
+  if (all && !confirm('Remove EVERY frozen patch in ' + M.cell + '?')) return;
+  let d;
+  try {
+    d = await (await fetch('/pin_remove?plugin=' + encodeURIComponent(M.plugin) +
+                           '&cell=' + encodeURIComponent(M.cell), {
+      method: 'POST', headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ point })
+    })).json();
+  } catch (err) { showError('unpin FAILED: ' + err); return; }
+  if (d.error) { showError(d.error); return; }
+  if (!d.frozen && !d.voids) { showError('No pinned area there.'); return; }
+  await loadMesh(M.plugin, M.cell, true);
+  $('busy').style.display = 'grid';
+  $('busy').textContent = 'unpinned ' + d.frozen + ' frozen + ' + d.voids +
+    ' replaced tris from "' + d.key + '"';
   setTimeout(() => { $('busy').style.display = 'none'; }, 3000);
 }
 
@@ -1094,9 +1156,10 @@ function meshDiscard() {
 }
 
 /* Rebuilds the editable copy from whichever mesh the dropdown names, then
-   replays THIS SESSION'S edits over it. A saved correction is never among
-   them: it is its own dropdown entry, read-only, because ops cannot extend
-   a stored result. */
+   replays THIS SESSION'S edits over it.  A saved correction is never among
+   them: it is its own dropdown entry, and edits made over it index its
+   result, which the server rebases onto the correction's own ops.
+   See: docs/commentary/tes5_import_navmesh.md#editing-a-saved-result */
 function meshReset() {
   const saved = showSaved() ? M.saved : null;
   mVerts = (saved ? saved.verts : M.verts).map(p => p.slice());
@@ -1107,7 +1170,7 @@ function meshReset() {
   mDead = new Set();
   mSelVert = mSelTri = mSnapFrom = mLinkFrom = -1;
   mRing = []; mBuild = false; mNewVerts = new Set();
-  if (!saved) for (const op of mOps) meshApply(op);
+  for (const op of mOps) meshApply(op);
 }
 
 function showSaved() {
@@ -1136,7 +1199,6 @@ function meshApply(op) {
 }
 
 function meshPush(op) {
-  if (showSaved()) return;
   mHistory.push(mOps.length);
   mOps.push(op);
   meshApply(op);
@@ -1163,10 +1225,11 @@ function meshRebuild() {
 
   const live = mTris.map((t, i) => [t, i]).filter(([, i]) => !mDead.has(i));
   const fill = [], cls = [], seg = [];
+  const frozen = new Set(showSaved() ? [] : (M.frozen_tris || []));
   for (const [t, i] of live) {
     for (const k of [0, 1, 2]) fill.push(...mVerts[t[k]]);
-    const c = mDoors.has(i) ? 4 : (M.tri_class[i] === undefined ? 3
-                                                : M.tri_class[i]);
+    const c = mDoors.has(i) ? 4 : frozen.has(i) ? FROZEN_CLASS
+            : (M.tri_class[i] === undefined ? 3 : M.tri_class[i]);
     cls.push(c);
     for (const [a, b] of [[0, 1], [1, 2], [2, 0]]) {
       seg.push(...mVerts[t[a]], ...mVerts[t[b]]);
@@ -1282,7 +1345,7 @@ function buildClick(ev) {
   if (mRing.length === 3) {
     /* The new vertices must reach `replay` too, so each is an explicit op. */
     for (const k of mRing) {
-      if (k >= M.verts.length && !mNewVerts.has(k)) {
+      if (k >= (showSaved() ? M.saved.verts : M.verts).length && !mNewVerts.has(k)) {
         mNewVerts.add(k);
         mOps.push({ op: 'add_vert', to: mVerts[k].slice() });
       }
@@ -1363,11 +1426,13 @@ function pinTxt() {
   /* A snapshot is frozen geometry the pins never touched, so claiming they
      are APPLIED or DISABLED there would describe a mesh nobody is looking at. */
   if (showSaved()) return '';
-  const n = (M.pin_tris || 0) + (M.pin_welds || 0);
+  const n = (M.pin_cuts || 0) + (M.pin_frozen || 0) + (M.pin_voids || 0);
   if (!n) return ' · <span class="warn">no pins committed</span>';
-  const what = `${M.pin_tris} pinned tris` +
-               (M.pin_welds ? `, ${M.pin_welds} weld` +
-                              (M.pin_welds > 1 ? 's' : '') : '');
+  const parts = [];
+  if (M.pin_frozen || M.pin_voids)
+    parts.push(`${M.pin_frozen} frozen tris over ${M.pin_voids} replaced`);
+  if (M.pin_cuts) parts.push(`${M.pin_cuts} cut` + (M.pin_cuts > 1 ? 's' : ''));
+  const what = parts.join(', ');
   return M.pinned ? ` · ${what} APPLIED`
                   : ` · <span class="warn">${what} DISABLED</span>`;
 }
@@ -1390,14 +1455,17 @@ function meshStatus() {
     (mOps.length ? `<b>${mOps.length} ops</b>` : 'no edits') +
     (M.stale ? ' · <span class="warn">saved correction is STALE</span>' : '') +
     pinTxt() +
+    (viewing ? '' : M.lattice ? ' · <b>LATTICE generator</b>' : ' · <b>CORRIDOR generator</b>') +
     (viewing ? ' · <span class="warn">viewing SAVED result</span>' : '');
-  $('save').disabled = mOps.length === 0 || viewing;
-  $('saveNew').disabled = mOps.length === 0 || viewing;
-  $('undo').disabled = mHistory.length === 0 || viewing;
+  /* A saved result needs no new edits to save, ship or pin: it IS an edit,
+     and re-saving it rebakes it into the current file format. */
+  $('save').disabled = mOps.length === 0 && !viewing;
+  $('saveNew').disabled = mOps.length === 0 && !viewing;
+  $('undo').disabled = mHistory.length === 0;
   /* Unlike the corpus saves this needs no edits: shipping a freshly generated
      mesh is how you check the generator itself in-game. */
-  $('toEsm').disabled = viewing || live === 0;
-  $('pin').disabled = viewing || live === 0;
+  $('toEsm').disabled = live === 0;
+  $('pin').disabled = live === 0;
   $('mode').textContent = 'Mesh · ' + M.plugin + ' · ' + M.cell +
     (M.nodes.length === 0 ? ' · NO PATHGRID (nothing to generate from)' : '') +
     (mBuild ? ' · BUILD ' + mRing.length + '/3' : '') +
@@ -1411,7 +1479,8 @@ function meshStatus() {
     : 'drag vertex · <kbd>alt</kbd>+drag = up/down · ' +
       '<kbd>shift</kbd>+click two verts = weld · <kbd>g</kbd> snap to floor · ' +
       '<kbd>del</kbd> delete tri · <kbd>d</kbd> door · ' +
-      '<kbd>b</kbd> build a triangle · <kbd>l</kbd> link two tris (upper first)';
+      '<kbd>b</kbd> build a triangle · <kbd>l</kbd> link two tris (upper first) · ' +
+      '<kbd>u</kbd> unpin area at selection · <kbd>shift</kbd>+<kbd>u</kbd> unpin whole cell';
 }
 
 /* The collision toggle and the authored underlay are CORPUS concepts: an
@@ -1545,11 +1614,37 @@ function showError(msg) {
   $('busy').appendChild(box);
 }
 
+/* A plugin with no collision cache would open with no walls, so picking it
+   builds the cache (and its masters') from the converted meshes first.  The
+   scan waits for any running build, since it takes the same machine lock. */
+async function ensureCollision(p) {
+  if (p.collision) return true;
+  const job = newJob();
+  showProgress('Building collision cache for ' + p.name);
+  pollProgress(job);
+  let d;
+  try {
+    d = await (await fetch('/collision?plugin=' + encodeURIComponent(p.name) +
+                           '&job=' + encodeURIComponent(job),
+                           { method: 'POST' })).json();
+  } finally { stopPoll(); }
+  if (d.error) { showError(d.error); return false; }
+  p.collision = true;
+  $('busy').style.display = 'none';
+  return true;
+}
+
 /* An un-indexed export costs ~78s to parse once.  Announce it and build
    BEFORE the bake, or the page looks hung on its first open. */
 async function ensureIndexed(plugin) {
   const p = PLUGINS.find(x => x.name === plugin);
-  if (!p || p.indexed) return true;
+  if (!p) return true;
+  if (!await ensureCollision(p)) return false;
+  if (p.indexed) {
+    $('plugin').innerHTML = PLUGINS.map(pluginOption).join('');
+    $('plugin').value = plugin;
+    return true;
+  }
   const job = newJob();
   showProgress('Indexing ' + plugin);
   pollProgress(job);
@@ -1629,7 +1724,11 @@ $('toEsm').onclick = meshToEsm;
 $('pin').onclick = meshPin;
 /* Switching source re-derives the mesh from scratch; ops are kept so that
    returning to the current mesh restores the edit in progress. */
-$('meshSrc').onchange = () => { meshReset(); meshRebuild(); status(); };
+/* Edits index the mesh they were made on, so switching meshes drops them. */
+$('meshSrc').onchange = () => {
+  mOps = []; mHistory = [];
+  meshReset(); meshRebuild(); status();
+};
 $('undo').onclick = undo;
 /* `G` is null in mesh mode, so Reload has to re-bake the mesh cell instead.
    It is the SAME cell, so the camera stays where you left it. */
@@ -1646,6 +1745,15 @@ $('cPin').onchange = () => {
   $('meshSrc').value = 'live';
   if (mode === 'tri' && M) loadMesh(M.plugin, M.cell, true);
 };
+/* The generator A/B re-bakes the same spot, like the pins toggle; every
+   later save, pin or To ESM acts on the generator on screen. */
+$('cLat').onchange = $('cPin').onchange;
+/* Which generator the page shows: every save, pin or patch must rebuild that
+   same mesh, because the edits it sends index it. */
+function genQ() {
+  return '&lattice=' + ($('cLat').checked ? '1' : '0') +
+         '&pinned=' + ($('cPin').checked ? '1' : '0');
+}
 $('cell').onchange = e => { if (e.target.value) loadCell(e.target.value, false); };
 for (const id of ['cWall', 'cFloor', 'cNav', 'cGen', 'cPath', 'cTri', 'cSeam',
                   'cNbr'])
@@ -1660,6 +1768,10 @@ function meshKey(e) {
   }
   if (e.key === 'd' && mSelTri >= 0) {
     meshPush({ op: 'set_door', tri: mSelTri, on: !mDoors.has(mSelTri) });
+    return true;
+  }
+  if (e.key === 'u' || e.key === 'U') {
+    meshUnpin(e.key === 'U');
     return true;
   }
   if (e.key === 'b') {
@@ -1765,11 +1877,16 @@ function pluginOption(p) {
 
 (async function init() {
   resize();
-  const [names, plugs] = await Promise.all([
+  const [names, plugs, feats] = await Promise.all([
     (await fetch('/cells')).json(),
-    (await fetch('/plugins')).json()
+    (await fetch('/plugins')).json(),
+    (await fetch('/features')).json()
   ]);
   PLUGINS = plugs;
+  /* The transplant corpus needs the Bruma reference data, which only a
+     developer checkout has: the server offers it only with --transplant. */
+  $('corpusBtn').parentElement.style.display = feats.transplant ? '' : 'none';
+  $('pin').title += ' — saved to ' + feats.pins_dir;
   $('cell').innerHTML = '<option value="">corpus cell…</option>' +
     names.map(n => `<option>${n}</option>`).join('');
   $('plugin').innerHTML = plugs.map(pluginOption).join('');

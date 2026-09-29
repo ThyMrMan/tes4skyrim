@@ -466,9 +466,10 @@ def _open_fan(verts, tris, state, i, c):
         k = t.index(i)
         p, q = t[(k + 1) % 3], t[(k + 2) % 3]
         okey = (p, q) if p < q else (q, p)
-        nb = [tj for tj, tt in enumerate(tris)
-              if tj != ti and tj not in replaced and p in tt and q in tt]
-        if counts.get(okey, 0) > 1 and not nb:
+        owners = [tj for tj, tt in enumerate(tris)
+                  if tj != ti and p in tt and q in tt]
+        nb = [tj for tj in owners if tj not in replaced]
+        if len(nb) < len(owners):
             continue
         if (abs(verts[p][2] - verts[q][2])
                 > max(params.MAX_CLIMB,
@@ -482,7 +483,7 @@ def _open_fan(verts, tris, state, i, c):
                       0.5 * (verts[p][1] + verts[q][1]),
                       0.5 * (verts[p][2] + verts[q][2])])
         replaced[ti] = [(i, p, mid), (i, mid, q)]
-        for tj in nb[:1]:
+        for tj in nb:
             tt = tris[tj]
             opp = [x for x in tt if x != p and x != q]
             if len(opp) == 1:

@@ -103,6 +103,8 @@ class ScriptContext:
     uses_msg_buttons: bool = False
     #: A `begin MenuMode 1001` body became TES4_MessageBoxClosed, which TES4_ShowMsg calls.
     msgbox_hook: bool = False
+    #: A `Message` converted to TES4_Notify, so the helper is due.
+    uses_notify: bool = False
 
     #: Chargen-menu call sites converted here, and whether the re-entrancy
     #: latch declaration is due.

@@ -232,13 +232,17 @@ def _sort_refr_parts(refr_recs, base_model_by_fid, get_collision, skip_bases):
 
 
 def _resplit_placed(walk_parts, block_parts, door_walk_parts):
-    """Reclassify placed REFR faces by their PLACED slope; return walk_parts.
+    """Reclassify placed REFR faces, both classes, by their PLACED slope; return walk_parts.
 
-    Steep door faces are discarded rather than demoted to blocking.
+    block_parts is rewritten in place. Steep door faces are discarded rather
+    than demoted to blocking.
     See: docs/commentary/tes5_import_navmesh.md#placements-are-slope-resplit
     """
-    if walk_parts:
-        rw, rb = _split_by_slope(np.concatenate(walk_parts, axis=0))
+    faces = walk_parts + block_parts
+    walk_parts = []
+    block_parts.clear()
+    if faces:
+        rw, rb = _split_by_slope(np.concatenate(faces, axis=0))
         walk_parts = [rw] if rw is not None and len(rw) else []
         if rb is not None and len(rb):
             block_parts.append(rb)

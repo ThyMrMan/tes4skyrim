@@ -54,9 +54,6 @@ _SKY_MESH_TYPES = {
     'clouds_oblivion.nif':  SKY_CLOUDS,
     'atmosphere.nif':       SKY_BASE,
     'sky.nif':              SKY_BASE,
-    'sunbeam01.nif':        SKY_SUNGLARE,
-    'sunbeam02.nif':        SKY_SUNGLARE,
-    'sunbeam03.nif':        SKY_SUNGLARE,
 }
 
 

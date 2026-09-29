@@ -49,8 +49,11 @@ _HEAVY_ARMOR = 0x80
 _CLOTHING_SLOTS = {0: 0x8, 1: 0x20, 2: 0x4, 3: 0, 4: 0xC, 5: 0x10, 6: 0x10,
                    7: 0x8, 8: 0x40, 9: 0x100}
 
+#: Morrowind's Enchant, which Oblivion lacks: a skill index whose actor value (+12) no TES4 value uses.
+MW_ENCHANT_SKILL = 100
+
 #: Morrowind skill index -> TES4 skill index; shared with the actor exporters.
-MW_SKILL_TO_TES4 = {0: 3, 1: 0, 2: 6, 3: 6, 4: 4, 5: 2, 6: 4, 7: 4, 8: 1, 9: 12,
+MW_SKILL_TO_TES4 = {0: 3, 1: 0, 2: 6, 3: 6, 4: 4, 5: 2, 6: 4, 7: 4, 8: 1, 9: MW_ENCHANT_SKILL,
                     10: 10, 11: 8, 12: 11, 13: 9, 14: 12, 15: 13, 16: 7, 17: 15,
                     18: 18, 19: 19, 20: 14, 21: 15, 22: 2, 23: 16, 24: 17,
                     25: 20, 26: 5}

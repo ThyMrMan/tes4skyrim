@@ -355,17 +355,34 @@ def _fan_out_shared_entries(seq, extras):
 
 
 def _apply_rotation(m, quat):
-    """Write quaternion (w,x,y,z) into an existing pyffi Matrix33."""
+    """Write quaternion (w,x,y,z) into a pyffi Matrix33 (row-vector layout)."""
     w, x, y, z = quat
     m.m_11 = 1 - 2 * (y * y + z * z)
-    m.m_12 = 2 * (x * y - z * w)
-    m.m_13 = 2 * (x * z + y * w)
-    m.m_21 = 2 * (x * y + z * w)
+    m.m_21 = 2 * (x * y - z * w)
+    m.m_31 = 2 * (x * z + y * w)
+    m.m_12 = 2 * (x * y + z * w)
     m.m_22 = 1 - 2 * (x * x + z * z)
-    m.m_23 = 2 * (y * z - x * w)
-    m.m_31 = 2 * (x * z - y * w)
-    m.m_32 = 2 * (y * z + x * w)
+    m.m_32 = 2 * (y * z - x * w)
+    m.m_13 = 2 * (x * z - y * w)
+    m.m_23 = 2 * (y * z + x * w)
     m.m_33 = 1 - 2 * (x * x + y * y)
+
+
+def _bake_accum_root_pose(root, quat):
+    """Pose the root as the dropped accum entry did; its authored rotation moves to NonAccum.
+
+    The exporter stores the real pose as NonAccum's frame 0, so NonAccum's rest
+    must carry it too, or a sequence that never plays leaves the mesh unrotated.
+    See: docs/commentary/asset_convert_nif.md#accum-root-classification
+    """
+    na = _find_named_node(root, bytes(root.name) + b' NonAccum')
+    if na is None:
+        return
+    authored = root.rotation.get_copy()
+    _apply_rotation(root.rotation, quat)
+    delta = authored * root.rotation.get_transpose()
+    na.rotation = na.rotation * delta
+    na.translation = na.translation * delta
 
 
 def _dropped_accum_root_pose(root, mgr, resolve_name):
@@ -660,7 +677,7 @@ def process_controller_manager(node, palette):
         _fan_out_shared_entries(seq, ctx['shared_extras'])
 
     if pending_bake is not None:
-        _apply_rotation(node.rotation, pending_bake)
+        _bake_accum_root_pose(node, pending_bake)
 
 
 #: NiAVObject.flags bit 0. Only scene-graph objects have it.

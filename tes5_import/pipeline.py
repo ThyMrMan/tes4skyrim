@@ -46,12 +46,18 @@ from .record_types import magic_art
 from .record_types.crime import plan_crime
 from .record_types.spell_tomes import create_spell_tomes
 from .record_types.spell_tomes_morrowind import chain_tables
-from script_convert.constants import FORCE_GREET_QUEST
+from .record_types.world_falloutnv import is_fallout_export
+from .actors.combat_approach import create_combat_approach
+from .actors.combat_style import create_combat_styles
+from .actors.confidence import create_confidence_records
+from script_convert.constants import FORCE_FLEE_QUEST, FORCE_GREET_QUEST
+from .packages.force_flee import write_force_flee_quest
 from script_convert.cross_ref import hosted_script_type, index_record_details
 from .dialogue.converter import build_npc_to_vtyp_map
 from .dialogue.force_greets import dial_index, write_force_greet_quest
 from .dialogue.morrowind_sidecar import is_tes3_export
-from .dialogue.say_topics import FORCE_GREET_SLOTS, build_force_greet_slots
+from .dialogue.say_topics import (FORCE_GREET_SLOTS, build_force_flee_slots,
+                                   build_force_greet_slots)
 from .runtime_sidecars import begin_sidecar_run
 from .base.adopted_records import adopt_master_special_records
 from .base.cell_family import set_cell_families
@@ -286,6 +292,13 @@ def _prescan_special_records(by_type: dict, ctx, writer, export_dir: str, _step_
         create_ambient_gmst_overrides(writer, by_type)
     WELL_KNOWN_PROPERTIES.update(create_fall_damage_spell(
         writer, getattr(ctx, 'master_index', None)))
+    tes4_source = not is_tes3_export(export_dir) and not is_fallout_export(by_type)
+    WELL_KNOWN_PROPERTIES.update(create_confidence_records(
+        writer, by_type, getattr(ctx, 'master_export', None),
+        getattr(ctx, 'master_index', None), wanted=tes4_source))
+    create_combat_styles(writer, by_type, getattr(ctx, 'master_export', None),
+                         getattr(ctx, 'master_index', None), wanted=tes4_source)
+    WELL_KNOWN_PROPERTIES.update(create_combat_approach(writer, getattr(ctx, 'master_index', None)))
     set_whole_day_global(create_day_clock(writer, by_type, ctx))
     _step_done('vtyp/special records')
 
@@ -335,7 +348,8 @@ def _prescan_npc_voice_map(by_type: dict, ctx, writer, num_new_masters: int, _st
     return npc_to_vtyp
 
 
-def _prescan_unlock_plan(by_type: dict, writer, _step_done):
+def _prescan_unlock_plan(by_type: dict, writer, num_tes4_masters: int,
+                         _step_done):
     """Plan the AddTopic unlock gates; returns (plan, globals, ScriptConverter).
 
     Gated topics get one GLOB each plus `GetGlobalValue` conditions,
@@ -345,7 +359,7 @@ def _prescan_unlock_plan(by_type: dict, writer, _step_done):
     See: docs/commentary/tes5_import_pipeline.md#reserved-ids-and-preflight
     """
     from .dialogue.unlocks import build_unlock_plan, create_unlock_globals
-    unlock_plan = build_unlock_plan(by_type)
+    unlock_plan = build_unlock_plan(by_type, num_tes4_masters)
     unlock_globals = create_unlock_globals(writer, unlock_plan)
 
     from script_convert.converter import ScriptConverter as _SC
@@ -368,7 +382,7 @@ def _prescan_unlock_plan(by_type: dict, writer, _step_done):
 
 
 def _prescan_force_greets(by_type: dict, ctx, writer, _SC) -> None:
-    """Mint the StartConversation force-greet quest and share its alias pools.
+    """Mint the StartConversation force-greet and ForceFlee quests and share their alias pools.
 
     Before any script VMAD, so the converted call's Quest property binds.
     """
@@ -382,6 +396,14 @@ def _prescan_force_greets(by_type: dict, ctx, writer, _SC) -> None:
         WELL_KNOWN_PROPERTIES[FORCE_GREET_QUEST] = quest_fid
     print(f"  StartConversation force greets: {len(slots)} topics, "
           f"{sum(n for _f, n in slots.values())} alias slots")
+    flee_slots = build_force_flee_slots(by_type)
+    _SC.force_flee_slots = flee_slots
+    flee_fid = write_force_flee_quest(writer, flee_slots, by_type,
+                                      getattr(ctx, 'master_index', None))
+    if flee_fid:
+        WELL_KNOWN_PROPERTIES[FORCE_FLEE_QUEST] = flee_fid
+    print(f"  ForceFlee pools: {len(flee_slots)} destinations, "
+          f"{sum(n for _f, n in flee_slots.values())} alias slots")
 
 
 def _prescan_menu_records(by_type: dict, writer, _SC, _step_done):
@@ -699,13 +721,13 @@ def _prescan_vendor_trainer(by_type: dict, ctx, writer, export_dir: str,
     _step_done('vendor/trainer records')
 
 
-def _rescan_mesh_caches(export_dir, mesh_dir: str) -> bool:
+def rescan_mesh_caches(export_dir, mesh_dir: str, force: bool = False) -> bool:
     """Rebuild one export's bounds+collision caches if stale or behind the mesh stage.
 
     True when either cache was rewritten.  A stale cache (older entry schema)
-    is rescanned in full; a current one still takes the entries a later mesh
-    run left as fragments (a scoped `--mesh-subdirs` rebuild), or the script
-    stage keeps reading old physics flags.
+    or `force` rescans in full; a current one still takes the entries a later
+    mesh run left as fragments (a scoped `--mesh-subdirs` rebuild), or the
+    script stage keeps reading old physics flags.
 
     See: docs/commentary/tes5_import_pipeline.md#phase-0-stale-bounds-cache
     """
@@ -720,7 +742,7 @@ def _rescan_mesh_caches(export_dir, mesh_dir: str) -> bool:
     if not os.path.isdir(mesh_dir):
         return False
     seed_b, seed_c = merge_fragments(assets_dir)
-    current = (bounds_cache_is_current(cache_path)
+    current = (not force and bounds_cache_is_current(cache_path)
                and collision_cache_is_current(col_path))
     if current and not (seed_b or seed_c):
         return False
@@ -761,7 +783,7 @@ def _refresh_master_mesh_caches(export_dir: str) -> None:
     for name in names:
         mdir = master_export_dir(root, name)
         if os.path.isdir(mdir):
-            _rescan_mesh_caches(
+            rescan_mesh_caches(
                 mdir, os.path.join(str(plugin_paths(name).out), 'meshes'))
 
 
@@ -778,7 +800,7 @@ def _prescan_mesh_caches(export_dir: str, plugin_out_dir: str, _step_done):
         load_collision, door_axis_cache_is_current, scan_door_axes)
     axis_path = str(assets_for(export_dir) / 'door_panel_axis_cache.json')
     _refresh_master_mesh_caches(export_dir)
-    _rescan_mesh_caches(export_dir, os.path.join(plugin_out_dir, 'meshes'))
+    rescan_mesh_caches(export_dir, os.path.join(plugin_out_dir, 'meshes'))
     if not door_axis_cache_is_current(axis_path):
         print("  Door threshold cache missing or stale, measuring door "
               "panels...")
@@ -830,7 +852,7 @@ def _prescan_package_plan(by_type: dict, ctx, writer, fid_to_edid: dict, _step_d
     _script_vars = build_script_var_map(by_type, _master_export)
     set_assigned_var_names(
         build_assigned_var_names(by_type, _master_export))
-    _sv_owner = build_scriptvar_owner_map(by_type, fid_to_edid)
+    _sv_owner = build_scriptvar_owner_map(by_type, fid_to_edid, _master_export)
     pack_plan = PackagePlan()
     _script_assigned = build_script_assigned_packages(by_type, fid_to_edid,
                                                       _master_export)
@@ -1149,7 +1171,7 @@ def _run_prescans(st: ImportState, all_records: list, num_new_masters: int,
     st.npc_to_vtyp = _prescan_npc_voice_map(by_type, ctx, writer,
                                             num_new_masters, _step_done)
     st.unlock_plan, st.unlock_globals, _SC = _prescan_unlock_plan(
-        by_type, writer, _step_done)
+        by_type, writer, st.num_tes4_masters, _step_done)
     _prescan_force_greets(by_type, ctx, writer, _SC)
     create_objective_globals(writer, by_type, _SC)
     _prescan_menu_records(by_type, writer, _SC, _step_done)

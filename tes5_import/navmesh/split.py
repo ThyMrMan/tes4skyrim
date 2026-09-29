@@ -51,8 +51,8 @@ import struct
 
 from ..base.tes5_reader import REC_HDR, decompress, subrecords
 from ..base.writer import pack_subrecord, pack_string_subrecord
+from .lookup_grid import build_navmesh_grid
 from .from_pgrd import (
-    build_navmesh_grid,
     choose_divisor,
     pack_navm_record,
     PATHING_CELL_CRC,
@@ -63,45 +63,35 @@ from .from_pgrd import (
 _TRI_EDGE_LINK_BITS = (0x0001, 0x0002, 0x0004)
 
 
+def _array(blob, p, fmt):
+    """`(rows, next offset)` for the count-prefixed array of `fmt` rows at `p`."""
+    n = struct.unpack_from('<I', blob, p)[0]
+    size = struct.calcsize(fmt)
+    p += 4
+    return [struct.unpack_from(fmt, blob, p + i * size) for i in range(n)], p + n * size
+
+
 class Nvnm:
-    """Full decode of one of OUR interior NVNM blobs (see pack_nvnm)."""
+    """Full decode of one of OUR interior NVNM blobs (see pack_nvnm).
+
+    `tris` rows are (v0, v1, v2, e0, e1, e2, flags, cover), `links` rows
+    (type, navmesh fid, triangle), `doors` rows (triangle, door ref fid).  The
+    cover, bounds and bucket-grid tail is recomputed on re-pack, so not kept.
+    """
 
     def __init__(self, blob):
-        p = 8                                     # version + location CRC
-        self.wrld = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        self.cell = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        nv = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        self.verts = [struct.unpack_from('<fff', blob, p + i * 12)
-                      for i in range(nv)]
-        p += nv * 12
-        nt = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        # (v0, v1, v2, e0, e1, e2, flags, cover)
-        self.tris = [list(struct.unpack_from('<6h2H', blob, p + i * 16))
-                     for i in range(nt)]
-        p += nt * 16
-        nl = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        # (type, navmesh fid, triangle)
-        self.links = [struct.unpack_from('<IIh', blob, p + i * 10)
-                      for i in range(nl)]
-        p += nl * 10
-        nd = struct.unpack_from('<I', blob, p)[0]
-        p += 4
-        # (triangle, door ref fid)
-        self.doors = []
-        for i in range(nd):
-            ti, _crc, fid = struct.unpack_from('<hII', blob, p + i * 10)
-            self.doors.append((ti, fid))
-        # Cover triangles / bounding box / bucket grid tail: recomputed on
-        # re-pack, nothing to keep.
+        """Decode `blob` from past its version and location CRC."""
+        self.wrld, self.cell = struct.unpack_from('<II', blob, 8)
+        self.verts, p = _array(blob, 16, '<fff')
+        tris, p = _array(blob, p, '<6h2H')
+        self.tris = [list(t) for t in tris]
+        self.links, p = _array(blob, p, '<IIh')
+        doors, _end = _array(blob, p, '<hII')
+        self.doors = [(ti, fid) for (ti, _crc, fid) in doors]
 
 
-def _components(tris):
-    """Connected components over shared (non-link) edges; returns tri->comp."""
+def components(tris):
+    """`(tri -> component, count)` over shared edges; an edge-link slot joins nothing."""
     comp = [-1] * len(tris)
     n = 0
     for seed in range(len(tris)):
@@ -114,7 +104,7 @@ def _components(tris):
             _v0, _v1, _v2, e0, e1, e2, flags, _cover = tris[t]
             for slot, e in enumerate((e0, e1, e2)):
                 if flags & _TRI_EDGE_LINK_BITS[slot]:
-                    continue                     # edge-link slot, not a neighbour
+                    continue
                 if e != -1 and comp[e] == -1:
                     comp[e] = n
                     stack.append(e)
@@ -122,86 +112,96 @@ def _components(tris):
     return comp, n
 
 
-def _pack_component_nvnm(nv, comp_tris, tri_local, comp_fid_of_tri,
-                         root_fid):
-    """Serialise one component as an NVNM blob (mirrors pack_nvnm's layout)."""
-    vmap = {}
-    verts = []
-    out_tris = []
-    out_links = []
+def _component_edges(nv, t, tri_local, comp_fid_of_tri, root_fid, out_links):
+    """Triangle `t`'s three edge fields renumbered into its component.
+
+    A link naming a triangle of THIS cell mesh is re-aimed at the component
+    NAVM that now owns that triangle; a link into another mesh is untouched.
+    Every link is appended to `out_links` and its slot names its index there.
+    """
+    edges = list(t[3:6])
+    for slot in range(3):
+        if t[6] & _TRI_EDGE_LINK_BITS[slot]:
+            typ, nav, target = nv.links[edges[slot]]
+            if nav == root_fid:
+                nav, target = comp_fid_of_tri[target], tri_local[target]
+            edges[slot] = len(out_links)
+            out_links.append((typ, nav, target))
+        elif edges[slot] != -1:
+            edges[slot] = tri_local[edges[slot]]
+    return edges
+
+
+def _renumber(nv, comp_tris, tri_local, comp_fid_of_tri, root_fid):
+    """`(verts, tris, links)` of one component, with local vertex and triangle ids."""
+    vmap, verts, out_tris, out_links = {}, [], [], []
     for ti in comp_tris:
-        v0, v1, v2, e0, e1, e2, flags, cover = nv.tris[ti]
-        nvtx = []
-        for v in (v0, v1, v2):
+        t = nv.tris[ti]
+        for v in t[:3]:
             if v not in vmap:
                 vmap[v] = len(verts)
                 verts.append(nv.verts[v])
-            nvtx.append(vmap[v])
-        edges = [e0, e1, e2]
-        for slot in range(3):
-            if flags & _TRI_EDGE_LINK_BITS[slot]:
-                typ, nav, target = nv.links[edges[slot]]
-                if nav == root_fid:
-                    # A ledge names a triangle of THIS cell mesh: re-aim it at
-                    # the component NAVM that now owns the target triangle.
-                    nav, target = comp_fid_of_tri[target], tri_local[target]
-                # else: link into another mesh — indices there are untouched.
-                edges[slot] = len(out_links)
-                out_links.append((typ, nav, target))
-            elif edges[slot] != -1:
-                edges[slot] = tri_local[edges[slot]]
-        out_tris.append((nvtx[0], nvtx[1], nvtx[2],
-                         edges[0], edges[1], edges[2], flags, cover))
+        edges = _component_edges(nv, t, tri_local, comp_fid_of_tri, root_fid,
+                                 out_links)
+        out_tris.append(tuple(vmap[v] for v in t[:3]) + tuple(edges)
+                        + (t[6], t[7]))
+    return verts, out_tris, out_links
 
-    members = set(comp_tris)
-    doors = sorted(((tri_local[ti], fid) for (ti, fid) in nv.doors
-                    if ti in members),
-                   key=lambda d: (d[0], d[1]))
 
-    buf = bytearray()
-    buf += struct.pack('<I', NVNM_VERSION)
-    buf += struct.pack('<I', PATHING_CELL_CRC)
-    buf += struct.pack('<I', nv.wrld)
-    buf += struct.pack('<I', nv.cell)
+def _pack_body(nv, verts, tris, links, doors):
+    """The NVNM head: header, vertices, triangles, links, doors and no cover."""
+    buf = bytearray(struct.pack('<IIII', NVNM_VERSION, PATHING_CELL_CRC,
+                                nv.wrld, nv.cell))
     buf += struct.pack('<I', len(verts))
     for x, y, z in verts:
         buf += struct.pack('<fff', x, y, z)
-    buf += struct.pack('<I', len(out_tris))
-    for t in out_tris:
+    buf += struct.pack('<I', len(tris))
+    for t in tris:
         buf += struct.pack('<6h2H', *t)
-    buf += struct.pack('<I', len(out_links))
-    for (typ, nav, ti) in out_links:
+    buf += struct.pack('<I', len(links))
+    for (typ, nav, ti) in links:
         buf += struct.pack('<IIh', typ, nav, ti)
     buf += struct.pack('<I', len(doors))
     for (ti, fid) in doors:
         buf += struct.pack('<hII', ti, PATHING_DOOR_CRC, fid)
-    buf += struct.pack('<I', 0)                   # cover triangles
+    buf += struct.pack('<I', 0)
+    return buf
 
-    xs = [v[0] for v in verts]
-    ys = [v[1] for v in verts]
-    zs = [v[2] for v in verts]
-    min_x, max_x = min(xs), max(xs)
-    min_y, max_y = min(ys), max(ys)
-    min_z, max_z = min(zs), max(zs)
-    span_x = max_x - min_x if max_x > min_x else 1.0
-    span_y = max_y - min_y if max_y > min_y else 1.0
+
+def _pack_bounds(verts, tris):
+    """The NVNM tail: divisor, bucket size, bounding box and bucket grid."""
+    lo = [min(v[k] for v in verts) for k in range(3)]
+    hi = [max(v[k] for v in verts) for k in range(3)]
+    span_x = hi[0] - lo[0] if hi[0] > lo[0] else 1.0
+    span_y = hi[1] - lo[1] if hi[1] > lo[1] else 1.0
     divisor = choose_divisor(span_x, span_y)
-    buf += struct.pack('<I', divisor)
-    buf += struct.pack('<f', span_x / divisor)
-    buf += struct.pack('<f', span_y / divisor)
-    buf += struct.pack('<ffffff', min_x, min_y, min_z, max_x, max_y, max_z)
-    grid = build_navmesh_grid(verts, [t[:3] for t in out_tris],
-                               min_x, min_y, max_x, max_y, divisor)
-    for cell_tris in grid:
+    buf = bytearray(struct.pack('<Iff', divisor, span_x / divisor,
+                                span_y / divisor))
+    buf += struct.pack('<ffffff', *lo, *hi)
+    for cell_tris in build_navmesh_grid(verts, [t[:3] for t in tris],
+                                        lo[0], lo[1], hi[0], hi[1], divisor):
         buf += struct.pack('<I', len(cell_tris))
         for ti in cell_tris:
             buf += struct.pack('<h', ti)
+    return buf
 
-    verts_center = (sum(xs) / len(xs), sum(ys) / len(ys), sum(zs) / len(zs))
-    link_fids = sorted({nav for (_t, nav, _ti) in out_links})
-    door_refs = sorted({fid for (_t, fid) in doors})
-    door_local = {fid: ti for (ti, fid) in doors}
-    return bytes(buf), verts_center, link_fids, door_refs, door_local
+
+def pack_component_nvnm(nv, comp_tris, tri_local, comp_fid_of_tri, root_fid):
+    """`(blob, center, link_fids, door_refs, {door: local tri})` for one component.
+
+    The blob mirrors `pack_nvnm`'s layout.
+    """
+    verts, tris, links = _renumber(nv, comp_tris, tri_local, comp_fid_of_tri,
+                                   root_fid)
+    members = set(comp_tris)
+    doors = sorted((tri_local[ti], fid) for (ti, fid) in nv.doors
+                   if ti in members)
+    blob = bytes(_pack_body(nv, verts, tris, links, doors)
+                 + _pack_bounds(verts, tris))
+    center = tuple(sum(v[k] for v in verts) / len(verts) for k in range(3))
+    return (blob, center, sorted({nav for (_t, nav, _ti) in links}),
+            sorted({fid for (_t, fid) in doors}),
+            {fid: ti for (ti, fid) in doors})
 
 
 def split_disconnected_interiors(navm_cache: dict, writer,
@@ -225,7 +225,7 @@ def split_disconnected_interiors(navm_cache: dict, writer,
         nv = _decode_record(navm_bytes)
         if nv is None or not nv.tris:
             continue
-        comp, ncomp = _components(nv.tris)
+        comp, ncomp = components(nv.tris)
         if ncomp <= 1:
             continue
         if not _has_cross_component_door_pair(nv, comp, door_xtel_target):
@@ -279,7 +279,7 @@ def _pack_parts(nv, comp_tris, ncomp, tri_local, comp_fid_of_tri, fids) -> list:
     parts = []
     for c in range(ncomp):
         blob, center, link_fids, door_refs, door_local = \
-            _pack_component_nvnm(nv, comp_tris[c], tri_local,
+            pack_component_nvnm(nv, comp_tris[c], tri_local,
                                  comp_fid_of_tri, root_fid)
         subs = b''
         if edid:

@@ -9,11 +9,14 @@ import struct
 
 from ..base.constants import TES5_SKILL_ORDER
 from ..actors.creature_races import creature_capped_level, creature_health_offset
+from ..actors.combat_style import actor_combat_style
+from ..actors.confidence import flee_memberships, flee_spells
 from ..actors.creature_unarmed import creature_unarmed_ability
 from ..actors.outfits import split_inventory
 from ..packages.actor_wiring import (CLAS_CREATURE_CASTER, CLAS_CREATURE_PREDATOR,
                         CSTY_ANIMAL, CSTY_DEFAULT, DPLT_CREATURE_LIST,
-                        PKID_CREATURE_MASTER)
+                        PKID_CREATURE_MASTER, authored_packages,
+                        npc_packages)
 from ..base.equivalents import (TES4_RACE_FID_TO_EDID, VOICE_TYPE_MAP,
                                 resolve_creature_race)
 from .actor_common import (GOLD001_FID, NAM5_UNKNOWN, SOUND_LEVEL_NORMAL,
@@ -309,18 +312,15 @@ def _crea_vmad(rec: dict, packed: bytes) -> bytes:
         value_props={'DeathAnimSeconds': ('float', death_secs or 1.2)})
     return pack_subrecord('VMAD', raw)
 def _crea_snams(rec: dict, vendor_fids: list) -> bytes:
-    """Every faction this creature joins: its own, vendor, plugin-origin."""
-    subs = b''
-    for i in range(get_int(rec, 'FactionCount')):
-        subs += pack_subrecord('SNAM', struct.pack(
-            '<IbBBB', get_formid(rec, f'Faction[{i}].FormID'),
-            get_int(rec, f'Faction[{i}].Rank'), 0, 0, 0))
-    for vfid in vendor_fids:
-        subs += pack_subrecord('SNAM', struct.pack('<IbBBB', vfid, 0, 0, 0, 0))
-    for origin_fid in origin_memberships():
-        subs += pack_subrecord('SNAM', struct.pack(
-            '<IbBBB', origin_fid, 0, 0, 0, 0))
-    return subs
+    """Every faction this creature joins: its own, vendor, plugin-origin, flee threshold."""
+    ranked = [(get_formid(rec, f'Faction[{i}].FormID'),
+               get_int(rec, f'Faction[{i}].Rank'))
+              for i in range(get_int(rec, 'FactionCount'))]
+    ranked += [(vfid, 0) for vfid in vendor_fids]
+    ranked += [(origin_fid, 0) for origin_fid in origin_memberships()]
+    ranked += flee_memberships(rec)
+    return b''.join(pack_subrecord('SNAM', struct.pack('<IbBBB', fid, rank, 0, 0, 0))
+                    for fid, rank in ranked)
 
 
 def _crea_race(rec: dict, edid: str) -> int:
@@ -359,13 +359,15 @@ def _crea_spell_subs(rec: dict) -> bytes:
 
     The target may be a SPEL, SHOU or LVSP -- xEdit types SPLO as all three --
     so a TES4 leveled spell is referenced directly rather than unrolled.  The
-    creature's unarmed-damage ability, when its race's base is lower, is last.
+    creature's unarmed-damage ability, when its race's base is lower, follows
+    them, then the confidence flee ability.
 
     See: docs/commentary/tes5_import_actors.md#crea-spells
     """
     fids = [get_formid(rec, f'Spell[{i}]')
             for i in range(get_int(rec, 'SpellCount'))]
     fids.append(creature_unarmed_ability(get_formid(rec, 'FormID') & 0x00FFFFFF))
+    fids += flee_spells(rec)
     fids = [f for f in fids if f]
     if not fids:
         return b''
@@ -410,9 +412,9 @@ def _crea_class(rec: dict):
 
 
 def _crea_combat_style(rec: dict) -> int:
-    """A vanilla CSTY, picked off TES4 DATA.Type; CSTY records are skipped."""
-    return (CSTY_ANIMAL if get_int(rec, 'DATA.Type') in _ANIMAL_CREA_TYPES
-            else CSTY_DEFAULT)
+    """The converted CSTY, else a vanilla one picked off TES4 DATA.Type."""
+    return actor_combat_style(rec) or (
+        CSTY_ANIMAL if get_int(rec, 'DATA.Type') in _ANIMAL_CREA_TYPES else CSTY_DEFAULT)
 
 
 def _crea_dnam(rec: dict) -> bytes:
@@ -521,7 +523,8 @@ def convert_CREA(rec: dict, writer=None) -> bytes:
         get_int(rec, 'ACBS.BarterGold') if crea_vendor_fid else 0)
 
     subs += pack_subrecord('AIDT', build_aidt(rec))
-    subs += pack_formid_subrecord('PKID', PKID_CREATURE_MASTER)
+    for pfid in npc_packages(authored_packages(rec)) + [PKID_CREATURE_MASTER]:
+        subs += pack_formid_subrecord('PKID', pfid)
     subs += pack_formid_subrecord('CNAM', _crea_class(rec))
 
     if full:

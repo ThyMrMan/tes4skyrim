@@ -66,6 +66,7 @@ from core.gui.config import (
     STEPS,
     default_on_steps,
     load_config,
+    navmesh_pins_dir,
     run_process,
     step_names,
 )
@@ -548,6 +549,12 @@ def winding_flag(app) -> str:
             else "--no-collision-winding-fix")
 
 
+def navmesh_flags(app) -> list:
+    """The navmesh-generator and pin-folder flags matching the settings."""
+    return ["--navmesh-generator", app.navmesh_gen_var.get(),
+            "--navmesh-pins", navmesh_pins_dir()]
+
+
 def _mesh_flags(app, selected_subdirs) -> list:
     """The extra flags the Meshes step takes."""
     flags = []
@@ -565,7 +572,7 @@ def build_cmd(app, step_key: str, fname: str, out_dir: str,
               selected_subdirs=None) -> list:
     """The convert.py command for a single pipeline step."""
     _, flag, _, _, _, needs_file = next(s for s in STEPS if s[0] == step_key)
-    cmd = [sys.executable, "-u", str(REPO_ROOT / "convert.py"), flag]
+    cmd = [sys.executable, "-u", str(REPO_ROOT / "convert.py"), flag] + navmesh_flags(app)
     if needs_file and fname:
         cmd += ["-f", fname]
     if out_dir:
@@ -967,6 +974,7 @@ def log_run_header(app, fname, steps, out_dir, subdirs) -> None:
     log(f"Workers: {app.get_workers()} (of {app.cpu_max})")
     if subdirs:
         log(f"Mesh subdirs: {', '.join(subdirs)}")
+    log(f"Navmesh generator: {app.navmesh_gen_var.get()}")
     if "meshes" in steps:
         log(f"Collision winding fix: {'on' if app.winding_on() else 'off'}")
         parallax = app.parallax_var.get()
@@ -992,7 +1000,7 @@ def pipeline_argv(app, fname, out_dir, steps, subdirs) -> list:
     """
     if _is_default_selection(app, steps) and fname and not subdirs:
         cmd = [sys.executable, "-u", str(REPO_ROOT / "convert.py"),
-               "-f", fname, winding_flag(app)]
+               "-f", fname, winding_flag(app)] + navmesh_flags(app)
         cmd += [flag for key, flag, *_ in STEPS if key in set(steps)]
         if out_dir:
             cmd += ["--output-dir", out_dir]

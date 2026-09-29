@@ -82,11 +82,10 @@ from core.subprocess_flags import POPEN_FLAGS
 MANIFEST_NAME = 'navmesh_cache_manifest.json'
 CACHE_DIRNAME = 'navmesh_geom_cache'
 
-# Set to 1/true to skip the automatic download (metered connections, or a user
-# who would rather generate locally).  Defined here so the GUI menu item and
-# convert.py agree on the name instead of repeating the literal -- the same
-# reason worker_budget exports WORKERS_ENV_VAR.
+#: Env var: 1/true skips the automatic cache download for this run.
 NO_DOWNLOAD_ENV_VAR = 'TESCONV_NO_CACHE_DOWNLOAD'
+#: conversion_config.json key for Settings > Download navmesh cache. Absent reads as ON.
+DOWNLOAD_CONFIG_KEY = 'navmeshCacheDownload'
 
 
 # ---------------------------------------------------------------------------
@@ -1115,6 +1114,12 @@ def _local_version_key() -> tuple | None:
     return None if key is None or key == (0, 0) else key
 
 
+def download_allowed(config: dict) -> bool:
+    """False when the saved setting or NO_DOWNLOAD_ENV_VAR turns the download off."""
+    opted_out = os.environ.get(NO_DOWNLOAD_ENV_VAR, '').strip().lower() in ('1', 'true')
+    return not opted_out and config.get(DOWNLOAD_CONFIG_KEY) is not False
+
+
 def auto_install(plugin: str, quiet: bool = False,
                  allow_download: bool = True) -> bool:
     """Get this plugin's navmesh cache in place, with nothing for the user to do.
@@ -1188,8 +1193,9 @@ def auto_install(plugin: str, quiet: bool = False,
             # happened -- otherwise this looks identical to the feature being
             # broken, which is the whole class of report this path caused.
             if not quiet:
-                print('  Navmesh cache: download disabled '
-                      '(TESCONV_NO_CACHE_DOWNLOAD); generating normally.')
+                print('  Navmesh cache: download disabled (%s setting or %s); '
+                      'generating normally.'
+                      % (DOWNLOAD_CONFIG_KEY, NO_DOWNLOAD_ENV_VAR))
                 print('    To use one offline, download %s from '
                       'https://github.com/%s/releases and drop it in %s/'
                       % (asset_name(plugin), api_repo(), DROPIN_DIRNAME))

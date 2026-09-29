@@ -12,6 +12,7 @@ See: docs/commentary/tes5_import_actors.md
 import re
 import struct
 
+from ..actors.confidence import confidence_tier
 from ..base.constants import (DEFAULT_RACE, RACE_MAP, TES4_ATTRIBUTE_NAMES,
                               TES4_SKILL_AV_BASE, TES4_SKILL_TO_TES5,
                               TES5_SKILL_ORDER)
@@ -165,9 +166,6 @@ _PLAYER_PERSONALITY = 40
 #: AIDT Mood: 0 Neutral. TES4 has no equivalent field.
 _MOOD_NEUTRAL = 0
 
-#: TES4 confidence floor -> TES5 wbConfidenceEnum tier, highest first.
-_CONFIDENCE_TIERS = ((100, 4), (70, 3), (40, 2), (15, 1))
-
 #: Attack margin (aggression-5)-disposition an actor needs to earn tier 2.
 _ONSIGHT_MARGIN = 10
 
@@ -228,17 +226,6 @@ def attacks_player_on_sight(rec: dict) -> bool:
         get_int(rec, 'DATA.Personality', 50)) >= 2)
 
 
-def _confidence_tier(conf: int) -> int:
-    """TES4 confidence 0-100 as a TES5 tier; only tier 4 never flees.
-
-    See: docs/commentary/tes5_import_actors.md#confidence-tiers
-    """
-    for threshold, tier in _CONFIDENCE_TIERS:
-        if conf >= threshold:
-            return tier
-    return 0
-
-
 def build_aidt(rec: dict) -> bytes:
     """Build TES5 AIDT subrecord (20 bytes).
 
@@ -258,7 +245,7 @@ def build_aidt(rec: dict) -> bytes:
     else:
         pers = get_int(rec, 'DATA.Personality', 50)
         tes5_aggr = _aggression_tier(rec, get_int(rec, 'AIDT.Aggression'), pers)
-        tes5_conf = _confidence_tier(get_int(rec, 'AIDT.Confidence'))
+        tes5_conf = confidence_tier(rec)
     tes5_moral = 3 if resp >= 80 else (2 if resp >= 50 else (1 if resp >= 30 else 0))
     tes5_assist = 1 if resp >= 30 else 0
 

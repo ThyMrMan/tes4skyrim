@@ -18,17 +18,20 @@ conditions reference for the methodology.
 
 import struct
 
+from tes4_export.record_types.morrowind import MW_ENCHANT_SKILL
+
 from .cell_family import expand_cell_families, or_groups
 from .constants import ENGINE_GLOBAL_FORMIDS
 from .ctda_bool import bool_outcomes
 from .equivalents import TES4_ITEM_FORMID_TO_SKYRIM
-from .conditions_falloutnv import (FALLOUT_CTDA_SIZE, fallout_actor_value,
+from .conditions_falloutnv import (FALLOUT_AV_TO_TES5, FALLOUT_CTDA_SIZE,
                                    fallout_ctda, fallout_function,
                                    fallout_run_on, mirrored_ctda, PLAYER_REF)
 from ..generated.ctda_param_types import CTDA_FORMID_PARAMS
-from .owned_records import FALLOUT_VTYP_BY_SOURCE, MGEF_FAMILY_KEYWORDS
+from .owned_records import FALLOUT_VTYP_BY_SOURCE, MGEF_FAMILY_KEYWORDS, WELL_KNOWN_PROPERTIES
 from .race_factions import race_faction
 from ..record_types.world_falloutnv import is_fallout_source
+from .split_skill_conditions import split_skill_ctdas
 from .text_reader import (_ENGINE_FIXED_FORMIDS, get_formid_index_offset,
                           remap_formid)
 
@@ -212,44 +215,6 @@ _RACE_PARAM_FUNCS = frozenset({69, 130})
 
 
 # --- Actor Value parameters --------------------------------------------------
-# ptActorValue params are RAW INDICES into each game's actor-value table, and
-# the two tables share not one entry: TES4 index 0 is Strength, TES5 index 0 is
-# Aggression; TES4 5 is Endurance, TES5 5 is Assistance. Passing the index
-# through unchanged therefore reads a completely unrelated value.
-#
-# That silently broke every guild in Morroblivion. Joining the Fighters Guild
-# is gated on `GetActorValue Strength >= 30 AND GetActorValue Endurance >= 30`;
-# converted verbatim it became `Aggression >= 30 AND Assistance >= 30`, and
-# those are 0-3 enums that can never reach 30 at any level — so the recruiter
-# always fell through to "You don't meet our requirements." The Thieves Guild
-# (Agility/Personality -> Morality/One-Handed) failed the same way, as did
-# ~600 conditions across the exports.
-#
-# SKYRIM HAS NO ATTRIBUTES. Strength, Intelligence, Willpower, Agility, Speed,
-# Endurance, Personality and Luck simply do not exist as actor values, and no
-# TES5 actor value is a faithful stand-in — every candidate (SpeedMult,
-# HealRate, UnarmedDamage, ...) is on a different scale, so a 0-100 attribute
-# threshold compared against one is arbitrary. An attribute gate is therefore
-# DROPPED, which fails OPEN: the check becomes a no-op and the content behind
-# it stays reachable. That is the faithful outcome here — Oblivion's attribute
-# gates exist to keep an under-developed character out, and a Skyrim character
-# has no way to satisfy them, so enforcing them would lock the content away
-# permanently rather than merely early.
-#
-# Skills DO survive, under different names and indices, so a skill gate is
-# remapped and keeps its threshold (both games score skills 0-100).
-# Derived/status values that exist in both games are remapped too.
-_TES4_AV_ATTRIBUTES = frozenset({
-    0,   # Strength
-    1,   # Intelligence
-    2,   # Willpower
-    3,   # Agility
-    4,   # Speed
-    5,   # Endurance
-    6,   # Personality
-    7,   # Luck
-})
-
 #: TES4 actor-value index -> TES5. See: docs/commentary/tes5_import_conditions.md#actor-value-vs-book-skill-table
 _TES4_AV_TO_TES5 = {
     # --- derived / status values present in both games ---
@@ -270,7 +235,7 @@ _TES4_AV_TO_TES5 = {
     21: 19,   # Conjuration     -> Conjuration
     22: 20,   # Destruction     -> Destruction
     23: 21,   # Illusion        -> Illusion
-    24: 21,   # Mysticism       -> Illusion       (Mysticism was folded in)
+    24: 18,   # Mysticism       -> Alteration     (where its spells convert)
     25: 22,   # Restoration     -> Restoration
     26: 26,   # Acrobatics      -> Stamina        (no Skyrim skill)
     27: 12,   # LightArmor      -> LightArmor
@@ -279,6 +244,7 @@ _TES4_AV_TO_TES5 = {
     30: 14,   # Security        -> Lockpicking
     31: 15,   # Sneak           -> Sneak
     32: 17,   # Speechcraft     -> Speech
+    MW_ENCHANT_SKILL + 12: 23,  # Morrowind Enchant -> Enchanting
     # --- AI / crime values present in both games ---
     33: 0,    # Aggression      -> Aggression
     34: 1,    # Confidence      -> Confidence
@@ -532,34 +498,26 @@ def _disposition_fields(type_byte: int, data: bytes) -> 'tuple | None':
     return comp_raw, GET_RELATIONSHIP_RANK, _PLAYER_REF_FORMID, 0
 
 
-def _actor_value_param(param1: int, fallout: bool) -> 'tuple | None':
-    """(Skyrim actor value, 0) for an actor-value parameter, or None to drop.
+def _actor_value_param(param1: int, av_table: dict) -> 'tuple | None':
+    """(Skyrim actor value, 0) through the source game's table, or None to drop.
 
-    Fallout and TES4 number their actor values differently, so each source
-    uses its own table.
     See: docs/commentary/tes5_import_conditions.md#fallout-actor-values
     """
-    av = param1 if param1 < 0x80000000 else param1 - 0x100000000
-    if fallout:
-        tes5 = fallout_actor_value(av)
-        return None if tes5 is None else (tes5, 0)
-    if av in _TES4_AV_ATTRIBUTES or av not in _TES4_AV_TO_TES5:
-        return None
-    return _TES4_AV_TO_TES5[av], 0
+    tes5 = av_table.get(param1 if param1 < 0x80000000 else param1 - 0x100000000)
+    return None if tes5 is None else (tes5, 0)
 
 
 def _convert_params(func_idx: int, param1: int, param2: int,
-                    offset: int, fallout: bool = False) -> 'tuple | None':
+                    offset: int, av_table: dict) -> 'tuple | None':
     """(param1, param2) with only FormID slots remapped, or None to drop.
 
-    `func_idx` is the TES5 index.  Actor-value and race parameters are
-    translated between the games' tables rather than remapped; `fallout`
-    selects the FO3/FNV actor-value table.
+    `func_idx` is the TES5 index.  Actor-value parameters translate through
+    `av_table` (the source game's), race parameters to Skyrim's races.
     See: docs/commentary/tes5_import_conditions.md#formid-params
     """
     fid_slots = CTDA_FORMID_PARAMS.get(func_idx, frozenset())
     if func_idx in _AV_PARAM_FUNCS:
-        return _actor_value_param(param1, fallout)
+        return _actor_value_param(param1, av_table)
     if func_idx in _RACE_PARAM_FUNCS:
         param1 = _map_race_param(param1)
         if param1 is None:
@@ -574,6 +532,24 @@ def _convert_params(func_idx: int, param1: int, param2: int,
     if 2 in fid_slots:
         param2 = _remap_formid(param2, offset)
     return param1, param2
+
+
+#: TES4 Fame and Infamy actor values -> the conversion-owned global converted scripts keep them in.
+_FAME_GLOBALS = {38: 'TES4Fame', 39: 'TES4Infamy'}
+
+
+def _fame_global(raw: bytes, type_byte: int, func_idx: int, param1: int) -> 'tuple | None':
+    """(type byte, GetGlobalValue, global FormID) for a PLAYER Fame/Infamy read, else None.
+
+    Only the run-on-target (player) form moves: an NPC's own Fame read 0 in Oblivion and still does.
+    See: docs/plans/character_sheet.md#bug-fame
+    """
+    edid = _FAME_GLOBALS.get(param1)
+    if (not edid or len(raw) == FALLOUT_CTDA_SIZE or func_idx not in _AV_PARAM_FUNCS
+            or not type_byte & CTDA_RUN_ON_TARGET):
+        return None
+    fid = WELL_KNOWN_PROPERTIES.get(edid, 0)
+    return (type_byte & ~CTDA_RUN_ON_TARGET, FUNC_GET_GLOBAL_VALUE, fid) if fid else None
 
 
 def _effect_family(func_idx: int, param1: int) -> tuple:
@@ -687,10 +663,15 @@ def convert_ctda(raw: bytes, offset: 'int | None' = None,
     type_byte, comp_raw, func_idx, param1, param2, run_on, reference = head
     if type_byte & CTDA_USE_GLOBAL:
         comp_raw = _remap_global(comp_raw, offset)
-    params = _convert_params(func_idx, param1, param2, offset,
-                             len(raw) >= FALLOUT_CTDA_SIZE)
-    fields = _run_on_fields(type_byte, func_idx, run_on, reference,
-                            run_on_target_ref, drop_run_on_target)
+    fame = _fame_global(raw, type_byte, func_idx, param1)
+    if fame:
+        type_byte, func_idx, gfid = fame
+        params, fields = (gfid, 0), (type_byte, 0, 0)
+    else:
+        av_table = FALLOUT_AV_TO_TES5 if len(raw) >= FALLOUT_CTDA_SIZE else _TES4_AV_TO_TES5
+        params = _convert_params(func_idx, param1, param2, offset, av_table)
+        fields = _run_on_fields(type_byte, func_idx, run_on, reference,
+                                run_on_target_ref, drop_run_on_target)
     if params is None or fields is None:
         return None
     func_idx, param1 = (_authored_race_faction(func_idx, param1, offset)
@@ -743,14 +724,15 @@ def convert_ctda_list_with_strings(rec: dict, script_vars: dict = None,
                                    offset: 'int | None' = None,
                                    prefix: str = '',
                                    run_on_target_ref: 'int | None' = None,
-                                   drop_run_on_target: bool = False) -> list:
+                                   drop_run_on_target: bool = False,
+                                   drop_identity_target: bool = False) -> list:
     """Like convert_ctda_list, but returns [(ctda_bytes, cis2_or_None)].
 
     GetScriptVariable becomes GetVMScriptVariable + a CIS2 naming the Papyrus
-    property; `script_vars` maps ref_fid -> {var_index: var_name}, and an
-    unresolved variable reads a sentinel no script declares, so 0.
+    property (unresolved: a sentinel that reads 0).
     `[prefix]Condition[i].RunOn=Player` retargets that one run-on-target
     condition onto PlayerRef, overriding `run_on_target_ref`.
+    `drop_identity_target` drops only GetIsID/GetIsClass run-on-target tests.
     See: docs/commentary/tes4_export_morrowind.md#bark-conditions
     """
     if offset is None:
@@ -774,9 +756,11 @@ def convert_ctda_list_with_strings(rec: dict, script_vars: dict = None,
         func = struct.unpack_from('<H', raw + b'\0' * 24, 8)[0]
         ref = (_PLAYER_REF_FORMID if rec.get(f'{prefix}Condition[{i - 1}].RunOn')
                == 'Player' else run_on_target_ref)
+        drop = drop_run_on_target or (drop_identity_target
+                                      and func in _NO_TARGET_RETARGET_FUNCS)
         if func in _VM_VAR_FUNCS:
             pair = convert_script_var_ctda(
-                raw, script_vars, offset, ref, drop_run_on_target,
+                raw, script_vars, offset, ref, drop,
                 rec.get(f'{prefix}Condition[{i - 1}].Variable', ''))
             if pair is not None:
                 out.append(pair)
@@ -784,12 +768,11 @@ def convert_ctda_list_with_strings(rec: dict, script_vars: dict = None,
 
         try:
             ctda = convert_ctda(raw, offset, run_on_target_ref=ref,
-                                drop_run_on_target=drop_run_on_target,
+                                drop_run_on_target=drop,
                                 in_speak_as_topic=speak_as)
         except (ValueError, struct.error):
             continue
-        if ctda is not None:
-            out.append((ctda, None))
+        out.extend((c, None) for c in split_skill_ctdas(raw, ctda))
 
     if out and (out[-1][0][0] & CTDA_OR):
         fixed = bytes([out[-1][0][0] & ~CTDA_OR]) + out[-1][0][1:]
@@ -875,16 +858,17 @@ def convert_script_var_ctda(raw: bytes, script_vars: dict, offset: int,
 
 def build_ctda(func_idx: int, param1: int = 0, param2: int = 0,
                comp_value: float = 1.0, operator: int = 0x00,
-               is_or: bool = False) -> bytes:
+               is_or: bool = False, run_on: int = 0, param3: int = -1) -> bytes:
     """Build a 32-byte TES5 CTDA. operator is the high-nibble comparison
-    (0x00 ==, 0x60 >=, etc.); is_or sets the OR flag for chaining."""
+    (0x00 ==, 0x60 >=, etc.); is_or sets the OR flag for chaining; run_on 5
+    runs it on the quest alias whose id is param3."""
     type_byte = operator | (CTDA_OR if is_or else 0)
     comp_raw = struct.unpack('<I', struct.pack('<f', comp_value))[0]
-    return struct.pack('<B3xIHHIIII I',
+    return struct.pack('<B3xIHHIIIIi',
                        type_byte, comp_raw,
                        func_idx, 0,
                        param1, param2,
-                       0, 0, 0xFFFFFFFF)
+                       run_on, 0, param3)
 
 
 def build_or_chain(func_idx: int, param1_fids: list, comp_value: float = 1.0,

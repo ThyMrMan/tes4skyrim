@@ -149,3 +149,33 @@ def test_free_name_never_reuses_an_existing_file(tmp_path, monkeypatch):
     assert free_cell_name('Oblivion.esm', 'C') == 'C.2'
     meshedit.save_fix('Oblivion.esm', 'C.2', entry)
     assert free_cell_name('Oblivion.esm', 'C') == 'C.3'
+
+
+#: A saved edit: tri 0 deleted, a new tri added -- so result indices differ from base ones.
+SAVED_OPS = [{'op': 'del_tri', 'tri': 0}, {'op': 'add_tri', 'verts': [0, 1, 4]}]
+
+#: Edits made over that saved RESULT: a new vertex and tri, a door on it, a delete.
+SESSION_OPS = [{'op': 'add_vert', 'to': [30, 10, 0]},
+               {'op': 'add_tri', 'verts': [4, 5, 2]},
+               {'op': 'set_door', 'tri': 3},
+               {'op': 'del_tri', 'tri': 0}]
+
+
+def test_rebased_edits_replay_to_what_the_page_showed():
+    """Replaying saved + rebased ops over the base equals the session's ops over the result.
+
+    See: docs/commentary/tes5_import_navmesh.md#editing-a-saved-result
+    """
+    rv, rt, rd, rl = replay(VERTS, TRIS, SAVED_OPS)
+    want = replay(rv, rt, SESSION_OPS, rd, rl)
+    combined = meshedit.rebase_ops(VERTS, TRIS, SAVED_OPS, SESSION_OPS)
+    assert replay(VERTS, TRIS, combined) == want
+
+
+def test_result_marks_replay_back_into_the_saved_doors_and_links():
+    """Base doors and links rebuilt from a result reproduce that result's own."""
+    entry = make_entry('Oblivion.esm', 'X', VERTS, TRIS, SAVED_OPS,
+                       doors=[2], links=[(1, 2)])
+    doors, links = meshedit.result_marks(VERTS, TRIS, SAVED_OPS, entry['result'])
+    _v, _t, rd, rl = replay(VERTS, TRIS, SAVED_OPS, doors, links)
+    assert rd == entry['result']['doors'] and [list(l) for l in rl] == entry['result']['links']

@@ -20,6 +20,10 @@
 # git-derived version -- see version._read_version_file.
 VERSION export-subst
 
+# cmd.exe misreads labels in LF-only batch files, and GitHub's source zip keeps
+# the stored line endings, so the launcher is always checked out as CRLF.
+*.cmd text eol=crlf
+
 # Common libraries / executables
 *.dll -diff
 *.exe -diff

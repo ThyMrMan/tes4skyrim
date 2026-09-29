@@ -55,8 +55,10 @@ base `player` record (30 and 30 in Morrowind.esm), not the live character.
   callback through the processor's slot 1 as `(processor, name, callback)`.
   The swap hands Accept a proxy processor that substitutes our function for
   the `ItemSelect` callback (`0x92d970`) and passes the rest through. Selecting
-  a MISC otherwise reaches Skyrim's equip toggle (`0x6ca610`), which does
-  nothing for a form that cannot be equipped and raises no event.
+  a MISC otherwise reaches Skyrim's equip toggle (`0x6ca610`), which equips
+  nothing but still raises the equip event, so the item's script gets
+  `OnEquipped`
+  ([script_convert.md](script_convert.md#carried-menumode-runs-in-event)).
   **The inventory leaves through its own `CloseTweenMenu` callback
   (`0x92d920`)** before its close is posted. TweenMenu stays OPEN, hidden,
   under an inventory it opened -- the movie's `ShowTweenMenu` re-shows it with

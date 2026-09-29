@@ -189,12 +189,12 @@ TES4_SKILL_TO_TES5 = {
     21: 'Conjuration',    # Conjuration
     22: 'Destruction',    # Destruction
     23: 'Illusion',       # Illusion
-    24: 'Illusion',       # Mysticism → Illusion
+    24: 'Alteration',     # Mysticism → Alteration
     25: 'Restoration',    # Restoration
     # 26: Acrobatics removed
     27: 'LightArmor',    # Light Armor
     28: 'Marksman',       # Marksman
-    29: 'Pickpocket',     # Mercantile → Pickpocket
+    29: 'Speechcraft',    # Mercantile → Speech
     30: 'Lockpicking',    # Security
     31: 'Sneak',          # Sneak
     32: 'Speechcraft',    # Speechcraft

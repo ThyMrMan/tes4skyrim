@@ -973,12 +973,6 @@ COMMAND_ROWS = {
                              defaults={0: 'Game.GetPlayer()'},
                              types={0: 'Actor'}, flags='actor_arg'),
 
-    #: See: docs/commentary/script_convert.md#equivalent-in-a-different-subsystem
-    'flee': Cmd('{ref}.SetActorValue("Confidence", 0)\n'
-                '  {ref}.EvaluatePackage()', ACTOR, flags='bare_no_equiv'),
-    'forceflee': Cmd('{ref}.SetActorValue("Confidence", 0)\n'
-                     '  {ref}.EvaluatePackage()', ACTOR),
-
     #: Answers PRESENT. See: docs/commentary/script_convert.md#neutralised-command-inert-in-position
     'fileexists': Cmd('1', note='FileExists - converted assets are deployed '
                                 'by the pipeline, not under the TES4 path'),
@@ -1146,16 +1140,15 @@ GMST_TO_ACTOR_VALUE = {
 }
 
 
-#: Actor values TES5 stores as an enum tier, with the tier count.
+#: Actor values TES5 stores as an enum tier, with the tier count; Confidence goes through TES4Polyfill.
 ENUM_ACTOR_VALUES = {
-    'aggression': 3, 'confidence': 4, 'assistance': 2,
+    'aggression': 3, 'assistance': 2,
     'mood': 8, 'morality': 3,
 }
 
 #: See: docs/commentary/script_convert.md#aggression-confidence-are-enums
 ENUM_AV_LADDERS = {
     'aggression': ((106, 3), (65, 2), (5.000001, 1), (0, 0)),
-    'confidence': ((100, 4), (70, 3), (40, 2), (15, 1), (0, 0)),
 }
 
 
@@ -1208,7 +1201,7 @@ BARE_NO_EQUIV_COMMANDS = _flagged('bare_no_equiv') | frozenset({
     'con_runmemorypass', 'emcgetplaylist', 'emcisbattleoverridden',
     'emcismusiconhold', 'emcmusicnexttrack', 'emcmusicresume',
     'emcmusicstop', 'emcplaytrack', 'emcsetbattleoverride',
-    'emcsetmusichold', 'emcsetmusictype', 'getmenufloatvalue',
+    'emcsetmusichold', 'emcsetmusictype', 'flee', 'getmenufloatvalue',
     'getmenuhastrait', 'getmenustringvalue', 'streammusic',
 })
 

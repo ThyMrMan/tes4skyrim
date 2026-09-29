@@ -655,6 +655,40 @@ for other reasons.)
 `tests/test_import.py::TestNpcToNpcConversationDrop` (5 tests, incl. the
 fail-safe and the CharGen keep).
 
+#### <a id="engine-fired-say-topics"></a>A script `Say` must not strip an engine topic's target tests
+
+**Code:** `say_topics.build_say_topic_dispositions` (`engine_fired`, `ENGINE_TARGET`),
+`groups._fill_say_dispositions`, `conditions.convert_ctda_list_with_strings(drop_identity_target=)`.
+
+The Say/SayTo scan decides per TOPIC, not per call site. A single bare `Say`
+(no target, so disposition `drop`) therefore stripped every RunOn=Target test
+from a topic the engine also fires. In Oblivion.esm, Baurus's and Glenroy's
+CharacterGen `OnStartCombat` blocks each run `Say Attack`. That dropped the target
+race/faction/sex tests from all 69 `Attack` INFOs, 7 `Hit` INFOs and 444
+`GOODBYE` INFOs. "Die, you Orc filth!" (`0018BD75`) kept only *speaker is not
+an Orc* and fired at players of every race.
+
+A topic `classify_topic` marks as a bark (ATCK, HIT_, GBYE, …) is fired by the
+engine, which supplies a real target: the combat target, or the player for
+GBYE. When such a topic would otherwise be `drop`, it becomes `('target', None)`:
+- **State tests** (race, sex, faction, IsGuard, items) keep RunOn=Target.
+- **Identity tests** (`GetIsID`/`GetIsClass`, `_NO_TARGET_RETARGET_FUNCS`) still
+  drop. They name the NPC a script addressed. The CharacterGen 26→27 bridge is
+  a GOODBYE line (`0005144A`) gated on `GetIsID(UrielSeptim)[Target]` that Baurus
+  speaks via `Say`, which has no target.
+
+Topics already retargeted (`ref`) are unchanged: GREETING, HELLO and Assault
+point at PlayerRef, which is correct for both callers.
+
+Measured on Oblivion.esm: 3 topics switch (`Attack`, `Hit`, `GOODBYE`). 157
+INFOs gain conditions and none lose any: GetInFaction 114, GetIsRace 22,
+GetIsSex 14, IsGuard 11, GetIsCreature 6, other 6. No CharacterGen-owned INFO
+changes. The other scripted GOODBYE speakers (Faustina in MS04, Savlian Matius)
+have no changed lines. Known compromise: a script `Say` of these topics can't
+pass the kept target tests, so Baurus and Glenroy shout the untargeted combat
+lines. Confirmed in game.
+Tests: `tests/test_dialog.py::TestCTDAConversion::test_engine_fired_say_topic_*`.
+
 ---
 
 ### Step 2 — Take GREETING off the ambient channel
@@ -1861,6 +1895,34 @@ A mention reveal unlocks EVERY gated topic sharing the mentioned FULL name. SI
 has one "Greymarch" DIAL per main quest (SE03, SE04, SE06-SE10); the name map
 used to keep one global per name, so a mention opened only whichever topic was
 written last.
+
+### <a id="never-added-topics"></a>A topic nothing adds never lists
+
+**Code:** `tes5_import/dialogue/unlocks.py:_unreachable_topics`,
+`groups.py:_branch_is_linked`
+
+Oblivion lists a regular (Type-0) topic only after something adds it: an Add-Topics
+list, an `AddTopic` in any script, a choice link, or a spoken line naming it. A
+topic with none of those never reaches the menu. Nehrim authors its scripted
+shouts this way (`SayTo Player NQ00Soldat01`, `SoldatenStehenBleiben`,
+`FuerDieFreiheit`), and some topics nothing uses at all (`FuerTaranor`). Skyrim has
+no "not yet added" state, so they all sat in every NPC's menu. They now get a
+Normal branch; `Say` still reaches them. The name match is by word sequence,
+punctuation ignored, so an ambiguous name errs toward listing.
+
+Only this plugin's own topics are judged (raw index byte `>= num_tes4_masters`): a
+dependent plugin's overrides were added by its master, whose scripts are not in
+this export. Counts: Nehrim.esm 622 topics, Oblivion.esm 39 topics / 146 lines
+(Martin's and Mankar's speeches, SE09Ceremony, `GlenmorilWitches`,
+`TGDirectGiveCoin`), Translation.esp 0. Confirmed in-game.
+
+**The same fix's second half:** `_quest_npc_sets` credited every line to its
+topic's `Quest[0]`. GREETING serves dozens of quests, so a quest whose NPCs are
+named only in its greeting lines got no NPCs, and a condition-free reply behind
+that greeting's choice (Nehrim `NQHeleneWorumGehts`, the bottles line) had no
+speaker fallback: Sentry Morten offered it. Each line now counts toward its own
+`QSTI.Quest`. On Oblivion.esm this widens the fallback on 3 topics / 4 lines
+(`Dark08Choice2A`/`3A` 5 -> 13 NPCs, `MS45Mother` 9 -> 11) and opens none.
 
 ## <a id="info-fragment-emission"></a>INFO fragment emission: one decision function
 

@@ -16,7 +16,10 @@ once from disk in the pool initializer.  Without this, every cell would voxelize
 an empty world and emit no navmesh at all.
 """
 
-from .from_pgrd import cached_geometry, convert_PGRD, geom_equal
+import os
+
+from .from_pgrd import cached_geometry, convert_PGRD, geom_cache_path, geom_equal
+from .lattice.build import set_activators
 
 # Per-worker read-only carving context, populated by _init in each child.
 _BASE_MODEL_BY_FID: dict = {}
@@ -27,7 +30,7 @@ _GEOM_CACHE: tuple = None
 def init_worker(base_model_by_fid: dict, door_fids: set, collision_cache: str,
                 formid_offset: int = 0, geom_cache: tuple = None,
                 injected_formids: dict = None, disable_gc: bool = True,
-                door_centers_cache: str = None):
+                door_centers_cache: str = None, activator_fids: frozenset = None):
     """ProcessPool initializer: stash context; load the collision cache.
 
     Runs once per worker process.  A spawned child inherits no module-global
@@ -53,6 +56,8 @@ def init_worker(base_model_by_fid: dict, door_fids: set, collision_cache: str,
     if door_centers_cache:
         from .from_pgrd import load_door_centroids
         load_door_centroids(door_centers_cache, quiet=True)
+    if activator_fids is not None:
+        set_activators(activator_fids)
 
     # Generational GC is pure overhead in this worker and costs ~2x wall-clock.
     #
@@ -91,17 +96,7 @@ def _verify_against_cache(job: dict, result: tuple) -> tuple:
     stored = cached_geometry(_GEOM_CACHE, *job['key'])
     if stored is None:
         return result
-    fresh_bytes, fresh_meta = convert_PGRD(
-        job['pgrd_rec'],
-        land_rec=job['land_rec'],
-        cell_rec=job['cell_rec'],
-        refr_recs=job['refr_recs'],
-        base_model_by_fid=_BASE_MODEL_BY_FID,
-        door_fids=_DOOR_FIDS,
-        navm_fid=job['navm_fid'],
-        geom_cache=None,
-        extra_door_refrs=job.get('extra_door_refrs'),
-    )
+    fresh_bytes, fresh_meta = _convert(job, None)
     meta['verified'] = True
     fresh = fresh_meta.get('geometry') if fresh_meta else None
     if fresh is None or geom_equal(stored, fresh):
@@ -111,32 +106,61 @@ def _verify_against_cache(job: dict, result: tuple) -> tuple:
     return fresh_bytes, fresh_meta
 
 
+def _convert(job: dict, geom_cache):
+    """(navm_bytes, meta) for one job, built against `geom_cache` (None: no cache)."""
+    return convert_PGRD(
+        job['pgrd_rec'],
+        land_rec=job['land_rec'],
+        cell_rec=job['cell_rec'],
+        refr_recs=job['refr_recs'],
+        base_model_by_fid=_BASE_MODEL_BY_FID,
+        door_fids=_DOOR_FIDS,
+        navm_fid=job['navm_fid'],
+        geom_cache=geom_cache,
+        extra_door_refrs=job.get('extra_door_refrs'),
+    )
+
+
+def _attempt(job: dict, geom_cache) -> tuple:
+    """(navm_bytes, meta) for one job; an exception comes back as meta['error']."""
+    try:
+        navm_bytes, meta = _convert(job, geom_cache)
+        if job.get('verify') and meta and meta.get('geom_cached'):
+            return _verify_against_cache(job, (navm_bytes, meta))
+        return navm_bytes, meta
+    except Exception as e:
+        import traceback
+        return None, {'error': f'{type(e).__name__}: {e}',
+                      'traceback': traceback.format_exc()}
+
+
+def _failed(result: tuple) -> bool:
+    """True when an attempt raised rather than built (or found nothing to build)."""
+    return result[0] is None and bool((result[1] or {}).get('error'))
+
+
+def _drop_entry(job: dict, geom_cache) -> None:
+    """Delete this cell's cache entry, so geometry that failed is never served or adopted."""
+    try:
+        os.remove(geom_cache_path(geom_cache, *job['key']))
+    except OSError:
+        pass
+
+
 def run_job(job: dict):
     """ProcessPool task: convert one PGRD to (navm_bytes, meta).
 
-    Exceptions are caught and RETURNED in meta['error'], never printed: workers
-    run under pythonw.exe, where stdout goes nowhere.
-
-    job['verify'] asks this cell to double-build and compare; the PARENT picks
-    which cells carry it.  job['prove'] builds with NO cache, so a prover never
-    stores over the entry it is comparing against.
+    Exceptions are RETURNED in meta['error'], never printed: workers run under
+    pythonw.exe.  A failed cell drops its cache entry and is built once more,
+    so a bad entry never outlives the run.  job['verify'] double-builds and
+    compares (the PARENT picks which cells); job['prove'] builds with NO cache.
+    See: docs/commentary/tes5_import_navmesh.md#a-failed-cell-keeps-no-cache-entry
     """
-    try:
-        navm_bytes, meta = convert_PGRD(
-            job['pgrd_rec'],
-            land_rec=job['land_rec'],
-            cell_rec=job['cell_rec'],
-            refr_recs=job['refr_recs'],
-            base_model_by_fid=_BASE_MODEL_BY_FID,
-            door_fids=_DOOR_FIDS,
-            navm_fid=job['navm_fid'],
-            geom_cache=None if job.get('prove') else _GEOM_CACHE,
-            extra_door_refrs=job.get('extra_door_refrs'),
-        )
-        if job.get('verify') and meta and meta.get('geom_cached'):
-            return job['key'], _verify_against_cache(job, (navm_bytes, meta))
-        return job['key'], (navm_bytes, meta)
-    except Exception as e:
-        import traceback
-        return job['key'], (None, {'error': f'{type(e).__name__}: {e}',
-                                   'traceback': traceback.format_exc()})
+    cache = None if job.get('prove') else _GEOM_CACHE
+    result = _attempt(job, cache)
+    if cache and _failed(result):
+        _drop_entry(job, cache)
+        result = _attempt(job, cache)
+        if _failed(result):
+            _drop_entry(job, cache)
+    return job['key'], result

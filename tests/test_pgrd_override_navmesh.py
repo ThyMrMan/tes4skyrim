@@ -17,6 +17,7 @@ See: docs/commentary/tes5_import_navmesh.md#master-owned-cells
 from collections import Counter
 
 
+from tes5_import.base.text_reader import set_formid_index_offset
 from tes5_import.navmesh import pool as navm_pool
 from tes5_import.overrides import nested as overrides
 
@@ -169,7 +170,7 @@ def test_navmesh_geometry_merges_the_masters_references():
     master = {'000000AA': _refr(0x000000AA, 0xAAAA),
               '000000BB': _refr(0x000000BB, 0xAAAA)}
 
-    merged = navm_pool._merge_master_cell_records(by_type, master, 'REFR')
+    merged = navm_pool._merged(by_type, master, 'REFR')
 
     assert sorted(r['FormID'] for r in merged) == [
         '000000AA', '000000BB', '01000001']
@@ -182,7 +183,7 @@ def test_the_plugins_own_reference_overrides_the_masters():
     by_type = {'REFR': [own]}
     master = {'000000AA': _refr(0x000000AA, 0xAAAA)}
 
-    merged = navm_pool._merge_master_cell_records(by_type, master, 'REFR')
+    merged = navm_pool._merged(by_type, master, 'REFR')
 
     assert len(merged) == 1
     assert merged[0]['PosX'] == '128.0'
@@ -194,7 +195,7 @@ def test_a_reference_the_plugin_deletes_carves_nothing():
                               flags=overrides.DELETED_FLAG)]}
     master = {'000000AA': _refr(0x000000AA, 0xAAAA)}
 
-    assert navm_pool._merge_master_cell_records(
+    assert navm_pool._merged(
         by_type, master, 'REFR') == []
 
 
@@ -202,5 +203,18 @@ def test_a_masterless_plugin_merges_nothing():
     """Oblivion.esm/Nehrim.esm keep the exact list they always had."""
     own = [_refr(0x00000001, 0xAAAA)]
 
-    assert navm_pool._merge_master_cell_records(
-        {'REFR': own}, None, 'REFR') is own
+    assert navm_pool._merged({'REFR': own}, None, 'REFR') == own
+
+
+def test_an_override_replaces_the_master_after_the_index_shift():
+    """With Skyrim.esm prepended, UL's LAND override must win over Oblivion's."""
+    own = {'Signature': 'LAND', 'FormID': '00007667', 'LayerCount': '29'}
+    master = {'00007667': {'Signature': 'LAND', 'FormID': '00007667',
+                           'LayerCount': '26'}}
+    set_formid_index_offset(1)
+    try:
+        merged = navm_pool._merged({'LAND': [own]}, master, 'LAND')
+    finally:
+        set_formid_index_offset(0)
+
+    assert merged == [own]

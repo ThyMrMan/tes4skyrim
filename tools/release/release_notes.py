@@ -2,79 +2,26 @@
 """Build release-tag notes: commits since the previous tag plus the GUI
 pipeline steps those commits require the user to re-run.
 
-Used by .github/workflows/tag-on-push.yml to annotate each auto-tag, but it
-runs standalone against any two revisions:
+Used by .github/workflows/tag-on-push.yml to annotate each auto-tag; runs
+standalone from the repo root (it imports version.STEP_KEYS):
 
     python -m tools.release.release_notes                  # last tag -> HEAD
     python -m tools.release.release_notes --from 1.07 --to HEAD
     python -m tools.release.release_notes --tag 1.08       # title the notes
 
-Run it with `-m` from the repo root: it imports version.STEP_KEYS, which a
-by-path invocation cannot resolve.
-
-STEP_ORDER is DERIVED from core/gui/config.py's STEPS and GLOBAL_ACTIONS (via
-version.STEP_KEYS), so the GUI's order is the only place it is written.
-The step mapping mirrors that table (the numbered checkboxes) and
-the phase_* functions in convert.py that each one invokes.  Anything that
-changes the plugin body (tes5_import) implies Import; mesh/creature/sound/LOD
-work implies its own asset step; and because Pack BSAs / Pack Mod Zip consume
-whatever the earlier steps wrote, they are appended whenever any step that
-*produces* packaged output is triggered.
-
-Keeping the answer honest means being narrow where the code is narrow:
-
-  * convert.py is attributed per phase_* function via git's hunk headers, so a
-    diff confined to phase_lod costs only the LOD step (see PHASE_STEPS).  Only
-    module-scope/main()/shared-helper hunks fall back to every step.
-  * Paths that are never pipeline input (docs, tests, tools, vendored binaries
-    under external/, the standalone TESGameSelect/ plugin) map to no steps.
-    Genuinely unrecognised paths select nothing -- they are listed verbatim so
-    the reader can judge them (and add a rule), rather than blanket-ticking
-    every step over one stray file.
-
-Four RULES entries are not obvious from their pattern alone.  Every LOD module
-feeds ONE step: the whole load order's LOD, plus the sibling merge, comes from
-the single "Create LOD" action, so there is no per-plugin LOD step to
-distinguish sibling_lod.py from.  worldmap_clouds.py is generated from BOTH
-sides -- per worldspace by the import (record_types/world.py) and as a merged
-union by the sibling pass.  skin_replacement.py is imported by nif_converter,
-so it is a mesh change as well as a body-patch one.  skyrim_assets.py is the
-vanilla-asset provider that mesh conversion, creature skeletons
-(extract_skeleton_bones) and the slot-44 body patch all pull from.
-
-The asset_convert patterns allow any folder depth: the package is organised
-into subpackages, and a rule that matched only one level would drop a nested
-module through to the mesh catch-all and silently mis-scope its rebuild.
-
-Four tools under tools/ ARE global actions rather than debug utilities, and
-their rules precede the blanket tools/ rule (first match wins): a change to one
-alters the artefact the user installs, so it stales that action exactly as a
-stage module does.  convert_ui.py is joined by asset_convert/ui/'s ui_menus,
-ui_cursor and swf, which are the reskin's source; book_inam.py is deliberately
-excluded, being the per-plugin book-icon step.
-
-The core/ rules run narrow-to-broad.  worker_budget/subprocess_flags/
-process_job are process-pool plumbing every worker-based stage runs through, so
-they imply ALL; run_log and plugin_masters only report, producing no conversion
-output, so they stale nothing.  The bare `^core/` tail of the GUI rule is the
-safety net: a new module added there reads as a GUI change (which costs the
-user no re-runs) instead of falling through to the unmatched bucket, which asks
-for every step.
-
-tes_runtime/ (TESRuntime, CreatureRuntime, FalloutRuntime, HavokWorldSize and
-MorrowindRuntime, each its own folder, all built into dist/) is the same shape
-as TESGameSelect/: committed, prebuilt SKSE plugins no conversion phase reads,
-packaged on their own by package_runtime_dll.py.  A change anywhere under it re-runs only "Package SKSE
-Mod", never a per-plugin step.
+See: docs/commentary/version_upgrade_planning.md#what-a-release-owes
 """
 from __future__ import annotations
 
 import argparse
+import ast
 import re
 import subprocess
 import sys
+import warnings
 from pathlib import Path
 
+from core.subprocess_flags import POPEN_FLAGS
 from version import STEP_KEYS
 
 SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
@@ -82,13 +29,10 @@ SCRIPT_DIR = Path(__file__).resolve().parent.parent.parent
 #: Every step label in GUI run order. See: docs/commentary/version_upgrade_planning.md#one-table-not-four
 STEP_ORDER = [label for _key, label in STEP_KEYS]
 
-# Steps that only repackage what earlier steps produced.  Added automatically
-# whenever any producing step fires, never a reason to run on their own.
+#: Steps that only repackage the per-plugin pipeline's output; added whenever a producing step fires.
 PACKAGING_STEPS = ["9. Pack BSAs", "10. Pack Mod Zip"]
 
-# "Pack LOD" is the same idea for the standalone LOD mod, but it repackages ONE
-# step's output rather than the per-plugin pipeline's, so it is triggered by
-# that step alone instead of by anything at all being rebuilt.
+#: The standalone LOD mod's packager, added only when its one producing step fires.
 LOD_PACKAGING_STEP = "Pack LOD"
 LOD_PRODUCING_STEP = "Create LOD"
 
@@ -97,22 +41,19 @@ STANDALONE_STEPS = frozenset(
     {"Body Slot Patch", "Package Start Mod", "Package SKSE Mod",
      LOD_PRODUCING_STEP, LOD_PACKAGING_STEP})
 
-# (regex over the repo-relative path, steps it forces).  First match wins per
-# rule list order, but every matching rule contributes -- a path may need
-# several steps.  Patterns are matched with re.search against forward-slash
-# paths.
+#: (repo-path regex, steps it stales); first match wins. See: docs/commentary/version_upgrade_planning.md#the-rules
 RULES: list[tuple[str, list[str]]] = [
-    # ── Stage packages ────────────────────────────────────────────────────
     (r"^tes4_export/",            ["1. Export", "6. Import"]),
     (r"^tes5_import/",            ["6. Import"]),
     (r"^script_convert/",         ["8. Scripts"]),
+    (r"^papyrus_compile\.py$",    ["8. Scripts"]),
+    (r"^navmesh_pins/",           ["6. Import"]),
 
     (r"^asset_convert/(?:\w+/)*bsa_extract\.py",        ["2. Extract"]),
     (r"^asset_convert/(?:\w+/)*(spt_\w+|flipbook)\.py", ["4. SpeedTrees"]),
     (r"^asset_convert/(?:\w+/)*(creature_pipeline|hkx_\w+|animation_data|"
      r"extract_skeleton_bones|kf_decode|kf_writer)\.py",
                                                ["5. Creatures"]),
-    # Pre-built behavior/skeleton assets shipped with the converter.
     (r"^asset_convert/generated/",             ["5. Creatures"]),
     (r"^asset_convert/(?:\w+/)*(audio_converter)\.py",  ["7. Sounds"]),
     (r"^asset_convert/(?:\w+/)*(sibling_lod|lod_gen|lod_far_gen|terrain_lod|"
@@ -130,22 +71,15 @@ RULES: list[tuple[str, list[str]]] = [
     (r"^asset_convert/ui/(?:ui_menus|ui_cursor|swf)\.py$", ["Convert Oblivion UI"]),
     (r"^asset_convert/(?:\w+/)*",                       ["3. Meshes"]),
 
-    # ── Native / shared code: conservatively wide ─────────────────────────
-    # Docs and build notes shipped alongside the extension are not inputs to
-    # anything.  Listed BEFORE the blanket native/ rule (first match wins), or
-    # a README edit costs the user a mesh, creature AND LOD rebuild -- which is
-    # exactly what 0.57 charged for `native/dist/README.md`.
     (r"^native/.*\.(md|txt)$",    []),
     (r"^native/",                 ["3. Meshes", "5. Creatures", "Create LOD"]),
-    # convert.py is resolved per-phase-function instead (see PHASE_STEPS);
-    # "ALL" here is only the fallback when the hunks can't be attributed.
     (r"^convert\.py$",            ["CONVERT"]),
+    (r"^output_layout\.py$",      ["ALL"]),
     (r"^core/collision_options\.py$",  ["3. Meshes"]),
     (r"^core/(?:worker_budget|subprocess_flags|process_job)\.py$", ["ALL"]),
     (r"^core/(?:run_log|plugin_masters)\.py$", []),
     (r"^gui\.py$|^gui\.pyw$|^core/gui/|^core/", ["GUI"]),
 
-    # ── Non-pipeline: never a reason to re-run anything ───────────────────
     (r"^docs/",                   []),
     (r"^tests/",                  []),
     (r"^tools/release/create_lod\.py$",       ["Create LOD"]),
@@ -156,37 +90,20 @@ RULES: list[tuple[str, list[str]]] = [
     (r"^tools/",                  []),
     (r"^references/",             []),
     (r"^external/",               []),
+    (r"^game_bridge/|^navmesh_cache/", []),
     (r"^\.github/",               []),
     (r"^\.claude/|^\.vscode/",    []),
-    # The standalone starter plugin: committed prebuilt, not generated by the
-    # pipeline. Changing it makes the shipped zip stale, so it re-runs the
-    # packaging action and nothing else -- no per-plugin step reads it.
     (r"^TESGameSelect/",          ["Package Start Mod"]),
     (r"^tes_runtime/",            ["Package SKSE Mod"]),
-    # Dependency preflight: gates the run before any phase starts and produces
-    # no conversion output of its own, so a change here re-runs nothing.
-    (r"^preflight\.py$",          []),
-    # Version identity and the upgrade shortcut itself.  It reports what is
-    # stale; it never converts anything, so it cannot make output stale.  VERSION
-    # is an export-subst template expanded at archive time -- its content is the
-    # release number, which likewise changes no output.
+    (r"^preflight\.py$|^convert_cli\.py$|^source_paths\.py$", []),
+    (r"^requirements\.txt$",      []),
     (r"^version\.py$|^VERSION$",  []),
     (r"^CLAUDE\.md$|^README\.md$|^TODO\.txt$|^CK_WARNINGS", []),
     (r"^conversion_config\.json$|^pyproject\.toml$|^\.git\w+$", []),
     (r"^[^/]+\.code-workspace$", []),
 ]
 
-# convert.py hosts one phase_* function per GUI step.  A change inside exactly
-# one of them implies only that step -- historically the blanket "ALL" here was
-# the single biggest source of "re-run everything" noise (e.g. 0.40, whose
-# convert.py diff was entirely inside phase_lod).
-# convert.py functions that ORCHESTRATE phases without producing output.
-# A hunk in one of these narrows to nothing rather than falling back to every
-# step: main() parses arguments and dispatches, so editing it changes which
-# phases the user can ask for, never what a phase writes.  `_mark` just records
-# that a step completed (version.record_step_run) and is likewise output-inert.
-ORCHESTRATION_FUNCS = frozenset({"main", "_mark"})
-
+#: The step each convert.py phase function produces. See: docs/commentary/version_upgrade_planning.md#convert-py
 PHASE_STEPS: dict[str, list[str]] = {
     "phase_export":             ["1. Export"],
     "phase_extract":            ["2. Extract"],
@@ -197,65 +114,58 @@ PHASE_STEPS: dict[str, list[str]] = {
     "phase_sounds":             ["7. Sounds"],
     "phase_scripts":            ["8. Scripts"],
     "phase_compile":            ["8. Scripts"],
-    # phase_lod was deleted when LOD stopped being per-plugin work; the entry
-    # stays so a diff against an older revision still attributes correctly.
     "phase_lod":                ["Create LOD"],
     "phase_modify_body_meshes": ["Body Slot Patch"],
     "phase_pack":               ["9. Pack BSAs"],
     "phase_pack_zip":           ["10. Pack Mod Zip"],
 }
 
+#: The unit holding a file's top-level code that is not a def, class, assignment or import.
+MODULE_UNIT = "<module>"
+
+
+# ---------------------------------------------------------------------------
+# git
+# ---------------------------------------------------------------------------
 
 def _run(args: list[str]) -> str:
+    """Stdout of `git <args>` run at the repo root, stripped."""
     return subprocess.run(
         ["git", *args], cwd=SCRIPT_DIR, check=True,
-        capture_output=True, text=True,
+        capture_output=True, encoding="utf-8", errors="replace", **POPEN_FLAGS,
     ).stdout.strip()
 
 
-def previous_tag(before: str = "HEAD") -> str | None:
-    """Latest release tag reachable from `before`, matching the workflow's own
-    tag scheme.  None when the repo has no release tag yet.
+def _tag_key(tag: str) -> tuple[int, int]:
+    """Rank a MAJOR.MM or MAJOR.MMM tag in thousandths; unparseable sorts first."""
+    major, _, minor = tag.partition(".")
+    try:
+        return (int(major), int(minor) * (10 if len(minor) == 2 else 1))
+    except ValueError:
+        return (-1, -1)
 
-    Tags through 0.58 are MAJOR.MM (hundredths); 0.581 onward are MAJOR.MMM
-    (thousandths).  Both forms must be globbed AND ranked on a common scale:
-    comparing the minor fields as bare ints would sort 0.59 above 0.580, and
-    globbing only two digits would pin the notes to 0.58 forever.
-    """
+
+def previous_tag() -> str | None:
+    """Latest release tag (MAJOR.MM or MAJOR.MMM) in the repo; None when there is none."""
     try:
         tags = _run(["tag", "-l", "[0-9]*.[0-9][0-9]",
                      "[0-9]*.[0-9][0-9][0-9]"]).splitlines()
     except subprocess.CalledProcessError:
         return None
     tags = [t.strip() for t in tags if t.strip()]
-    if not tags:
-        return None
-
-    def key(t: str) -> tuple[int, int]:
-        major, _, minor = t.partition(".")
-        try:
-            # Scale by width so both schemes compare in thousandths.
-            scale = 10 if len(minor) == 2 else 1
-            return (int(major), int(minor) * scale)
-        except ValueError:
-            return (-1, -1)
-
-    return sorted(tags, key=key)[-1]
+    return max(tags, key=_tag_key) if tags else None
 
 
 def commits_between(rev_from: str | None, rev_to: str) -> list[tuple[str, str]]:
     """[(short_sha, subject)] oldest-first for rev_from..rev_to."""
     rng = f"{rev_from}..{rev_to}" if rev_from else rev_to
     out = _run(["log", "--reverse", "--no-merges", "--format=%h%x1f%s", rng])
-    rows = []
-    for line in out.splitlines():
-        if "\x1f" in line:
-            sha, _, subject = line.partition("\x1f")
-            rows.append((sha, subject))
-    return rows
+    return [tuple(line.split("\x1f", 1)) for line in out.splitlines()
+            if "\x1f" in line]
 
 
 def changed_files(rev_from: str | None, rev_to: str) -> list[str]:
+    """Paths changed in rev_from..rev_to, or every tracked path when rev_from is None."""
     if rev_from:
         out = _run(["diff", "--name-only", f"{rev_from}..{rev_to}"])
     else:
@@ -263,55 +173,171 @@ def changed_files(rev_from: str | None, rev_to: str) -> list[str]:
     return [p for p in out.splitlines() if p.strip()]
 
 
-_HUNK_FUNC = re.compile(r"^@@ .*? @@\s*(?:def\s+)?([A-Za-z_]\w*)")
-
-
-def convert_py_steps(rev_from: str | None, rev_to: str) -> list[str] | None:
-    """Steps implied by a convert.py change, resolved per phase_* function.
-
-    Git's hunk headers name the enclosing function, so a diff confined to
-    phase_lod costs only the LOD step.  Returns None when the change can't be
-    attributed -- shared helpers, main(), module scope, or a brand-new file --
-    in which case the caller falls back to every step.
-    """
-    if not rev_from:
-        return None
+def _source_at(rev: str, path: str) -> str | None:
+    """`path`'s text at `rev`; None when it does not exist there."""
     try:
-        diff = _run(["diff", "-U0", f"{rev_from}..{rev_to}", "--", "convert.py"])
+        return _run(["show", f"{rev}:{path}"])
     except subprocess.CalledProcessError:
         return None
 
-    steps: set[str] = set()
-    for line in diff.splitlines():
-        if not line.startswith("@@"):
-            continue
-        m = _HUNK_FUNC.match(line)
-        if not m:
-            # Hunk outside any function (imports, constants) -- affects
-            # everything, so don't narrow.
-            return None
-        func = m.group(1)
-        if func in ORCHESTRATION_FUNCS:
-            # main() is argument parsing and phase dispatch.  It decides WHICH
-            # phases run, never what any of them produces, so a change confined
-            # to it costs no re-conversion.
-            #
-            # It used to fall through to "cannot attribute" -> every step, which
-            # made any CLI-plumbing commit (a new flag, the per-step state
-            # recording) demand a full multi-hour reconversion.  Measured on
-            # 0.58..0.581: all 16 hunks were in main(), and the release asked
-            # for all twelve steps when only Meshes and Scripts had changed.
-            continue
-        mapped = PHASE_STEPS.get(func)
-        if mapped is None:
-            # A shared helper or an unknown function -- genuinely unattributable.
-            return None
-        steps.update(mapped)
 
-    # An EMPTY set is a real answer here, not a failure: it means every hunk
-    # was orchestration, which costs nothing to re-run.  Returning None for it
-    # would resurrect the all-twelve-steps bug this function exists to avoid.
+# ---------------------------------------------------------------------------
+# Python structure: which top-level units really changed
+# ---------------------------------------------------------------------------
+
+def _parse(source: str) -> ast.Module:
+    """`ast.parse`, without the SyntaxWarnings an old revision's escapes raise."""
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", SyntaxWarning)
+        return ast.parse(source)
+
+
+def _strip_docstrings(tree: ast.AST) -> ast.AST:
+    """Drop every module, class and function docstring from `tree` in place."""
+    for node in ast.walk(tree):
+        body = getattr(node, "body", None)
+        if (isinstance(node, (ast.Module, ast.ClassDef, ast.FunctionDef,
+                              ast.AsyncFunctionDef))
+                and body and isinstance(body[0], ast.Expr)
+                and isinstance(body[0].value, ast.Constant)
+                and isinstance(body[0].value.value, str)):
+            node.body = body[1:] or [ast.Pass()]
+    return tree
+
+
+def _unit_name(node: ast.stmt) -> str | None:
+    """The name a top-level def, class or single-name assignment binds, else None."""
+    if isinstance(node, (ast.FunctionDef, ast.AsyncFunctionDef, ast.ClassDef)):
+        return node.name
+    targets = getattr(node, "targets", None) or [getattr(node, "target", None)]
+    if isinstance(node, (ast.Assign, ast.AnnAssign)) and len(targets) == 1 \
+            and isinstance(targets[0], ast.Name):
+        return targets[0].id
+    return None
+
+
+def _units(source: str) -> dict[str, tuple[str, bool]] | None:
+    """{unit name: (AST dump, decorated)} for a file's top level; None if unparseable.
+
+    Imports are omitted, and every statement that binds no name is pooled
+    into MODULE_UNIT.
+    """
+    try:
+        tree = _strip_docstrings(_parse(source))
+    except SyntaxError:
+        return None
+    units: dict[str, tuple[str, bool]] = {}
+    loose: list[str] = []
+    for node in tree.body:
+        if isinstance(node, (ast.Import, ast.ImportFrom)):
+            continue
+        name = _unit_name(node)
+        if name is None:
+            loose.append(ast.dump(node))
+        else:
+            units[name] = (ast.dump(node), bool(getattr(node, "decorator_list", ())))
+    units[MODULE_UNIT] = ("\n".join(loose), False)
+    return units
+
+
+def modified_units(path: str, rev_from: str | None, rev_to: str) -> set[str] | None:
+    """Top-level units of a Python file whose code changed; None when not comparable.
+
+    A brand-new undecorated unit is not a change: nothing runs it until a
+    caller changes, and that caller is a change of its own.  Comments,
+    docstrings and imports never count.
+    See: docs/commentary/version_upgrade_planning.md#python-files
+    """
+    if not path.endswith(".py") or not rev_from:
+        return None
+    sources = [_source_at(rev, path) for rev in (rev_from, rev_to)]
+    if None in sources:
+        return None
+    old, new = (_units(s) for s in sources)
+    if old is None or new is None:
+        return None
+    return ({name for name, unit in old.items() if new.get(name) != unit}
+            | {name for name, (_dump, decorated) in new.items()
+               if name not in old and decorated})
+
+
+def _references(node: ast.AST) -> set[str]:
+    """Every bare name `node` loads."""
+    return {n.id for n in ast.walk(node) if isinstance(n, ast.Name)}
+
+
+def _reachable(graph: dict[str, set[str]], start: str) -> set[str]:
+    """`start` plus every top-level unit it references, transitively."""
+    seen, todo = set(), [start]
+    while todo:
+        name = todo.pop()
+        if name not in seen:
+            seen.add(name)
+            todo.extend(graph.get(name, ()))
+    return seen
+
+
+def convert_py_steps(rev_from: str | None, rev_to: str) -> list[str] | None:
+    """Steps a convert.py change stales: each phase_* that reaches a changed unit.
+
+    A changed unit no phase reaches (main, the run and dispatch helpers) is
+    orchestration and costs nothing.  None -- every step -- when the file is
+    new, unparseable, or its loose top-level code changed.
+    See: docs/commentary/version_upgrade_planning.md#convert-py
+    """
+    changed = modified_units("convert.py", rev_from, rev_to)
+    if changed is None or MODULE_UNIT in changed:
+        return None
+    tree = _parse(_source_at(rev_to, "convert.py"))
+    graph = {_unit_name(n): _references(n) for n in tree.body if _unit_name(n)}
+    steps = {step for phase, mapped in PHASE_STEPS.items()
+             if _reachable(graph, phase) & changed for step in mapped}
     return sorted(steps)
+
+
+def inert_paths(paths: list[str], rev_from: str | None, rev_to: str) -> set[str]:
+    """Python files among `paths` whose change modified no top-level unit."""
+    return {p for p in paths if p != "convert.py"
+            and modified_units(p, rev_from, rev_to) == set()}
+
+
+# ---------------------------------------------------------------------------
+# Paths to steps
+# ---------------------------------------------------------------------------
+
+def rule_for(path: str) -> list[str] | None:
+    """The steps RULES maps `path` to (first match wins); None when no rule matches."""
+    p = path.replace("\\", "/")
+    return next((mapped for pattern, mapped in RULES if re.search(pattern, p)), None)
+
+
+def _forces_all(mapped: list[str], convert_steps: list[str] | None) -> bool:
+    """True when a rule's result means every step."""
+    return "ALL" in mapped or ("CONVERT" in mapped and convert_steps is None)
+
+
+def all_steps_causes(paths: list[str], convert_steps: list[str] | None) -> list[str]:
+    """The paths that forced every step, for the notes to name."""
+    return [p for p in paths
+            if (mapped := rule_for(p)) is not None and _forces_all(mapped, convert_steps)]
+
+
+def _rule_steps(mapped: list[str], convert_steps: list[str] | None) -> list[str]:
+    """The concrete steps one rule's result stands for."""
+    if _forces_all(mapped, convert_steps):
+        return STEP_ORDER
+    if "CONVERT" in mapped:
+        return convert_steps
+    return [] if "GUI" in mapped else mapped
+
+
+def _with_packaging(steps: set[str]) -> list[str]:
+    """`steps` plus the packaging they imply, in GUI order."""
+    if steps - STANDALONE_STEPS:
+        steps |= set(PACKAGING_STEPS)
+    if LOD_PRODUCING_STEP in steps:
+        steps.add(LOD_PACKAGING_STEP)
+    return [s for s in STEP_ORDER if s in steps]
 
 
 def steps_for_paths(paths: list[str],
@@ -319,100 +345,83 @@ def steps_for_paths(paths: list[str],
                     ) -> tuple[list[str], list[str], bool]:
     """→ (ordered steps to re-run, paths no rule matched, gui_only_change).
 
-    `convert_steps` is the per-phase attribution of a convert.py change from
-    `convert_py_steps`; None means "couldn't narrow it", i.e. every step.
-
-    `gui_only_change` is True when the GUI itself changed but nothing that
-    alters conversion output did -- the user needs a fresh GUI, not a re-run.
-    Unrecognised paths select no steps and are returned separately.
+    `convert_steps` is `convert_py_steps`'s answer; None means every step.
+    `gui_only_change` is True when the GUI changed but no conversion output did.
     """
     steps: set[str] = set()
     unmatched: list[str] = []
     gui_touched = False
-    run_all = False
-
     for path in paths:
-        p = path.replace("\\", "/")
-        matched = False
-        for pattern, mapped in RULES:
-            if re.search(pattern, p):
-                matched = True
-                if "ALL" in mapped:
-                    run_all = True
-                elif "GUI" in mapped:
-                    gui_touched = True
-                elif "CONVERT" in mapped:
-                    if convert_steps is None:
-                        run_all = True
-                    else:
-                        steps.update(convert_steps)
-                else:
-                    steps.update(mapped)
-                break
-        if not matched:
-            unmatched.append(p)
+        mapped = rule_for(path)
+        if mapped is None:
+            unmatched.append(path.replace("\\", "/"))
+            continue
+        gui_touched |= "GUI" in mapped
+        steps.update(_rule_steps(mapped, convert_steps))
+    return _with_packaging(steps), unmatched, (gui_touched and not steps)
 
-    if run_all:
-        steps.update(STEP_ORDER)
 
-    if steps - STANDALONE_STEPS:
-        steps.update(PACKAGING_STEPS)
+# ---------------------------------------------------------------------------
+# Notes
+# ---------------------------------------------------------------------------
 
-    if LOD_PRODUCING_STEP in steps:
-        steps.add(LOD_PACKAGING_STEP)
+def _commit_lines(rev_from: str | None, commits: list[tuple[str, str]]) -> list[str]:
+    """The notes' header block listing each commit."""
+    count = f"{len(commits)} commit{'' if len(commits) == 1 else 's'}"
+    head = f"Changes since {rev_from} ({count}):" if rev_from else f"Initial release ({count}):"
+    body = [f"  {sha}  {subject}" for sha, subject in commits] or ["  (no commits)"]
+    return [head, "", *body, ""]
 
-    ordered = [s for s in STEP_ORDER if s in steps]
-    return ordered, unmatched, (gui_touched and not steps)
+
+def _empty_checklist_line(gui_only: bool, unmatched: list[str]) -> str:
+    """What the checklist says when no step is owed."""
+    if gui_only:
+        return "  (none -- GUI-only change; relaunch the GUI, no re-run needed)"
+    if unmatched:
+        return "  (none matched -- see the unmapped paths below)"
+    return "  (none -- no conversion code changed)"
+
+
+def _step_lines(steps: list[str], gui_only: bool, unmatched: list[str],
+                causes: list[str]) -> list[str]:
+    """The checklist block that version.py parses back, plus why every step fired."""
+    lines = ["Steps to re-run in the GUI:", ""]
+    lines += [f"  [x] {step}" for step in steps]
+    if not steps:
+        lines.append(_empty_checklist_line(gui_only, unmatched))
+    if causes:
+        lines += ["", "  Every step, because of: " + ", ".join(causes)]
+    return lines
+
+
+def _unmatched_lines(unmatched: list[str]) -> list[str]:
+    """The trailing block listing paths no rule covers, capped at 20."""
+    uniq = sorted(set(unmatched))
+    if not uniq:
+        return []
+    more = [f"  ... and {len(uniq) - 20} more"] if len(uniq) > 20 else []
+    return ["", "Unmapped paths (no step selected -- judge for yourself, and "
+            "add a rule in tools/release/release_notes.py):",
+            *[f"  {p}" for p in uniq[:20]], *more]
 
 
 def build_notes(tag: str | None, rev_from: str | None, rev_to: str) -> str:
-    commits = commits_between(rev_from, rev_to)
+    """The full tag message: title, commit list, step checklist, unmapped paths."""
     paths = changed_files(rev_from, rev_to)
-    steps, unmatched, gui_only = steps_for_paths(
-        paths, convert_py_steps(rev_from, rev_to))
-
-    lines: list[str] = []
-    lines.append(f"Release {tag}" if tag else "Release notes")
-    lines.append("")
-
-    if rev_from:
-        lines.append(f"Changes since {rev_from} ({len(commits)} commit"
-                     f"{'' if len(commits) == 1 else 's'}):")
-    else:
-        lines.append(f"Initial release ({len(commits)} commits):")
-    lines.append("")
-    for sha, subject in commits:
-        lines.append(f"  {sha}  {subject}")
-    if not commits:
-        lines.append("  (no commits)")
-    lines.append("")
-
-    lines.append("Steps to re-run in the GUI:")
-    lines.append("")
-    if steps:
-        for step in steps:
-            lines.append(f"  [x] {step}")
-    elif gui_only:
-        lines.append("  (none -- GUI-only change; relaunch the GUI, no re-run needed)")
-    elif unmatched:
-        lines.append("  (none matched -- see the unmapped paths below)")
-    else:
-        lines.append("  (none -- no conversion code changed)")
-
-    if unmatched:
-        uniq = sorted(set(unmatched))
-        lines.append("")
-        lines.append("Unmapped paths (no step selected -- judge for yourself, and "
-                     "add a rule in tools/release/release_notes.py):")
-        for p in uniq[:20]:
-            lines.append(f"  {p}")
-        if len(uniq) > 20:
-            lines.append(f"  ... and {len(uniq) - 20} more")
-
+    inert = inert_paths(paths, rev_from, rev_to)
+    paths = [p for p in paths if p not in inert]
+    convert_steps = convert_py_steps(rev_from, rev_to)
+    steps, unmatched, gui_only = steps_for_paths(paths, convert_steps)
+    lines = [f"Release {tag}" if tag else "Release notes", ""]
+    lines += _commit_lines(rev_from, commits_between(rev_from, rev_to))
+    lines += _step_lines(steps, gui_only, unmatched,
+                         all_steps_causes(paths, convert_steps))
+    lines += _unmatched_lines(unmatched)
     return "\n".join(lines) + "\n"
 
 
 def main() -> int:
+    """CLI entry point: print or write the notes for --from..--to."""
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--from", dest="rev_from", default=None,
@@ -427,7 +436,6 @@ def main() -> int:
 
     rev_from = args.rev_from if args.rev_from is not None else previous_tag()
     notes = build_notes(args.tag, rev_from, args.rev_to)
-
     if args.output:
         Path(args.output).write_text(notes, encoding="utf-8")
         print(f"Wrote {args.output}")

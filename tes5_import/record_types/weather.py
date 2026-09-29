@@ -305,8 +305,8 @@ _TES5_CLOUD_LAYERS = 32
 #: Below _NAM0_KNEE an authored color passes through; 255 maps to the ceiling.
 _NAM0_KNEE = 160.0
 _NAM0_KNEE_CEILING = 200.0
-_NAM0_SUN_KNEE = 30.0
-_NAM0_SUN_CEILING = 60.0
+_NAM0_SUN_KNEE = 60.0
+_NAM0_SUN_CEILING = 120.0
 _T5_SUN = 5
 _T5_AMBIENT = 3
 _T5_SUNLIGHT = 4
@@ -397,6 +397,47 @@ def _knee_rgb(r, g, b, knee: float, ceiling: float) -> tuple:
             min(255, round(b * s)))
 
 
+#: Weight of the unbloomed scene in Oblivion's HDR004 composite (`def c2 ... 0.5`).
+_OB_HDR_SCENE_WEIGHT = 0.5
+
+#: TES5 NAM0 slots drawn straight onto the dome (Sky-Upper, Sky-Lower, Horizon).
+_HDR_HUE_SLOTS = (0, 7, 8)
+
+#: How far the baked hue moves a color from authored (0 = authored, 1 = full bake).
+_HDR_HUE_STRENGTH = 0.5
+
+
+def _oblivion_hdr(rec: dict):
+    """(BrightClamp, BrightScale, TargetLum) of a weather authoring Oblivion HDR, else None."""
+    if 'HNAM.TargetLum' not in rec:
+        return None
+    return (get_float(rec, 'HNAM.BrightClamp'), get_float(rec, 'HNAM.BrightScale'),
+            get_float(rec, 'HNAM.TargetLum'))
+
+
+def _hdr_hue(rgb: tuple, hdr) -> tuple:
+    """The hue Oblivion's HDR composite showed for a flat sky color, at authored luminance.
+
+    shown = 0.5*c + TargetLum * max(c - BrightClamp, 0) * BrightScale per channel.
+    Exposure scales both terms, so only the hue is carried over; a color no
+    channel of which crosses BrightClamp comes back exactly as authored.
+
+    See: docs/commentary/tes5_import_weather.md#baked-hdr-hue
+    """
+    if hdr is None:
+        return tuple(rgb)
+    clamp, scale, target = hdr
+    c = [v / 255.0 for v in rgb]
+    bloom = [max(v - clamp, 0.0) * scale * target for v in c]
+    if max(bloom) <= 0.0:
+        return tuple(rgb)
+    shown = [_OB_HDR_SCENE_WEIGHT * v + b for v, b in zip(c, bloom)]
+    k = _lum(*c) / _lum(*shown)
+    k = min(k, 1.0 / max(shown))
+    return tuple(min(255, round(255.0 * (a + (s * k - a) * _HDR_HUE_STRENGTH)))
+                 for a, s in zip(c, shown))
+
+
 def _normalize_rgb(t5_slot: int, time: int, r: int, g: int, b: int) -> tuple:
     """Scale an RGB triple so its luminance matches `target`, preserving hue.
 
@@ -429,6 +470,7 @@ def _wthr_nam0(rec: dict) -> bytes:
     if not raw or len(raw) < _SRC_NAM0_SIZE:
         return bytes(out)
 
+    hdr = _oblivion_hdr(rec)
     for t5_slot, t4_slot in enumerate(_NAM0_TES5_FROM_TES4):
         if t4_slot is None:
             continue
@@ -437,6 +479,8 @@ def _wthr_nam0(rec: dict) -> bytes:
         for time in range(4):
             dst = (t5_slot * 4 + time) * 4
             r, g, b = _src_rgb(raw, t4_slot, time)
+            if t5_slot in _HDR_HUE_SLOTS:
+                r, g, b = _hdr_hue((r, g, b), hdr)
             if t5_slot in _NAM0_VANILLA_LUM:
                 r, g, b = _normalize_rgb(t5_slot, time, r, g, b)
             out[dst:dst + 3] = bytes((r, g, b))
@@ -570,12 +614,13 @@ def _wthr_cloud_arrays(rec: dict, layer_plan) -> bytes:
     qnam = bytearray(b'\x7F' * _TES5_CLOUD_LAYERS)
 
     raw = _src_nam0(rec)
+    hdr = _oblivion_hdr(rec)
     pnam = bytearray(_TES5_CLOUD_LAYERS * 4 * 4)
     alphas = [0.0] * (_TES5_CLOUD_LAYERS * 4)
 
     def tint(t4_slot, time):
-        """The TES4 cloud tint, highlight-compressed like the sky slots (no time axis)."""
-        r, g, b = _src_rgb(raw, t4_slot, time)
+        """The TES4 cloud tint in its HDR-shown hue, highlight-compressed."""
+        r, g, b = _hdr_hue(_src_rgb(raw, t4_slot, time), hdr)
         return _knee_rgb(r, g, b, _PNAM_KNEE, _PNAM_KNEE_CEILING)
 
     for layer, texture, layer_alphas in layer_plan:

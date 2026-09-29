@@ -150,13 +150,8 @@ _HANDLERS = {'add_vert': _add_vert,
              'add_link': _add_link, 'del_link': _del_link}
 
 
-def replay(verts, tris, ops, doors=(), links=()):
-    """`(verts, tris, doors, links)` after applying `ops` to a mesh.
-
-    Deletions tombstone and compact only at the end, so every op addresses
-    triangles by their ORIGINAL index -- what the page and changelist speak.
-    A link whose triangle was deleted is dropped with it.
-    """
+def _play(verts, tris, ops, doors=(), links=()):
+    """The replay state after `ops`: deleted triangles tombstoned as None, nothing compacted."""
     state = {
         'verts': [list(p) for p in verts],
         'tris': [list(t[:3]) for t in tris],
@@ -167,12 +162,68 @@ def replay(verts, tris, ops, doors=(), links=()):
         fn = _HANDLERS.get(op.get('op'))
         if fn is not None:
             fn(op, state)
+    return state
+
+
+def replay(verts, tris, ops, doors=(), links=()):
+    """`(verts, tris, doors, links)` after applying `ops` to a mesh.
+
+    Deletions tombstone and compact only at the end, so every op addresses
+    triangles by their ORIGINAL index -- what the page and changelist speak.
+    A link whose triangle was deleted is dropped with it.
+    """
+    state = _play(verts, tris, ops, doors, links)
     keep = [i for i, t in enumerate(state['tris']) if t is not None]
     remap = {old: new for new, old in enumerate(keep)}
     return (state['verts'], [state['tris'][i] for i in keep],
             sorted(remap[i] for i in state['doors'] if i in remap),
             sorted((remap[a], remap[b]) for (a, b) in state['links']
                    if a in remap and b in remap))
+
+
+#: Op fields that name a TRIANGLE; every other index an op carries is a vertex.
+TRI_FIELDS = ('tri', 'up', 'down')
+
+
+def _survivors(verts, tris, ops):
+    """`(surviving replay triangle indices, replay triangle count)` after `ops`."""
+    played = _play(verts, tris, ops)['tris']
+    return [i for i, t in enumerate(played) if t is not None], len(played)
+
+
+def rebase_ops(verts, tris, ops, new_ops):
+    """`ops` then `new_ops`, where `new_ops` were made over the RESULT of `ops`.
+
+    Result vertices ARE replay vertices -- replay never compacts them -- so
+    only triangle indices move: result triangle j is the j-th survivor, and a
+    triangle added after the result follows the replay's own list.
+
+    See: docs/commentary/tes5_import_navmesh.md#editing-a-saved-result
+    """
+    live, count = _survivors(verts, tris, ops)
+
+    def tri(j):
+        """Replay index of result triangle `j`."""
+        return live[j] if j < len(live) else count + (j - len(live))
+    out = list(ops or ())
+    for op in new_ops or ():
+        out.append({k: (tri(int(v)) if k in TRI_FIELDS else v)
+                    for k, v in op.items()})
+    return out
+
+
+def result_marks(verts, tris, ops, result):
+    """`(doors, links)` in base indices that replaying `ops` turns back into `result`'s own.
+
+    A correction stores no base doors or links.  Mapping the result's back
+    through the survivors reproduces them: set_door and link ops are
+    idempotent, so the last one on a triangle decides either way.
+    """
+    live, _count = _survivors(verts, tris, ops)
+    doors = [live[j] for j in result.get('doors', ()) if j < len(live)]
+    links = [(live[a], live[b]) for (a, b) in result.get('links', ())
+             if a < len(live) and b < len(live)]
+    return doors, links
 
 
 def make_entry(plugin, cell, verts, tris, ops, doors=(), links=()):

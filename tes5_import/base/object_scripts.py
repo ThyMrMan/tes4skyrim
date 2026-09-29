@@ -22,6 +22,7 @@ converters then splice the VMAD in right after EDID (Skyrim order: EDID VMAD OBN
 import re
 import struct
 
+from script_convert.assemble import variable_properties
 from script_convert.converter import ScriptConverter, sctx_onactivate_consumes
 from script_convert.constants import (safe_property_name, papyrus_script_name,
                                       resolve_property_formid,
@@ -176,7 +177,7 @@ def attach_scripts_to_record(record_fid: int, scris) -> int:
         if entry is None:
             continue
         seen.add(scri)
-        edid, sctx, extends = entry
+        edid, sctx, extends, scros = entry
         script_name = papyrus_script_name(edid or f'Script_{scri}')
 
         memo = _PLAN_CTX['props_memo']
@@ -186,7 +187,7 @@ def attach_scripts_to_record(record_fid: int, scris) -> int:
                 obj_props = _resolve_props(sctx, edid, extends,
                                            _PLAN_CTX['xref'],
                                            _PLAN_CTX['fid_to_edid'],
-                                           _PLAN_CTX['offset'])
+                                           _PLAN_CTX['offset'], scros)
             except Exception:
                 obj_props = {}
             memo[scri] = obj_props
@@ -218,8 +219,14 @@ def _remap(fid: int, offset: int) -> int:
     return remap_formid(fid, offset)
 
 
+def _scro_forms(rec: dict) -> frozenset:
+    """Low 24 bits of every form the compiled script references (its SCRO list)."""
+    return frozenset(int(v, 16) & 0x00FFFFFF for k, v in rec.items()
+                     if k.startswith('SCRO[') and v)
+
+
 def _collect_scpts(by_type: dict, xref, master_export: dict = None) -> dict:
-    """SCPT FormID -> (EditorID, SCTX source, extends class).
+    """SCPT FormID -> (EditorID, SCTX source, extends class, SCRO forms).
 
     `master_export` is the MASTERS' export records and is REQUIRED for a plugin
     with masters: a dependent plugin routinely attaches one of ITS MASTER'S
@@ -246,7 +253,7 @@ def _collect_scpts(by_type: dict, xref, master_export: dict = None) -> dict:
         if not fid or not sctx or not sctx.strip():
             continue
         scpt_by_fid[fid] = (rec.get('EditorID', ''), sctx,
-                            xref.get_extends_class(fid))
+                            xref.get_extends_class(fid), _scro_forms(rec))
     return scpt_by_fid
 
 
@@ -293,9 +300,10 @@ def build_quest_script_plan(by_type: dict, xref, fid_to_edid: dict,
 def _script_plan(scpt_fid: str, scpt_by_fid: dict, xref, fid_to_edid: dict,
                  offset: int) -> tuple:
     """(script_name, bound props) for one indexed SCPT."""
-    edid, sctx, extends = scpt_by_fid[scpt_fid]
+    edid, sctx, extends, scros = scpt_by_fid[scpt_fid]
     try:
-        props = _resolve_props(sctx, edid, extends, xref, fid_to_edid, offset)
+        props = _resolve_props(sctx, edid, extends, xref, fid_to_edid, offset,
+                               scros)
     except Exception:
         props = {}
     return papyrus_script_name(edid or f'Script_{scpt_fid}'), props
@@ -360,10 +368,11 @@ def build_magic_effect_script_plan(by_type: dict, xref, fid_to_edid: dict,
 
     from .writer import pack_subrecord
     for scpt_fid in sorted(wanted):
-        edid, sctx, extends = scpt_by_fid[scpt_fid]
+        edid, sctx, extends, scros = scpt_by_fid[scpt_fid]
         script_name = papyrus_script_name(edid or f'Script_{scpt_fid}')
         try:
-            props = _resolve_props(sctx, edid, extends, xref, fid_to_edid, offset)
+            props = _resolve_props(sctx, edid, extends, xref, fid_to_edid,
+                                   offset, scros)
         except Exception:
             props = {}
         _MAGIC_EFFECT_VMAD[scpt_fid] = pack_subrecord(
@@ -429,7 +438,7 @@ def build_object_script_plan(by_type: dict, xref, fid_to_edid: dict,
                 continue
             rec_fid = _remap(raw_fid, offset)
 
-            edid, sctx, extends = scpt_by_fid[scri]
+            edid, sctx, extends, scros = scpt_by_fid[scri]
             script_name = papyrus_script_name(edid or f'Script_{scri}')
 
             # Remember bases whose script reads the enable parent, so
@@ -463,7 +472,7 @@ def build_object_script_plan(by_type: dict, xref, fid_to_edid: dict,
             if obj_props is None:
                 try:
                     obj_props = _resolve_props(sctx, edid, extends, xref,
-                                               fid_to_edid, offset)
+                                               fid_to_edid, offset, scros)
                 except Exception:
                     obj_props = {}
                 props_memo[scri] = obj_props
@@ -526,11 +535,11 @@ def build_player_alias_plan(by_type: dict, xref, fid_to_edid: dict,
         scri = rec.get('SCRI', '')
         if not scri or scri not in scpt_by_fid:
             continue
-        edid, sctx, _extends = scpt_by_fid[scri]
+        edid, sctx, _extends, scros = scpt_by_fid[scri]
         script_name = papyrus_script_name(edid or f'Script_{scri}')
         try:
             props = _resolve_props(sctx, edid, PLAYER_ALIAS_EXTENDS, xref,
-                                   fid_to_edid, offset)
+                                   fid_to_edid, offset, scros)
         except Exception:
             props = {}
         _PLAYER_ALIAS_SCRIPTS.append((script_name, props))
@@ -719,12 +728,16 @@ def _relocate_actor_scripts_to_refs(by_type: dict, offset: int,
 
 
 def _resolve_props(sctx: str, edid: str, extends: str, xref,
-                   fid_to_edid: dict, offset: int) -> dict:
+                   fid_to_edid: dict, offset: int, scros: frozenset) -> dict:
     """Run the converter to learn the script's property refs, then bind the
     Object-typed ones to their target record FormIDs (output space).
 
+    Candidates are the body's property table plus the declared variables; a
+    declared variable binds a same-named form only when `scros` lists it.
     Value-typed properties (Int/Float/Bool locals) are left unbound — the engine
     defaults them to zero, which matches the TES4 script's initial state.
+
+    See: docs/commentary/script_convert.md#local-shadows-form
     """
     conv = ScriptConverter(xref)
     name = safe_property_name(edid or 'Script')
@@ -732,8 +745,11 @@ def _resolve_props(sctx: str, edid: str, extends: str, xref,
 
     well_known = WELL_KNOWN_PROPERTIES
 
+    candidates = {p.lower(): (p, t) for p, t in conv.get_property_refs().items()}
+    candidates.update((p.lower(), (p, t))
+                      for p, t in variable_properties(conv, conv._tree))
     obj_props: dict[str, int] = {}
-    for pname, ptype in conv.get_property_refs().items():
+    for pname, ptype in candidates.values():
         if ptype in _VALUE_TYPES:
             continue
         safe = safe_property_name(pname)
@@ -765,6 +781,9 @@ def _resolve_props(sctx: str, edid: str, extends: str, xref,
             continue
         fid_hex = resolve_property_formid(xref, pname)
         if not fid_hex:
+            continue
+        if low in conv.sc.local_vars and \
+                int(fid_hex, 16) & 0x00FFFFFF not in scros:
             continue
         # A reference-typed property naming a BASE means the placed instance
         # (Oblivion resolves `ArenaMouth.Say ...` through the NPC_ EditorID);

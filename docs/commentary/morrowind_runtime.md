@@ -2809,9 +2809,13 @@ rows `index=attribute|specialization|use0,use1,use2,use3`, for the skill-use
 credit a persuasion pays.
 
 The `player` NPC_ record -- Morrowind's own chargen actor -- is in the table
-too, and it is where the PLAYER's Personality and Luck come from: Skyrim has
+too, and it is where the PLAYER's Personality and Luck START: Skyrim has
 neither attribute, and that record is the only authored value a TES3 player
-ever starts with. Speechcraft and Mercantile both read Skyrim's `Speechcraft`
+ever starts with. Both sides read them through the stat store
+(`ActorAttribute`), so a script's `SetPersonality`/`ModLuck` moves persuasion
+too; the actor line's own column answers only when the store reads 0, which
+is a sidecar older than its attribute column. See
+[the character sheet plan](../plans/character_sheet.md#bug-persuasion). Speechcraft and Mercantile both read Skyrim's `Speechcraft`
 actor value (the importer folds TES4 Mercantile onto it), level reads
 `Actor.GetLevel`, and the fatigue term reads `GetActorValuePercentage("Stamina")`
 for both sides.
@@ -2880,9 +2884,12 @@ commands to 307, and the stubbed call sites from 4,045 to 3,581.
   attributes and 27 skills comma-joined in TES3's own order.
 - The weapon and armor folds are the import's (`MW_SKILL_TO_TES4` then
   `TES4_SKILL_TO_TES5`), so a command reads the value the converted NPC was
-  given. Two depart from it on purpose: Enchant is Skyrim's Enchanting, and
-  Mercantile is Speechcraft, which is what persuasion and the fare formula
-  already read.
+  given; Enchant is Skyrim's Enchanting on both sides.
+- A skill Skyrim split in two reads the **higher** of both and writes the
+  first: Long Blade, Axe and Blunt Weapon read One-Handed/Two-Handed, Medium
+  Armor Heavy/Light Armor, and Spear reads Two-Handed (spears export as
+  two-handed blades). Mysticism reads Alteration, where its spells convert. See
+  [the character sheet plan](../plans/character_sheet.md#bug-blade-blunt).
 - The magic-effect family is typed `long` by the compiler, so it pushes and
   pops integers.
 

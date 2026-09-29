@@ -32,7 +32,7 @@ import time
 from asset_convert.sources.bsa_extract_morrowind import (is_morrowind_bsa,
                                                          read_index,
                                                          iter_bsa)
-from asset_convert.sources.source_registry import asset_root
+from asset_convert.sources.source_registry import add_directory, asset_root
 from core.plugin_masters import masters_from_export_header
 from papyrus_compile import phase_compile
 from output_layout import (DEFAULT_OUTPUT, plugin_esm, plugin_out_root,
@@ -325,15 +325,17 @@ def build_patch(data_dir: str, export_dir: str, morroblivion_exports,
     `morroblivion_exports` are the converted Morroblivion plugins whose records
     define the gap: anything they already supply is not filled. `out_root` is
     the output directory the finished plugin and its assets land in.
+    `data_dir` is registered so later conversions find vanilla meshes.
 
     `ok` means the plugin FILE exists: a build that wrote records and assets
-    but no plugin is a failure, not a success.
+    but no plugin is a failure.
     """
     start = time.time()
     out_root = out_root or DEFAULT_OUTPUT
     esms, missing = source_paths(data_dir, PATCH_SOURCES)
     if missing:
         return {'ok': False, 'error': _missing_message(data_dir, missing)}
+    add_directory(export_dir, data_dir)
     if not morroblivion_exports:
         return {'ok': False, 'error': _no_morroblivion_message()}
 

@@ -1,4 +1,4 @@
-"""The dark top menu bar: Plugins, Settings, Build, Help.
+"""The dark top menu bar: Plugins, Settings, Build, Navmesh, Help.
 
 Windows renders a NATIVE (white) bar for `root.configure(menu=...)` and ignores
 tk colors on it, so the bar is built from dark Menubuttons whose dropdown
@@ -17,9 +17,6 @@ launch would stall startup and do it unasked.
 See: docs/reference/pipeline.md#configuration
 """
 
-import os
-import subprocess
-import sys
 import threading
 import tkinter as tk
 from tkinter import ttk
@@ -36,6 +33,7 @@ from core.gui.config import (
     PACKING_STEPS,
     REPO_ROOT,
     LOD_DETAIL_CONFIG_KEY,
+    NAVMESH_GENERATOR_CONFIG_KEY,
     WINDING_AUTO,
     WINDING_CONFIG_KEY,
     WINDING_OFF,
@@ -50,9 +48,11 @@ from core.gui.menubar_behavior import (add_tipped_command, enable_hover_switch,
                                        enable_tips)
 from core.gui.morrowind import add_source_menu
 from core.gui.selection import runnable
-from core.gui.widgets import open_url
-from core.subprocess_flags import POPEN_FLAGS
+from core.navmesh_options import CORRIDOR, LATTICE
+from core.gui import navmesh_editor
+from core.gui.widgets import open_folder, open_url
 from core.worker_budget import worker_count
+from tools.navmesh.navmesh_cache import DOWNLOAD_CONFIG_KEY
 
 DISCORD_URL = "https://discord.gg/NTkCDfYUru"
 YOUTUBE_URL = "https://www.youtube.com/@bryanthinton"
@@ -87,7 +87,7 @@ def _add_cache_download(app, settings_menu) -> None:
     """
     def _changed():
         """Persist the new state."""
-        save_setting("navmeshCacheDownload", bool(app.cache_dl_var.get()))
+        save_setting(DOWNLOAD_CONFIG_KEY, bool(app.cache_dl_var.get()))
 
     settings_menu.add_checkbutton(
         label="Download navmesh cache", variable=app.cache_dl_var,
@@ -139,6 +139,22 @@ def _add_winding_menu(app, settings_menu, menu_opts) -> None:
                               menu=winding_menu)
 
 
+def _add_navmesh_menu(app, settings_menu, menu_opts) -> None:
+    """Settings > Navmesh generator: Corridor / Lattice, applied on the next import.
+
+    See: docs/plans/navmesh_lattice.md#measured-against-the-corridor-generator
+    """
+    def _changed():
+        """Persist the chosen generator."""
+        save_setting(NAVMESH_GENERATOR_CONFIG_KEY, app.navmesh_gen_var.get())
+
+    gen_menu = tk.Menu(settings_menu, **menu_opts)
+    for name, label in ((CORRIDOR, "Corridor  (default)"), (LATTICE, "Lattice  (experimental)")):
+        gen_menu.add_radiobutton(label=label, value=name,
+                                 variable=app.navmesh_gen_var, command=_changed)
+    settings_menu.add_cascade(label="Navmesh generator", menu=gen_menu)
+
+
 def _add_lod_detail_menu(app, settings_menu, menu_opts) -> None:
     """Settings > Distant LOD detail: a radio group over the detail presets.
 
@@ -160,12 +176,13 @@ def _add_lod_detail_menu(app, settings_menu, menu_opts) -> None:
 
 
 def _build_settings_menu(app, menubutton, menu_opts) -> None:
-    """Settings: workers, cache download, packing, winding, LOD and Morrowind."""
+    """Settings: workers, cache download, packing, winding, navmesh, LOD and Morrowind."""
     settings_menu = menubutton("Settings")
     _add_workers_menu(app, settings_menu, menu_opts)
     _add_cache_download(app, settings_menu)
     _add_pack_default(app, settings_menu)
     _add_winding_menu(app, settings_menu, menu_opts)
+    _add_navmesh_menu(app, settings_menu, menu_opts)
     _add_lod_detail_menu(app, settings_menu, menu_opts)
     add_source_menu(settings_menu, menu_opts, app.cfg, load_config,
                     save_config, EXPORT_DIR, app.out_root)
@@ -290,24 +307,6 @@ def _check_dependencies(app) -> None:
     app.info("Check Dependencies", _dependency_report(preflight, ok, bad))
 
 
-def _open_folder(app, path: str, what: str) -> None:
-    """Reveal `path` in the system file manager."""
-    if not path or not os.path.isdir(path):
-        app.info(f"Open {what}",
-                 f"{what} does not exist yet:\n\n{path or '(not set)'}\n\n"
-                 "Run a conversion first.")
-        return
-    try:
-        if sys.platform == "win32":
-            os.startfile(path)
-        elif sys.platform == "darwin":
-            subprocess.Popen(["open", path], **POPEN_FLAGS)
-        else:
-            subprocess.Popen(["xdg-open", path], **POPEN_FLAGS)
-    except OSError as exc:
-        app.info(f"Open {what}", f"Could not open:\n\n{path}\n\n{exc}")
-
-
 def _add_global_action(app, menu, key: str) -> None:
     """One GLOBAL_ACTIONS entry, resolving `app.run_global_action` at click."""
     _key, label, tip, _short, _row = next(a for a in GLOBAL_ACTIONS
@@ -330,12 +329,12 @@ def _build_plugins_menu(app, menubutton, menu_opts, mods_ui) -> None:
     plugins_menu.add_separator()
     add_tipped_command(
         plugins_menu, "Open Output Folder",
-        lambda: _open_folder(app, app.output_var.get().strip(),
-                             "Output folder"),
+        lambda: open_folder(app, app.output_var.get().strip(),
+                            "Output folder"),
         "Open the folder converted plugins and finished mods are written to")
     add_tipped_command(
         plugins_menu, "Open Logs Folder",
-        lambda: _open_folder(app, str(REPO_ROOT / "logs"), "Logs folder"),
+        lambda: open_folder(app, str(REPO_ROOT / "logs"), "Logs folder"),
         "Open the folder holding each run's log files")
 
 
@@ -493,6 +492,7 @@ def build_menubar(app):
     _build_plugins_menu(app, _menubutton, menu_opts, mods_ui)
     _build_settings_menu(app, _menubutton, menu_opts)
     _build_build_menu(app, _menubutton, menu_opts)
+    navmesh_editor.build_menu(app, _menubutton)
     _build_help_menu(app, _menubutton, menu_opts)
     enable_hover_switch(app.root, bar)
     return mods_ui

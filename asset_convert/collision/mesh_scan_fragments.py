@@ -23,11 +23,16 @@ See: docs/commentary/tes5_import_pipeline.md#producer-emitted-mesh-entries
 import json
 import os
 
+from asset_convert.collision.collision_extract import COLLISION_SCHEMA_VERSION
+
 #: Directory name under the export asset root holding the fragment files.
 FRAGMENT_DIRNAME = 'mesh_scan_fragments'
 
 #: Bumped when a fragment record gains a field or a field changes meaning.
 FRAGMENT_VERSION = 1
+
+#: First line of every fragment; a collision-extraction change strands older soups.
+_HEADER = {'v': FRAGMENT_VERSION, 'c': COLLISION_SCHEMA_VERSION}
 
 #: [open fragment file, directory] for THIS process.
 _HANDLE: list = [None, None]
@@ -66,7 +71,7 @@ def _writer():
     fresh = not os.path.exists(path)
     fh = open(path, 'a', encoding='utf-8')
     if fresh:
-        fh.write(json.dumps({'v': FRAGMENT_VERSION}) + '\n')
+        fh.write(json.dumps(_HEADER) + '\n')
     _HANDLE[0] = fh
     return fh
 
@@ -110,13 +115,12 @@ def record_removal(rel_key: str) -> None:
 
 def _read_fragment(path: str, bounds: dict, collision: dict,
                    aliases: dict, removed: set) -> None:
-    """Fold one fragment file into the accumulating tables."""
+    """Fold one fragment file into the accumulating tables; skip one from another version."""
     with open(path, encoding='utf-8') as fh:
-        header = fh.readline()
         try:
-            if int(json.loads(header).get('v', 0)) != FRAGMENT_VERSION:
+            if json.loads(fh.readline()) != _HEADER:
                 return
-        except (ValueError, AttributeError):
+        except ValueError:
             return
         for line in fh:
             line = line.strip()

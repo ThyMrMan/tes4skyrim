@@ -25,6 +25,10 @@ _REGISTRY_KEYS = {
         r"SOFTWARE\WOW6432Node\Bethesda Softworks\Skyrim Special Edition",
         r"SOFTWARE\Bethesda Softworks\Skyrim Special Edition",
     ),
+    "skyrimvr": (
+        r"SOFTWARE\WOW6432Node\Bethesda Softworks\Skyrim VR",
+        r"SOFTWARE\Bethesda Softworks\Skyrim VR",
+    ),
 }
 
 

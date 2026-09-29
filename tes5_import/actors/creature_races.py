@@ -41,6 +41,7 @@ from ..overrides.adoption import generated_formid
 from ..record_types.equipment import attack_spell
 from .creature_projects import (bodies_of, folder_of,
                                 folders_built_by_master, load_projects)
+from .creature_speakers import talking_creatures
 from .creature_unarmed import build_unarmed_abilities, race_unarmed_damage
 from .creature_unarmed import reset as reset_unarmed_abilities
 
@@ -787,6 +788,7 @@ def _creature_equip_flags(recs: list) -> int:
 _TES4_CREA_SWIMS, _TES4_CREA_FLIES, _TES4_CREA_WALKS = 0x10, 0x20, 0x40
 _RACE_SWIMS, _RACE_FLIES, _RACE_WALKS = 0x40, 0x80, 0x100
 _RACE_NO_COMBAT_IN_WATER = 0x800
+_RACE_ALLOW_PC_DIALOGUE = 0x200000
 
 
 def _race_locomotion_flags(recs: list) -> int:
@@ -812,19 +814,24 @@ def _attack_reach(rec: dict) -> int:
     return get_int(rec, 'RNAM.AttackReach', 64) or 64
 
 
-def _race_data(rec: dict, race_recs: list = None, reach: int = None) -> bytes:
+def _race_data(rec: dict, race_recs: list = None, reach: int = None,
+               talks: bool = False) -> bytes:
     """The 164-byte RACE DATA: DogRace template with CREA stat patches.
 
     Starting Health is the flat CREATURE_RACE_BASE_HEALTH, NOT this creature's
     pool: the race is shared by every CREA with the same mesh folder and body
     set, so per-creature health belongs in ACBS.HealthOffset instead (see
     creature_health_offset).  Unarmed reach is `reach`, else `rec`'s own.
+    Allow PC Dialogue is set only when `talks`.
+    See: docs/commentary/tes5_import_actors.md#creature-talk-prompt
     """
     data = bytearray(_RACE_DATA_TEMPLATE)
     flags = struct.unpack_from('<I', data, 32)[0]
     flags &= ~(_RACE_SWIMS | _RACE_FLIES | _RACE_WALKS
-               | _RACE_NO_COMBAT_IN_WATER)
+               | _RACE_NO_COMBAT_IN_WATER | _RACE_ALLOW_PC_DIALOGUE)
     flags |= _race_locomotion_flags(race_recs or [rec])
+    if talks:
+        flags |= _RACE_ALLOW_PC_DIALOGUE
     struct.pack_into('<I', data, 32, flags)
     struct.pack_into('<f', data, 36, float(creature_race_health(rec)))
     # Starting Magicka is 0 for the same shared-race reason as health: the
@@ -934,7 +941,7 @@ def _atkd(damage_mult: float = 1.0, spell: int = 0, chance: float = 1.0,
 def _build_race(writer, rec, folder: str, bodies: list, proj: dict,
                 race_fid: int, skin_fid: int, edid: str, full: str,
                 vnam_flags: int = None, race_recs: list = None,
-                reach: int = None) -> None:
+                reach: int = None, talks: bool = False) -> None:
     subs = b''
     subs += pack_string_subrecord('EDID', edid)
     subs += pack_string_subrecord('FULL', full)
@@ -945,7 +952,7 @@ def _build_race(writer, rec, folder: str, bodies: list, proj: dict,
     subs += pack_subrecord('KSIZ', struct.pack('<I', len(keywords)))
     subs += pack_subrecord('KWDA',
                            b''.join(struct.pack('<I', k) for k in keywords))
-    subs += pack_subrecord('DATA', _race_data(rec, race_recs, reach))
+    subs += pack_subrecord('DATA', _race_data(rec, race_recs, reach, talks))
 
     skeleton = proj['skeleton_nif']
     for marker in ('MNAM', 'FNAM'):
@@ -1134,13 +1141,14 @@ def _race_is_armed(vnam: int) -> bool:
 
 
 def _build_race_chain(writer, rec, folder: str, bodies: list, proj: dict,
-                      key, race_recs: dict) -> tuple:
+                      key, race_recs: dict, talkers: set) -> tuple:
     """Emit the RACE + skin ARMA/ARMO pair for one (folder, bodies) key.
 
     The race takes the founding record's attack reach; every other authored
     reach among the CREA sharing it gets a variant race, identical but for
     that reach, keyed on (key, reach) and sharing the skin.  FormIDs derive
-    from authored data, never walk order.  Returns
+    from authored data, never walk order.  Every race allows PC dialogue when
+    any sharing CREA is in `talkers`.  Returns
     ``(race FormID, {reach: variant race FormID}, VNAM equipment flags)``.
     See: docs/commentary/tes5_import_actors.md#reach-variant-races
     """
@@ -1157,11 +1165,12 @@ def _build_race_chain(writer, rec, folder: str, bodies: list, proj: dict,
                                     'CREA_RACE_REACH', (key, r))
                 for r in sorted({_attack_reach(x) for x in recs})
                 if r != _attack_reach(rec)}
+    talks = any(get_formid(x, 'FormID') in talkers for x in recs)
     for reach, fid in [(None, race_fid)] + sorted(variants.items()):
         suffix = f'Reach{reach}' if reach else ''
         _build_race(writer, rec, folder, bodies, proj, fid, skin_fid,
                     f'TES4{edid_base}Race{suffix}', full,
-                    vnam_flags=vnam, race_recs=recs, reach=reach)
+                    vnam_flags=vnam, race_recs=recs, reach=reach, talks=talks)
     build_unarmed_abilities(writer, key, recs, f'TES4{edid_base}')
     _build_skin(writer, folder, bodies, race_fid, skin_fid,
                 edid_base, proj['body_dir'], list(variants.values()))
@@ -1207,11 +1216,29 @@ def build_creature_races(by_type: dict, writer, export_dir: str,
               'run the creatures step); CREA falls back to race aliasing')
         return
 
-    race_recs = _race_groups(_shared_creatures(by_type, master_export))
-
-    made = {}
+    creatures = _shared_creatures(by_type, master_export)
+    talkers = talking_creatures(creatures, by_type, master_export, export_dir)
     movt_folders = folders_built_by_master(master_export, _PROJECTS,
                                            owner_slot)
+    made = _build_all_races(writer, by_type, _race_groups(creatures), talkers,
+                            movt_folders)
+
+    n_variants = sum(len(v) for _r, v, _n in made.values())
+    n_armed = sum(1 for _r, _v, vnam in made.values() if _race_is_armed(vnam))
+    print(f'  Creature races: {len(made)} generated '
+          f'(+{n_variants} attack-reach variants, {n_armed} weapon-capable, '
+          f'{len(talkers)} talking CREA, '
+          f'{len(_CREA_RACE_MAP)} CREA records mapped, '
+          f'{len(_PROJECTS)} converted projects)')
+
+
+def _build_all_races(writer, by_type: dict, race_recs: dict, talkers: set,
+                     movt_folders: set) -> dict:
+    """Race chain, MOVTs and idles for every own CREA; fills _CREA_RACE_MAP.
+
+    Returns {(folder, bodies): (race FormID, reach variants, VNAM flags)}.
+    """
+    made = {}
     for rec in by_type.get('CREA', []):
         folder = folder_of(rec)
         proj = _PROJECTS.get(folder)
@@ -1232,14 +1259,9 @@ def build_creature_races(by_type: dict, writer, export_dir: str,
         key = (folder, tuple(bodies))
         if key not in made:
             made[key] = _build_race_chain(writer, race_recs[key][0], folder,
-                                          bodies, proj, key, race_recs)
+                                          bodies, proj, key, race_recs,
+                                          talkers)
         race_fid, variants, _vnam = made[key]
         _CREA_RACE_MAP[fid] = (variants.get(_attack_reach(rec), race_fid),
                                folder)
-
-    n_variants = sum(len(v) for _r, v, _n in made.values())
-    n_armed = sum(1 for _r, _v, vnam in made.values() if _race_is_armed(vnam))
-    print(f'  Creature races: {len(made)} generated '
-          f'(+{n_variants} attack-reach variants, {n_armed} weapon-capable, '
-          f'{len(_CREA_RACE_MAP)} CREA records mapped, '
-          f'{len(_PROJECTS)} converted projects)')
+    return made

@@ -1151,7 +1151,7 @@ def _drop_attach_scraps(verts, tris, door_xy):
     return [t for ti, t in enumerate(tris) if ti not in drop]
 
 
-def _ccw_in_plan(verts, tris):
+def ccw_in_plan(verts, tris):
     """Flip any triangle wound CW in plan; the mesh is a heightfield.
 
     See: docs/commentary/tes5_import_navmesh.md#winding-must-be-ccw-in-plan
@@ -1281,15 +1281,13 @@ LIP_MARCH_STEP = 4.0
 
 def build_corridors(refr_recs, base_model_by_fid, get_collision, nodes, edges,
                     land_rec=None, origin_x=0.0, origin_y=0.0, doors=None,
-                    door_bases=None, pins=None, welds=None, weld_tol=8.0):
+                    door_bases=None):
     """Phase-1 corridor navmesh for one cell: (verts, tris, ledges) lists.
 
     doors: [(x, y, z, rot_z, is_teleport, width), ...] pivot-corrected door
     centers.  door_bases: low-24 DOOR base FormIDs contributing no collision.
     ledges: [(upper_tri, lower_tri, drop), ...] for NVNM Ledge Up/Down links.
-    pins: hand-declared walkable (x, y, z).  welds: hand-recorded cracks.
     See: docs/commentary/tes5_import_navmesh.md#ribbon-construction
-    See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
     """
     if not nodes or not edges:
         return [], [], []
@@ -1326,8 +1324,7 @@ def build_corridors(refr_recs, base_model_by_fid, get_collision, nodes, edges,
 
     door_xy = [(x, y, z) for (x, y, z, r, tp, w) in door_list]
     pin_xy = (list(door_xy) + door_pins
-              + _centerline_samples(nodes, edges, node_z)
-              + [tuple(p) for p in (pins or ())])
+              + _centerline_samples(nodes, edges, node_z))
     verts, tris, ledge_marks = corridor_clean.finalize(
         verts, tris, cs=(params.CS_EXTERIOR if land_rec is not None
                          else params.CS),
@@ -1335,14 +1332,13 @@ def build_corridors(refr_recs, base_model_by_fid, get_collision, nodes, edges,
         door_pins=door_pins,
         node_pins=[(nodes[i][0], nodes[i][1]) for i in range(len(nodes))],
         ground_ok=_outline_ground_ok(blocking, walkable),
-        ledge_reach=_ledge_reach(blocking, walkable), surface=sample,
-        welds=welds, weld_tol=weld_tol)
+        ledge_reach=_ledge_reach(blocking, walkable), surface=sample)
 
     verts = [tuple(float(c) for c in v) for v in verts]
     tris = [tuple(int(i) for i in t) for t in tris]
     tris = _drop_attach_scraps(verts, tris, door_xy)
     tris = corridor_clean._drop_degenerate_guarded(verts, tris)
-    tris = _ccw_in_plan(verts, tris)
+    tris = ccw_in_plan(verts, tris)
 
     ledges = corridor_clean._resolve_ledges(verts, tris, ledge_marks)
     return (verts, tris,

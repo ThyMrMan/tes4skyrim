@@ -93,10 +93,10 @@ import pickle
 import struct
 import logging
 
-from ..base.navmesh_pins import (WELD_TOLERANCE, apply_cuts, cell_key,
-                                 cuts_for, digest, pins_for, plugin_of,
-                                 welds_for)
+from ..base.navmesh_pins import (apply_hand_edits, cell_key, digest,
+                                 hand_edits_for, plugin_of)
 from ..base.text_reader import get_int, get_float, get_str, get_formid
+from .lookup_grid import build_navmesh_grid
 from .world import base_fid
 from ..base.writer import pack_subrecord, pack_string_subrecord
 
@@ -219,21 +219,6 @@ def compute_adjacency(tris: list) -> list:
             adj[ti][si] = tj
             adj[tj][sj] = ti
     return [tuple(a) for a in adj]
-
-
-def build_navmesh_grid(verts, tris, min_x, min_y, max_x, max_y, divisor):
-    """Bucket triangle indices into a divisor×divisor grid by centroid."""
-    g = divisor
-    span_x = max_x - min_x if max_x > min_x else 1.0
-    span_y = max_y - min_y if max_y > min_y else 1.0
-    grid = [[] for _ in range(g * g)]
-    for ti, (v0, v1, v2) in enumerate(tris):
-        cx = (verts[v0][0] + verts[v1][0] + verts[v2][0]) / 3.0
-        cy = (verts[v0][1] + verts[v1][1] + verts[v2][1]) / 3.0
-        gx = min(max(int((cx - min_x) / span_x * g), 0), g - 1)
-        gy = min(max(int((cy - min_y) / span_y * g), 0), g - 1)
-        grid[gy * g + gx].append(ti)
-    return grid
 
 
 # ---------------------------------------------------------------------------
@@ -950,7 +935,7 @@ def _cell_graph(rec, cell_rec):
 
 
 def cell_pins(rec, cell_rec, geom_cache):
-    """(pin points, welds, digest, cuts) a human recorded for this cell.
+    """(hand edits by section, digest) a human recorded for this cell.
 
     Both the hash and the build read pins through here, so the value that
     invalidates a cached cell is exactly the value the build then honors.
@@ -958,19 +943,18 @@ def cell_pins(rec, cell_rec, geom_cache):
     See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
     """
     if geom_cache is None:
-        return [], [], '', []
+        return {}, ''
     plugin = plugin_of(geom_cache[0])
     if not plugin:
-        return [], [], '', []
+        return {}, ''
     grid = None
     wrld_fid = get_formid(rec, 'ParentWRLD')
     if wrld_fid and cell_rec is not None:
         grid = (get_int(cell_rec, 'XCLC.X', 0), get_int(cell_rec, 'XCLC.Y', 0))
     key = cell_key(cell_rec, wrld_fid, grid)
     if not key:
-        return [], [], '', []
-    return (pins_for(plugin, key), welds_for(plugin, key),
-            digest(plugin, key), cuts_for(plugin, key))
+        return {}, ''
+    return hand_edits_for(plugin, key), digest(plugin, key)
 
 
 def cell_geom_key(rec, land_rec, cell_rec, refr_recs, base_model_by_fid,
@@ -999,7 +983,12 @@ def cell_geom_key(rec, land_rec, cell_rec, refr_recs, base_model_by_fid,
     return geom_hash(geom_cache[1], points, edges, refr_recs,
                      base_model_by_fid, doors,
                      land_rec if is_exterior else None, origin_x, origin_y,
-                     pin_digest=cell_pins(rec, cell_rec, geom_cache)[2])
+                     pin_digest=cell_pins(rec, cell_rec, geom_cache)[1])
+
+
+def geom_cache_path(geom_cache, cell_fid, pgrd_fid):
+    """Path of one cell's entry in the navmesh geometry cache."""
+    return os.path.join(geom_cache[0], '%08X_%08X.pkl' % (cell_fid, pgrd_fid))
 
 
 def cached_geometry(geom_cache, cell_fid, pgrd_fid):
@@ -1010,9 +999,8 @@ def cached_geometry(geom_cache, cell_fid, pgrd_fid):
     """
     if not geom_cache:
         return None
-    path = os.path.join(geom_cache[0], '%08X_%08X.pkl' % (cell_fid, pgrd_fid))
     try:
-        with open(path, 'rb') as fh:
+        with open(geom_cache_path(geom_cache, cell_fid, pgrd_fid), 'rb') as fh:
             stored = pickle.load(fh)
         return ([tuple(v) for v in stored['verts'].tolist()],
                 [tuple(t) for t in stored['tris'].tolist()],
@@ -1077,15 +1065,14 @@ def _cell_geometry(rec, cell_fid, points, edges, origin_x, origin_y,
     geom_key = cache_path = None
     verts3d = tris = None
     ledges = []
-    pins, welds, pin_digest, cuts = cell_pins(rec, cell_rec, geom_cache)
+    edits, pin_digest = cell_pins(rec, cell_rec, geom_cache)
     if geom_cache is not None:
-        cache_dir, tag = geom_cache
-        geom_key = geom_hash(tag, points, edges, refr_recs,
+        geom_key = geom_hash(geom_cache[1], points, edges, refr_recs,
                              base_model_by_fid, doors,
                              land_rec if is_exterior else None,
                              origin_x, origin_y, pin_digest=pin_digest)
-        cache_path = os.path.join(
-            cache_dir, '%08X_%08X.pkl' % (cell_fid, get_formid(rec, 'FormID')))
+        cache_path = geom_cache_path(geom_cache, cell_fid,
+                                     get_formid(rec, 'FormID'))
         cached = _geom_cache_load(cache_path, geom_key)
         if cached is not None:
             verts3d, tris, ledges = cached
@@ -1102,14 +1089,13 @@ def _cell_geometry(rec, cell_fid, points, edges, origin_x, origin_y,
         origin_x=origin_x, origin_y=origin_y,
         doors=[(x, y, z, r, tp, w) for (x, y, z, r, _f, tp, w) in doors],
         ledges_out=ledges,
-        pins=pins, welds=welds, weld_tol=WELD_TOLERANCE,
         door_bases=(set(door_fids.keys())
                     if isinstance(door_fids, dict)
                     else set(door_fids or ())))
     if verts3d:
         verts3d = [tuple(v) for v in
                    np.asarray(verts3d, dtype=np.float32).tolist()]
-        verts3d, tris, ledges = apply_cuts(verts3d, tris, ledges, cuts)
+        verts3d, tris, ledges = apply_hand_edits(verts3d, tris, ledges, edits)
     if cache_path is not None:
         _geom_cache_store(cache_path, geom_key, verts3d, tris, ledges)
     return verts3d, tris, ledges, False, geom_key

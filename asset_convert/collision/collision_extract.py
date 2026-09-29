@@ -91,16 +91,14 @@ PRIM_TO_GAME = 70.0
 # Only real world collision supports/obstructs an NPC.
 OL_STATIC = 1
 OL_ANIM_STATIC = 2
+OL_TRANSPARENT = 3
 OL_TERRAIN = 13
 OL_GROUND = 17
 OL_STAIRS = 19
 
-# Ignored: OL_BIPED(8) actor ragdolls, OL_CLUTTER(4) loose physics props (pushed
-# aside, not walked around), OL_TRANSPARENT(3), OL_TRIGGER(12),
-# OL_NONCOLLIDABLE(15), weapons/projectiles/trees/props.  Ignoring these is what
-# fixes the old converter's "too many objects are avoided".
-_PATHING_LAYERS = frozenset({OL_STATIC, OL_ANIM_STATIC, OL_TERRAIN,
-                             OL_GROUND, OL_STAIRS})
+#: Layers that block actors; transparent (3) is invisible collision. Clutter, biped, trigger etc. are pushed aside.
+_PATHING_LAYERS = frozenset({OL_STATIC, OL_ANIM_STATIC, OL_TRANSPARENT,
+                             OL_TERRAIN, OL_GROUND, OL_STAIRS})
 
 WALKABLE = 0
 BLOCKING = 1
@@ -803,10 +801,10 @@ def _worker_both(args: tuple):
 # ---------------------------------------------------------------------------
 
 #: Bumped when extraction or mesh conversion changes walkable/blocking output.
-COLLISION_SCHEMA_VERSION = 5
+COLLISION_SCHEMA_VERSION = 6
 
 #: Cache format id; its trailing digits carry COLLISION_SCHEMA_VERSION.
-_MAGIC = b'TESCOL08'
+_MAGIC = b'TESCOL09'
 _COLLISION: Dict[str, dict] = {}
 # path_key -> short collision digest, memoised by collision_digest().  Cleared
 # with _COLLISION so a reload cannot serve digests for the previous cache.

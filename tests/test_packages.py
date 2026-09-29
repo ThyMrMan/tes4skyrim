@@ -452,6 +452,29 @@ def test_addscriptpackage_reaches_the_actors_quest_alias():
     assert 0x000011CA in plan.needed_aliases[0x00000811]
 
 
+def test_every_placed_copy_gets_its_quest_package():
+    """A base placed three times carries its quest package on all three aliases (Nehrim's exit trolls).
+
+    See: docs/commentary/tes5_import_package.md#every-placed-copy-gets-its-quest-package
+    """
+    getstage = struct.pack('<BBBBfIIIiI', 0x60, 0, 0, 0, 35.0,
+                           58, 0x00000811, 0, 0, 0xFFFFFFFF)
+    refs = ('00001E9D', '00001E9F', '001F3562')
+    by_type = {
+        'PACK': [{'FormID': '001AAEEC', 'EditorID': 'MQ00TrollTravel',
+                  'Condition[0].Raw': getstage.hex()}],
+        'QUST': [{'FormID': '00000811', 'EditorID': 'MQ00'}],
+        'CREA': [{'FormID': '00001E9C', 'EditorID': 'MQ00troll01Ausgang',
+                  'AIPackageCount': '1', 'AIPackage[0]': '001AAEEC'}],
+        'ACRE': [{'FormID': r, 'NAME': '00001E9C'} for r in refs],
+    }
+    plan = PackagePlan()
+    plan.build(by_type, {0x00000811}, {}, None, {})
+    for ref in refs:
+        assert plan.quest_packages[0x00000811][int(ref, 16)] == [0x001AAEEC], ref
+        assert int(ref, 16) in plan.needed_aliases[0x00000811]
+
+
 def test_commented_out_addscriptpackage_is_not_resurrected():
     """A disabled call must stay disabled.
 

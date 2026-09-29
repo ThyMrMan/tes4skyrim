@@ -436,7 +436,12 @@ class Parser:
 
         The terminator is NOT consumed -- the block parser that owns it does
         that, which is what makes nesting correct by construction. A leading
-        `.` (`.disable`) names the script's own reference, as no ref does.
+        `.` (`.disable`) names the script's own reference, as no ref does. An
+        `elseif` left over at a block's or fragment's top level starts a new
+        chain: Oblivion's `endif` cleared that level's taken flag, so the stray
+        tests its condition.
+
+        See: docs/commentary/script_convert.md#stray-elseif-starts-a-chain
         """
         self.skip_newlines()
         if self.at_end():
@@ -447,6 +452,8 @@ class Parser:
         low = tok.text.lower() if tok.kind is T.IDENT else ''
         if low and low in terminators:
             return None
+        if low == 'elseif' and terminators in (_BLOCK_TERMINATORS, _TOP_TERMINATORS):
+            return self._parse_if(tok.line)
         if tok.kind is T.COMMENT:
             self.advance()
             self.take_line_end()

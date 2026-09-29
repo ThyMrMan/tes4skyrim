@@ -361,7 +361,51 @@ def _drop_orphan_gates(gated: dict, info_reveals: dict,
     return {f: g for f, g in gated.items() if g in revealed}
 
 
-def build_unlock_plan(by_type: dict) -> dict:
+def _choice_targets(infos: list) -> set:
+    """Low-24 FormIDs of every topic an INFO choice links to."""
+    out = {_low24(v) for rec in infos for v in _indexed_values(rec, 'Choice')}
+    out.update(_low24(rec['TCLT.Choice']) for rec in infos
+               if rec.get('TCLT.Choice'))
+    return out
+
+
+def _unreachable_topics(dials: list, added: set, infos: list, own_index: int,
+                        classify_topic) -> set:
+    """This plugin's regular topics that nothing adds, links to or names.
+
+    Oblivion lists a regular topic only once something adds it, so these
+    never reach the player's menu; a script `Say` still plays them.
+
+    See: docs/commentary/tes5_import_dialogue.md#addtopic-unlock-gates
+    """
+    spoken = {_low24(rec.get('ParentDIAL', '')) for rec in infos}
+    names = {}
+    for d in dials:
+        fid24 = _low24(d.get('FormID', ''))
+        if (fid24 in spoken and fid24 not in added
+                and (int(d['FormID'], 16) >> 24) >= own_index
+                and d.get('DATA.Type', '0') == '0'
+                and not _is_bark_topic(d, classify_topic)):
+            full = d.get('FULL', '').strip().lower()
+            names[fid24] = tuple(re.findall(r'\w+', full)) if len(full) >= 4 else ()
+    mentioned = _mentioned_phrases(infos, names.values())
+    return {f for f, n in names.items() if n not in mentioned}
+
+
+def _mentioned_phrases(infos: list, phrases) -> set:
+    """The word tuples among `phrases` that some response text contains."""
+    longest = defaultdict(int)
+    for p in phrases:
+        if p:
+            longest[p[0]] = max(longest[p[0]], len(p))
+    words = re.findall(r'\w+', ' '.join(
+        v for rec in infos for k, v in rec.items()
+        if k.endswith('.ResponseText')).lower())
+    return {tuple(words[i:i + n]) for i, w in enumerate(words)
+            if w in longest for n in range(1, longest[w] + 1)}
+
+
+def build_unlock_plan(by_type: dict, own_index: int = 0) -> dict:
     """Analyze the export and return the unlock plan:
 
     {
@@ -371,6 +415,7 @@ def build_unlock_plan(by_type: dict) -> dict:
       'script_added':  {topic_fid24, ...}  -- visibility only, never gated
       'added':         {topic_fid24, ...}  -- every topic anything AddTopics
       'follow_up_globals': {global_name, ...}  -- FO3/FNV follow-up chain marks
+      'unreachable':   {topic_fid24, ...}  -- never listed (own_index = first own raw index)
     }
     See: docs/commentary/tes5_import_dialogue.md#fallout-follow-ups-resume
     """
@@ -406,10 +451,14 @@ def build_unlock_plan(by_type: dict) -> dict:
     marks = follow_up_marks(infos)
     for fid, names in marks.items():
         info_reveals[fid] = sorted(set(info_reveals.get(fid, ())) | set(names))
+    unreachable = _unreachable_topics(
+        by_type.get('DIAL', []), explicit | script_added | _choice_targets(infos),
+        infos, own_index, classify_topic)
     return {'gated': gated, 'info_reveals': info_reveals,
             'stage_reveals': stage_reveals, 'script_added': script_added,
             'added': explicit | script_added,
-            'follow_up_globals': {n for names in marks.values() for n in names}}
+            'follow_up_globals': {n for names in marks.values() for n in names},
+            'unreachable': unreachable}
 
 
 def create_unlock_globals(writer, plan: dict) -> dict:

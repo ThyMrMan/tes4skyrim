@@ -5,6 +5,7 @@
 #include <random>
 #include <set>
 
+#include "actor_stats.h"
 #include "dialogue_state.h"
 #include "filter.h"
 #include "log.h"
@@ -15,6 +16,10 @@ namespace tesruntime::mw {
 namespace {
 
 constexpr const char* kPlayerId = "player";
+
+// TES3 attribute indices of Personality and Luck.
+constexpr int kPersonalityAttribute = 6;
+constexpr int kLuckAttribute = 7;
 
 // Skyrim's actor values standing in for TES3's: Speechcraft carries both
 // Speechcraft and Mercantile (the importer folds them), Stamina is fatigue.
@@ -84,6 +89,14 @@ float Fatigue(const std::string& actor) {
     return std::max(0.0f, Hooks().statPercent(actor, kFatigueValue));
 }
 
+// The stat store's value, which a script may have moved; the row's authored
+// column when the store answers 0 (a sidecar older than its attribute column).
+// See: docs/plans/character_sheet.md#bug-persuasion
+float LiveAttribute(const std::string& actor, int index, int authored) {
+    const float live = ActorAttribute(actor, index);
+    return live > 0.0f ? live : static_cast<float>(authored);
+}
+
 Side NpcSide(const std::string& actor) {
     Side out;
     const ActorDef* def = FindActor(actor);
@@ -91,8 +104,8 @@ Side NpcSide(const std::string& actor) {
         ReportOnce("'" + actor + "' has no actor row -- its stats read 0");
         return out;
     }
-    out.personality = static_cast<float>(def->personality);
-    out.luck = static_cast<float>(def->luck);
+    out.personality = LiveAttribute(actor, kPersonalityAttribute, def->personality);
+    out.luck = LiveAttribute(actor, kLuckAttribute, def->luck);
     out.reputation = static_cast<float>(def->reputation);
     out.level = static_cast<float>(def->level);
     out.speechcraft = static_cast<float>(def->speechcraft);
@@ -101,8 +114,9 @@ Side NpcSide(const std::string& actor) {
     return out;
 }
 
-// The player: Personality and Luck from Morrowind's own `player` record --
-// Skyrim has neither -- and the rest from the running game.
+// The player: Personality and Luck from the stat store, starting at
+// Morrowind's own `player` record -- Skyrim has neither -- and the rest from
+// the running game.
 // See: docs/commentary/morrowind_runtime.md#npc-stats
 Side PlayerSide() {
     Side out = NpcSide(kPlayerId);

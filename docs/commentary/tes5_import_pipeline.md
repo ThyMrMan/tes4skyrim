@@ -351,7 +351,9 @@ directories away.
 The masters' meshes are already converted under `output/<master>/meshes`, so
 the fix rescans them in place before the chain loads rather than failing with a
 list of manual re-runs. The plugin's own rescan and the masters' share
-`_rescan_mesh_caches`, so the staleness test cannot drift between them.
+`rescan_mesh_caches`, so the staleness test cannot drift between them.
+`tools/navmesh/rescan_mesh_caches.py` runs the same rescan for named plugins
+without an import.
 See: [tes5_import_navmesh.md](tes5_import_navmesh.md#speedtree-model-keys).
 
 FURN MNAM/FNPR must index the converted NIF's clustered seat positions, and
@@ -390,6 +392,13 @@ returning soups through the pool pickle, because collision soups are large and
 most producers' workers return only small tuples today. The scan merges the
 fragments and parses **only** the meshes no producer claimed, so it stays correct
 whichever stages ran — `--import-only` on an older tree still scans everything.
+
+**A fragment's header carries `COLLISION_SCHEMA_VERSION` as well as its own
+version**, and one stamped with another collision schema is skipped. Before this,
+the header held only `FRAGMENT_VERSION`, so a collision-extraction fix (the
+[transparent layer](asset_convert_collision.md#transparent-layer)) bumped the
+cache but a rescan still merged the soups the mesh stage had extracted under
+the old rules — 618 of TR_Mainland's 1,431 meshes came from such fragments.
 
 Three in-scope writes never hold a parsed graph (the already-Skyrim `shutil.copy2`,
 the grass `landscape/grass` copy, the creature merge-failure copy); copies alias the

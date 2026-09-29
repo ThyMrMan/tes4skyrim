@@ -288,6 +288,19 @@ def _papyrus_headers() -> 'Missing | None':
     )
 
 
+def _skse_headers() -> 'Missing | None':
+    """SKSE's own .psc headers, resolved by the compile phase's own lookup."""
+    from papyrus_compile import find_skse_source_scripts
+    if find_skse_source_scripts(_load_config()):
+        return None
+    return Missing(
+        "SKSE's script files (UI.psc and friends)",
+        'Compiling converted scripts that call SKSE functions',
+        'Install SKSE from https://skse.silverlock.org/ by copying ALL of its\n'
+        'files, the Data folder included, straight into your Skyrim folder',
+    )
+
+
 # ---------------------------------------------------------------------------
 #  Phase requirements
 
@@ -362,6 +375,7 @@ _REQUIREMENTS = {
             'external/papyrus-compiler/papyrus.exe', 'papyrus.exe',
             'Compiling the converted .psc scripts to .pex'),
         _papyrus_headers,
+        _skse_headers,
     ],
 
     'lod': [

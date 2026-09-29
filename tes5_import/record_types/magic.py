@@ -27,6 +27,7 @@ TES5 record order: EDID VMAD FULL MDOB KSIZ/KWDA DATA ESCE* SNDD DNAM CTDA
 import struct
 
 from script_convert.constants import mgef_family_keyword_name
+from tes4_export.record_types.morrowind import MW_ENCHANT_SKILL
 
 from . import magic_art, magic_art_morrowind
 from .common import pack_keywords
@@ -275,6 +276,7 @@ SKILL_TO_AV = {
     30: AV_LOCKPICKING,    # Security
     31: AV_SNEAK,          # Sneak
     32: AV_SPEECH,         # Speechcraft
+    MW_ENCHANT_SKILL + 12: AV_ENCHANTING,
 }
 
 # TES4 ResistValue is an Oblivion actor-value index naming the resistance that

@@ -201,18 +201,16 @@ def convert_meshes(source_file, extract_dir='export', output_dir='output',
                    skip_hair=False):
     """Convert extracted NIFs and copy textures into `output_dir/<source_name>/`.
 
-    Needs extract_bsas run first. `mesh_subdirs` limits conversion to those
-    folder or mesh prefixes under meshes/ (None: all); `parallax` ships height
-    maps; `textures_only` analyses meshes but ships only textures;
-    `skip_hair` leaves the hair pass out. Returns stats keyed
+    Needs extract_bsas run first. `mesh_subdirs` converts ONLY the NIFs under
+    those meshes/ prefixes and skips every whole-tree pass and the texture
+    copy. `parallax` ships height maps; `textures_only` ships only textures;
+    `skip_hair` skips the hair pass. Assets come from the shared group tree,
+    records from the plugin's own dump. Returns stats keyed
     'mesh_conversion', 'textures_copied', 'other_copied'.
     """
     extract_dir = Path(extract_dir)
     output_dir = Path(output_dir)
     source_name = Path(source_file).name
-    # Plugins imported together from one archive share ONE asset tree, so the
-    # meshes/textures come from the group folder while the record dump stays
-    # per plugin (source_registry.asset_root / record_dir).
     asset_dir = _asset_root(extract_dir, source_name)
     rec_dir = record_dir(extract_dir, source_name)
     plugin_dir = _out_root(output_dir, source_name, extract_dir)
@@ -223,10 +221,6 @@ def convert_meshes(source_file, extract_dir='export', output_dir='output',
         'textures_copied': 0,
         'other_copied': 0,
     }
-
-    # Build bookkeeping, not a shipped asset -- see texture_prune.MANIFEST_NAME.
-    # Tracks the SHARED asset tree, so it belongs beside the assets.
-    mesh_manifest_dir = asset_dir
 
     # -----------------------------------------------------------------------
     # NIF Mesh Conversion
@@ -242,11 +236,13 @@ def convert_meshes(source_file, extract_dir='export', output_dir='output',
             source_name, mesh_subdirs, parallax, textures_only)
         if parallax:
             _write_parallax_notice(plugin_dir)
-        _persist_mesh_manifests(stats['mesh_conversion'], mesh_manifest_dir,
+        _persist_mesh_manifests(stats['mesh_conversion'], asset_dir,
                                 bool(mesh_subdirs))
     else:
         print(f"  No meshes found at {mesh_src}")
         stats['mesh_conversion'] = {'converted': 0, 'skipped': 0, 'errors': 0}
+    if mesh_subdirs:
+        return stats
 
     if mesh_src.exists() and not textures_only:
         _profile_hair_and_grass(rec_dir, plugin_dir, stats, skip_hair)

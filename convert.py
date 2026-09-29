@@ -81,6 +81,7 @@ from core.subprocess_flags import (POPEN_FLAGS as _POPEN_FLAGS,
 from core.process_job import create_pool_job, describe_limit
 from core.heavy_lock import SUPERVISED_ENV_VAR, hold_heavy_lock
 from core.collision_options import WINDING_FIX_ENV_VAR, default_for_plugin
+from core.navmesh_options import set_navmesh_generator, set_navmesh_pins_dir
 
 # multiprocessing.Pool workers (nif/lod conversion) must also inherit a hidden
 # console — configure before any pool is created.
@@ -653,6 +654,8 @@ def phase_assets(file_name: str, config: dict, output_dir: str = None,
         print(f"[{file_name}] Textures only: no meshes, no book art "
               f"(PGPatcher patches the meshes in the load order)")
         return True
+    if mesh_subdirs:
+        return True
 
     from asset_convert.ui.book_inam import generate_book_inams
 
@@ -739,6 +742,15 @@ def phase_creatures(file_name: str, tes5_data: str, config: dict,
 # Phase 6: BUILD TES5 PLUGIN
 # ===========================================================================
 
+def _install_navmesh_cache(file_name: str, config: dict) -> None:
+    """Install the prebuilt navmesh cache (drop-in, else download if allowed); never fatal."""
+    try:
+        from tools.navmesh.navmesh_cache import auto_install, download_allowed
+        auto_install(file_name, allow_download=download_allowed(config))
+    except Exception as exc:
+        print(f"  Navmesh cache: unavailable ({exc}); generating normally.")
+
+
 def phase_import(file_name: str, tes4_data: str, tes5_data: str,
                  export_dir: str, config: dict, output_dir: str = None):
     """Import using the Python tes5_import package."""
@@ -752,24 +764,7 @@ def phase_import(file_name: str, tes4_data: str, tes5_data: str,
         print(f"[{file_name}] No export directory, skipping import")
         return False
 
-    # Navmesh generation is the slowest part of this phase, and a prebuilt
-    # cache is published with each release.  Pick it up automatically -- from
-    # navmesh_cache/ if the user dropped a zip there, else by downloading the
-    # matching asset -- so nobody has to know a command exists.  Never fatal:
-    # on any problem the navmesh just regenerates as it always did.
-    # Opt out with TESCONV_NO_CACHE_DOWNLOAD=1 (metered connections).
-    try:
-        from tools.navmesh.navmesh_cache import auto_install, NO_DOWNLOAD_ENV_VAR
-        auto_install(file_name,
-                     allow_download=os.environ.get(
-                         NO_DOWNLOAD_ENV_VAR, '').strip().lower()
-                     not in ('1', 'true'))
-    except Exception as exc:
-        # Never fatal -- but never silent either.  A bare `pass` here meant an
-        # import error or a broken tools/ path made the cache vanish with no
-        # trace, which is exactly what "the download does not work" looked like
-        # from the user's side.
-        print(f"  Navmesh cache: unavailable ({exc}); generating normally.")
+    _install_navmesh_cache(file_name, config)
 
     out_root = output_dir or str(SCRIPT_DIR / "output")
     os.makedirs(out_root, exist_ok=True)
@@ -1023,6 +1018,8 @@ def phase_pack_zip(file_name: str, config: dict, output_dir: str = None):
 def _run_pipeline():
     """Parse the command line, then run each selected step over every plugin."""
     args = build_parser().parse_args()
+    set_navmesh_generator(args.navmesh_generator)
+    set_navmesh_pins_dir(args.navmesh_pins)
     config = load_config(args.config)
     apply_config_overrides(args, config)
     tes4_data, tes5_data = get_paths(config)

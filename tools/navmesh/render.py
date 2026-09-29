@@ -124,6 +124,8 @@ def _add_args(ap):
                     help='render ONLY the authored mesh, with no cell of ours')
     ap.add_argument('--width', type=int, default=1400)
     ap.add_argument('--export', default=DEFAULT_EXPORT)
+    ap.add_argument('--lattice', action='store_true',
+                    help='build with the prototype lattice generator')
 
 
 def _pick_cell(idx, a):
@@ -201,7 +203,7 @@ def main():
         print('%s: no pathgrid' % cell.name)
         return 1
 
-    verts, tris = cell.build()
+    verts, tris = cell.build(lattice=a.lattice)
     if a.bands:
         _print_bands(verts, tris)
         return 0

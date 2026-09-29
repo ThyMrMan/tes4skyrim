@@ -52,6 +52,7 @@ from tes5_import.dialogue.conversations import (build_conversation_plan,
 from tes5_import.dialogue.converter import (DIAL_TYPE_SERVICE,
                                             SERVICE_MENU_TOPICS)
 from tes5_import.dialogue.say_topics import build_force_greet_slots
+from tes5_import.dialogue.say_topics import build_force_flee_slots
 from tes5_import.dialogue.unlocks import build_unlock_plan
 from tes5_import.packages.patrol_falloutnv import (has_patrol_script, is_patrol_point,
                                                    load_patrol_points, patrol_scan_source)
@@ -147,7 +148,7 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
                         quest_delays=None, quest_objectives=None,
                         conversation_chains=None, force_greet_slots=None,
                         info_begin_scripts=False, say_to_done=None,
-                        objective_globals=None):
+                        objective_globals=None, force_flee_slots=None):
     """Seed one worker with the parent state that spawning does not carry.
 
     `namespace` is installed FIRST: the generated-script prefix derives from
@@ -192,6 +193,7 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
     ScriptConverter.objective_globals = objective_globals or {}
     ScriptConverter.conversation_chains = conversation_chains or {}
     ScriptConverter.force_greet_slots = force_greet_slots or {}
+    ScriptConverter.force_flee_slots = force_flee_slots or {}
     # script EditorID -> button-MessageBox MESG plan; the importer writes the
     # records this makes the converter reference (message_menus.py).
     ScriptConverter.message_menus = message_menus or {}
@@ -298,7 +300,8 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
                 build_script_chain_map(by_type),
                 build_force_greet_slots(by_type),
                 export_is_fallout(export_dir), say_to_done_hooks(by_type),
-                objective_script_globals(by_type) if export_is_fallout(export_dir) else {})
+                objective_script_globals(by_type) if export_is_fallout(export_dir) else {},
+                build_force_flee_slots(by_type))
     return {'initargs': initargs, 'scpt_work': scpt_work,
             'info_work': info_work, 'qust_work': qust_work,
             'pack_work': pack_work, 'patrol_work': patrol_work, 'stats': stats}

@@ -45,7 +45,9 @@ sequence name.
 
 Measured on Oblivion.esm (`--meshes-only --mesh-subdirs magiceffects`): 22
 effect models converted, **65 phase meshes written from 20 models**, and 0 models
-with no converted mesh.
+with no converted mesh. A `--mesh-subdirs` run now converts only the NIFs and
+skips this split (and every other whole-tree pass), so only an unfiltered
+`--meshes-only` run writes the phase meshes.
 
 ## <a id="hand-loops"></a>The hand loops Oblivion never had
 

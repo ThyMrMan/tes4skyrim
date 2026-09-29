@@ -87,6 +87,7 @@ def _new_scan_out() -> dict:
         'mgef_shaders': {}, 'spell_effects': {},
         'global_types': {}, 'global_values': {},
         'pack_type': {}, 'actor_packages': {},
+        'actor_speed': {}, 'move_gmsts': {},
         'record_model': {},
         # CELL geometry, for GetInCell: {formid: (is_interior, wrld_fid, x, y)}.
         # An EXTERIOR cell cannot back a Papyrus `Cell` property (see
@@ -156,6 +157,27 @@ def index_record_details(tables: dict, sig: str, formid: str, edid: str,
             pass
     elif sig == 'BOOK' and (rec.get('ENAM') or '').strip().strip('0'):
         tables['enchanted_books'].add(formid)
+    _index_move_speed(tables, sig, formid, low, rec)
+
+
+#: The GMSTs of TES4's walk-speed formula: walk = Min + (Max - Min) * Speed / 100.
+_MOVE_GMSTS = frozenset({'fmovecharwalkmin', 'fmovecharwalkmax',
+                         'fmovecreaturewalkmin', 'fmovecreaturewalkmax'})
+
+
+def _index_move_speed(tables: dict, sig: str, formid: str, low: str, rec: dict) -> None:
+    """An actor's authored Speed attribute, or a walk-speed GMST's value."""
+    if sig in ('NPC_', 'CREA'):
+        speed = _int_or(rec.get('DATA.Speed'), None)
+        if speed is not None:
+            tables['actor_speed'][formid] = speed
+    elif sig == 'GMST' and low in _MOVE_GMSTS:
+        try:
+            tables['move_gmsts'][low] = float(rec.get('DATA.Value'))
+        except (TypeError, ValueError):
+            pass
+
+
 
 
 #: An OBSE `begin Function` header at a line start, in raw or export-escaped (`\n`) SCTX text.
@@ -384,6 +406,10 @@ class CrossRefGraph:
         self.pack_type: dict[str, int] = {}
         # NPC_/CREA FormID -> [PACK FormID, ...] in AIPackage[n] order.
         self.actor_packages: dict[str, list] = {}
+        #: NPC_/CREA FormID -> authored DATA.Speed attribute.
+        self.actor_speed: dict[str, int] = {}
+        #: Walk-speed GMST (lower EditorID) -> value, for the TES4 speed formula.
+        self.move_gmsts: dict[str, float] = {}
 
     def load_from_export(self, export_dir: str, workers: int = None):
         """Load cross-reference data from all export .txt files.
@@ -457,6 +483,8 @@ class CrossRefGraph:
         self.global_values.update(out['global_values'])
         self.pack_type.update(out['pack_type'])
         self.actor_packages.update(out['actor_packages'])
+        self.actor_speed.update(out['actor_speed'])
+        self.move_gmsts.update(out['move_gmsts'])
 
     def get_extends_class(self, script_formid: str) -> str:
         """The Papyrus extends class for a script.
@@ -670,25 +698,43 @@ class CrossRefGraph:
         ANY of them is running a package of that type, and the disjunction the
         caller emits is exactly that.
         """
-        want = script_edid.lower()
-        script_fid = ''
-        for fid, edid in self.script_formid_to_edid.items():
-            if edid.lower() == want:
-                script_fid = fid
-                break
-        if not script_fid:
-            return []
         out = []
-        for actor_fid, scri in self.record_scri.items():
-            if scri != script_fid or actor_fid not in self.actor_packages:
-                continue
-            for pack_fid in self.actor_packages[actor_fid]:
+        for actor_fid in self.script_owner_actors(script_edid):
+            for pack_fid in self.actor_packages.get(actor_fid, ()):
                 if self.pack_type.get(pack_fid) != pkg_type:
                     continue
                 edid = self.formid_to_edid.get(pack_fid, '')
                 if edid and edid not in out:
                     out.append(edid)
         return out
+
+    def script_owner_actors(self, script_edid: str) -> list:
+        """FormIDs of the records whose SCRI names the script `script_edid`."""
+        want = script_edid.lower()
+        script_fid = next((fid for fid, edid in self.script_formid_to_edid.items()
+                           if edid.lower() == want), '')
+        return [fid for fid, scri in self.record_scri.items()
+                if script_fid and scri == script_fid]
+
+    def actor_formid(self, name: str) -> str:
+        """The FormID `name` names, following a placed reference to its base."""
+        fid = self.edid_to_formid.get(name.lower(), '')
+        return self.record_base.get(fid, fid)
+
+    def walk_speed_formula(self, actor_fids) -> tuple | None:
+        """(authored Speed, walk min, walk max) shared by every actor, else None.
+
+        See: docs/commentary/script_convert.md#speed-write-becomes-speedmult
+        """
+        forms = {(self.actor_speed.get(f), self.record_type.get(f)) for f in actor_fids}
+        if len(forms) != 1:
+            return None
+        speed, sig = forms.pop()
+        kind = 'creature' if sig == 'CREA' else 'char'
+        low, high = (self.move_gmsts.get(f'fmove{kind}walk{end}') for end in ('min', 'max'))
+        if speed is None or low is None or high is None:
+            return None
+        return speed, low, high
 
     def get_actor_packages_of_type(self, actor_name: str, pkg_type: int) -> list:
         """PACK EditorIDs of `actor_name`'s own packages whose PKDT.Type matches.

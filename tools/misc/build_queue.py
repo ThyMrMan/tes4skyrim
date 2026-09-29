@@ -1,13 +1,14 @@
 """Watch the machine's heavy-job queue: the running build with its runtime,
 then every queued build in arrival order. Updates in place until Ctrl+C.
 
-  python -m tools.misc.build_queue            # live view, refreshed every 2 s
-  python -m tools.misc.build_queue --once     # print once and exit
+  python tools/misc/build_queue.py            # live view, refreshed every 2 s
+  python tools/misc/build_queue.py --once     # print once and exit
 
 See: docs/commentary/performance.md#one-heavy-job-at-a-time
 """
 
 import argparse
+import os
 import sys
 import time
 
@@ -15,6 +16,7 @@ from rich.console import Console
 from rich.live import Live
 from rich.table import Table
 
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))))
 from core.heavy_lock import snapshot
 
 

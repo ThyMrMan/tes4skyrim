@@ -7,6 +7,7 @@
 // authors, so a script that sets one and a script that reads it still agree.
 // See: docs/commentary/morrowind_runtime.md#stat-commands
 
+#include <algorithm>
 #include <string>
 
 #include <components/compiler/opcodes.hpp>
@@ -22,10 +23,14 @@ namespace tesruntime::mw {
 
 namespace {
 
-// One stat: the Skyrim actor value that carries it, or null for none.
+// One stat: the Skyrim actor value that carries it, or null for none, and
+// the second value a skill Skyrim split in two also reads (the higher wins;
+// writes go to the first).
+// See: docs/plans/character_sheet.md#bug-blade-blunt
 struct Stat {
     const char* name;
     const char* skyrim;
+    const char* also = nullptr;
 };
 
 // OpenMW's own order, which is the opcode offset and NPC_.txt's column order.
@@ -39,13 +44,13 @@ constexpr Stat kAttributes[Compiler::Stats::numberOfAttributes] = {
 // is what persuasion and the fare formula already read for it.
 constexpr Stat kSkills[Compiler::Stats::numberOfSkills] = {
     {"block", "Block"},             {"armorer", "Smithing"},
-    {"mediumarmor", "HeavyArmor"},  {"heavyarmor", "HeavyArmor"},
-    {"bluntweapon", "OneHanded"},   {"longblade", "OneHanded"},
-    {"axe", "OneHanded"},           {"spear", "OneHanded"},
+    {"mediumarmor", "HeavyArmor", "LightArmor"},  {"heavyarmor", "HeavyArmor"},
+    {"bluntweapon", "OneHanded", "TwoHanded"},    {"longblade", "OneHanded", "TwoHanded"},
+    {"axe", "OneHanded", "TwoHanded"},            {"spear", "TwoHanded"},
     {"athletics", nullptr},         {"enchant", "Enchanting"},
     {"destruction", "Destruction"}, {"alteration", "Alteration"},
     {"illusion", "Illusion"},       {"conjuration", "Conjuration"},
-    {"mysticism", "Illusion"},      {"restoration", "Restoration"},
+    {"mysticism", "Alteration"},    {"restoration", "Restoration"},
     {"alchemy", "Alchemy"},         {"unarmored", "LightArmor"},
     {"security", "Lockpicking"},    {"sneak", "Sneak"},
     {"acrobatics", nullptr},        {"lightarmor", "LightArmor"},
@@ -89,8 +94,10 @@ float Authored(const std::string& actor, Family family, int index) {
 float ReadStat(const std::string& actor, const Stat& stat, Family family,
                int index) {
     if (stat.skyrim) {
-        return Hooks().actorValue ? Hooks().actorValue(actor, stat.skyrim)
-                                  : 0.0f;
+        if (!Hooks().actorValue) return 0.0f;
+        const float first = Hooks().actorValue(actor, stat.skyrim);
+        return stat.also ? std::max(first, Hooks().actorValue(actor, stat.also))
+                         : first;
     }
     const std::string owner = StatOwner(actor);
     return State().HasVar(owner, stat.name) ? State().Var(owner, stat.name)

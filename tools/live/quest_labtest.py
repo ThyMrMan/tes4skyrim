@@ -1532,7 +1532,7 @@ def staging_presets(qrec: dict) -> list:
     return out
 
 
-def _editorid_index(plugin: str, sigs=('REFR', 'ACHR', 'ACRE')) -> dict:
+def editorid_index(plugin: str, sigs=('REFR', 'ACHR', 'ACRE')) -> dict:
     """{EditorID.lower() -> FormID} across the given record types."""
     out = {}
     for sig in sigs:
@@ -1556,7 +1556,7 @@ def apply_staging(b: Bridge, plugin: str, preset: dict, index: str,
     is confirmed by reading the actor's distance to its marker afterwards.
     """
     say = say or (lambda k, t: print(f'  {t}'))
-    ids = _editorid_index(plugin)
+    ids = editorid_index(plugin)
     fails = []
 
     # Housekeeping first, in the order the preset writes it: the authored entry

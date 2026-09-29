@@ -151,6 +151,18 @@ GlobalVariable Function PlayerAttributeGlobal(Actor akActor, String avName) Glob
   Return None
 EndFunction
 
+; The higher of two actor values: an Oblivion skill Skyrim split in two (Blade
+; and Blunt covered one- and two-handed weapons alike).
+; See: docs/plans/character_sheet.md#bug-blade-blunt
+Float Function HigherActorValue(Actor akActor, String asFirst, String asSecond) Global
+  Float first = akActor.GetActorValue(asFirst)
+  Float second = akActor.GetActorValue(asSecond)
+  If first > second
+    Return first
+  EndIf
+  Return second
+EndFunction
+
 String Function MapActorValue(String avName) Global
   ; Skills (renamed and/or merged in TES5). "Speechcraft" and "Marksman" are
   ; the engine's internal AV names for the skills Skyrim's UI calls Speech and
@@ -166,7 +178,7 @@ String Function MapActorValue(String avName) Global
   ElseIf avName == "HandToHand"
     Return "UnarmedDamage"
   ElseIf avName == "Mysticism"
-    Return "Illusion"
+    Return "Alteration"
   ElseIf avName == "Mercantile"
     Return "Speechcraft"
   ElseIf avName == "Security"
@@ -458,9 +470,29 @@ EndFunction
 ; StopCombat (0x9eb250) only flags the controller to stop on its next
 ; update.  So an attacker busy with another target is stood down, the
 ; function waits for combat to actually end, and then starts it afresh.
+; Kept for scripts compiled before ForceCombatApproach; the signature must not change.
 Function ForceCombat(Actor akAttacker, Actor akTarget, Faction akAttackers, Faction akVictims) Global
-  If akAttacker == None || akTarget == None
-    Return
+  ForceCombatNow(akAttacker, akTarget, akAttackers, akVictims)
+EndFunction
+
+; ForceCombat, then the attacker and target join a pair of the importer's
+; TES4CombatApproaches quest, whose combat override package keeps the attacker
+; closing on the target the way TES4 combat does instead of hiding or searching.
+; Both happen on the pool's own thread (TES4_CombatQueue), so the caller goes
+; on at once as TES4's StartCombat does; a pool without the queue, or a full
+; queue, fights at once without a pair.
+; See docs/commentary/script_convert.md#startcombat-approaches-an-undetected-target
+Function ForceCombatApproach(Actor akAttacker, Actor akTarget, Faction akAttackers, Faction akVictims, Quest akPool) Global
+  TES4_CombatQueue queue = akPool as TES4_CombatQueue
+  If !queue || !queue.Push(akAttacker, akTarget, akAttackers, akVictims)
+    ForceCombatNow(akAttacker, akTarget, akAttackers, akVictims)
+  EndIf
+EndFunction
+
+; The forced StartCombat itself; False when either actor is missing or dead.
+Bool Function ForceCombatNow(Actor akAttacker, Actor akTarget, Faction akAttackers, Faction akVictims) Global
+  If akAttacker == None || akTarget == None || akAttacker.IsDead() || akTarget.IsDead()
+    Return False
   EndIf
   Actor player = Game.GetPlayer()
   If akAttackers != None && akVictims != None
@@ -482,14 +514,181 @@ Function ForceCombat(Actor akAttacker, Actor akTarget, Faction akAttackers, Fact
     akAttacker.SetActorValue("Aggression", 1)
   EndIf
   If akAttacker.IsInCombat() && akAttacker.GetCombatTarget() != akTarget
-    akAttacker.StopCombat()
-    Int waited = 0
-    While akAttacker.IsInCombat() && waited < 20
-      Utility.Wait(0.05)
-      waited += 1
-    EndWhile
+    StandDown(akAttacker)
   EndIf
   akAttacker.StartCombat(akTarget)
+  Return True
+EndFunction
+
+; TES4 StopCombat on an attacker ForceCombatApproach may have paired: queued
+; behind its StartCombat, it empties the pair, then EndCombat.
+Function EndCombatApproach(Actor akActor, Faction akAttackers, Quest akPool) Global
+  TES4_CombatQueue queue = akPool as TES4_CombatQueue
+  If !queue || !queue.Push(akActor, None, akAttackers, None)
+    EndCombat(akActor, akAttackers)
+  EndIf
+EndFunction
+
+; StopCombat, then wait (up to a second) for the controller to actually let go.
+Function StandDown(Actor akActor) Global
+  akActor.StopCombat()
+  Int waited = 0
+  While akActor.IsInCombat() && waited < 20
+    Utility.Wait(0.05)
+    waited += 1
+  EndWhile
+EndFunction
+
+; TES4 StopCombat.  Takes the actor back out of the memberships ForceCombat
+; gave it as an ATTACKER (TES4ForceCombatAttackers, WIPlayerEnemyFaction), then
+; stops the fight; left in them, the actor re-engaged the moment it saw its
+; target again and its AI packages never ran (Nehrim's rope troll).  Victims
+; membership stays: TES4 StopCombat on a victim does not stop its attacker.
+Function EndCombat(Actor akActor, Faction akAttackers) Global
+  If akActor == None
+    Return
+  EndIf
+  If akAttackers != None
+    akActor.RemoveFromFaction(akAttackers)
+  EndIf
+  Faction hatesPlayer = Game.GetFormFromFile(0x06E02D, "Skyrim.esm") as Faction
+  If hatesPlayer != None
+    akActor.RemoveFromFaction(hatesPlayer)
+  EndIf
+  akActor.StopCombat()
+EndFunction
+
+; ==========================================================================
+; Confidence
+; ==========================================================================
+; Oblivion flees once its flee score (Confidence, own health) beats the actor's
+; best attack; Skyrim's tiers 1-3 instead compare strength with the enemy.  So
+; a converted actor is only ever Cowardly (0) or Foolhardy (4).  Its authored
+; Confidence is its rank in TES4ConfidenceFaction; its flee margin, rank in
+; TES4FleeMarginFaction, flees on sight below 0, never at Q
+; (TES4FleeHealthScale) or more, and in between once health is under
+; 1 - margin/Q, which the TES4ConfidenceFlee ability watches.  A Confidence
+; change shifts the margin by the same amount.  The combat controller copies
+; the tier when combat STARTS (1.6.1170 0x840c90, reached only from combat
+; start), so a change made mid-fight restarts the fight against the same target.
+; See docs/commentary/tes5_import_actors.md#flee-margin
+
+Function SetConfidenceTier(Actor akActor, Int aiTier) Global
+  If akActor == None || akActor.GetActorValue("Confidence") as Int == aiTier
+    Return
+  EndIf
+  akActor.SetActorValue("Confidence", aiTier)
+  Actor target = akActor.GetCombatTarget()
+  If target != None
+    StandDown(akActor)
+    akActor.StartCombat(target)
+  EndIf
+  akActor.EvaluatePackage()
+EndFunction
+
+; Cowardly below margin 0 or while health is under 1 - margin/Q, else Foolhardy.
+Function ApplyConfidence(Actor akActor, Faction akMargin, GlobalVariable akScale) Global
+  If akActor == None || akMargin == None || akScale == None || akActor.IsDead()
+    Return
+  EndIf
+  If !akActor.IsInFaction(akMargin)
+    Return
+  EndIf
+  Int margin = akActor.GetFactionRank(akMargin)
+  Float scale = akScale.GetValue()
+  If margin < 0
+    SetConfidenceTier(akActor, 0)
+  ElseIf margin < scale && akActor.GetActorValuePercentage("Health") < 1.0 - margin / scale
+    SetConfidenceTier(akActor, 0)
+  Else
+    SetConfidenceTier(akActor, 4)
+  EndIf
+EndFunction
+
+; TES4 GetAV Confidence: the value the actor was converted or set to.  Without
+; the faction (an FO3/FNV plugin, whose Confidence is already the Skyrim tier)
+; the tier itself.
+Float Function GetConfidence(Actor akActor, Faction akFaction) Global
+  If akActor == None
+    Return 0.0
+  ElseIf akFaction == None
+    Return akActor.GetActorValue("Confidence")
+  ElseIf akActor.IsInFaction(akFaction)
+    Return akActor.GetFactionRank(akFaction) as Float
+  ElseIf akActor.GetActorValue("Confidence") >= 1.0
+    Return 100.0
+  EndIf
+  Return 0.0
+EndFunction
+
+; Clamp to a faction rank's signed byte.
+Int Function ClampRank(Int aiValue) Global
+  If aiValue < -128
+    Return -128
+  ElseIf aiValue > 127
+    Return 127
+  EndIf
+  Return aiValue
+EndFunction
+
+; TES4 SetAV/ForceAV Confidence (ModAV passes GetConfidence + delta): the margin
+; moves by the change.  Without the faction, afValue is already a tier and is
+; written as one; an actor without a margin (not converted from TES4) is
+; Cowardly at 0 and Foolhardy above.
+Function SetConfidence(Actor akActor, Float afValue, Faction akFaction, Faction akMargin, Spell akFlee, GlobalVariable akScale) Global
+  If akActor == None
+    Return
+  EndIf
+  Int raw = afValue as Int
+  If akFaction == None || akMargin == None || !akActor.IsInFaction(akMargin)
+    If akFaction == None && raw > 4
+      raw = 4
+    ElseIf akFaction != None && raw > 0
+      raw = 4
+    ElseIf raw < 0
+      raw = 0
+    EndIf
+    SetConfidenceTier(akActor, raw)
+    Return
+  EndIf
+  raw = ClampRank(raw)
+  Int margin = ClampRank(akActor.GetFactionRank(akMargin) + raw - (GetConfidence(akActor, akFaction) as Int))
+  akActor.SetFactionRank(akFaction, raw)
+  akActor.SetFactionRank(akMargin, margin)
+  If akFlee != None && akScale != None && margin >= 0 && margin < akScale.GetValue()
+    akActor.AddSpell(akFlee, False)
+  EndIf
+  ApplyConfidence(akActor, akMargin, akScale)
+EndFunction
+
+; TES4 SetAV Speed.  Skyrim has no Speed attribute, so the write becomes a
+; SpeedMult that scales the actor's movement by the ratio TES4's walk formula
+; (Min + (Max - Min) * Speed / 100) gives against its authored Speed.  A
+; SpeedMult change only applies once carry weight changes, hence the nudge.
+Function SetTES4Speed(Actor akActor, Float afSpeed, Float afBaseSpeed, Float afWalkMin, Float afWalkMax) Global
+  If akActor == None
+    Return
+  EndIf
+  Float span = afWalkMax - afWalkMin
+  Float baseWalk = afWalkMin + span * afBaseSpeed / 100.0
+  If baseWalk <= 0.0
+    Return
+  EndIf
+  akActor.SetActorValue("SpeedMult", 100.0 * (afWalkMin + span * afSpeed / 100.0) / baseWalk)
+  akActor.ModActorValue("CarryWeight", 0.1)
+  akActor.ModActorValue("CarryWeight", -0.1)
+EndFunction
+
+; TES4 GetAV/GetBaseAV Speed: the inverse of SetTES4Speed, read back from the
+; actor's SpeedMult, so a script that saves Speed and later restores it (or
+; adds to it) works from the same baseline the write uses.
+Int Function GetTES4Speed(Actor akActor, Float afBaseSpeed, Float afWalkMin, Float afWalkMax) Global
+  Float span = afWalkMax - afWalkMin
+  If akActor == None || span == 0.0
+    Return Math.Floor(afBaseSpeed + 0.5)
+  EndIf
+  Float walk = (afWalkMin + span * afBaseSpeed / 100.0) * akActor.GetActorValue("SpeedMult") / 100.0
+  Return Math.Floor((walk - afWalkMin) * 100.0 / span + 0.5)
 EndFunction
 
 ; TES4 "PlayerFaction" converts to a plugin faction the RUNTIME player was
@@ -678,12 +877,17 @@ Function EvaluatePackage(Actor akActor) Global
 EndFunction
 
 ; TES4 `StartConversation Player [topic]`.  Papyrus cannot open dialogue, so the
-; actor joins one alias of the topic's pool (aiFirst .. aiFirst+aiCount-1) on the
-; importer's TES4ForceGreets quest; that alias's ForceGreet package walks over
-; and opens the topic, and its OnEnd fragment (TES4_ForceGreetDone) empties the
-; alias again.  An actor already holding a slot is only re-evaluated; with every
-; slot busy, the first is taken over.
+; actor joins one alias of the topic's pool on the importer's TES4ForceGreets
+; quest; that alias's ForceGreet package walks over and opens the topic.
 Function ForceGreet(Quest akPool, Int aiFirst, Int aiCount, Actor akActor) Global
+  FillPoolSlot(akPool, aiFirst, aiCount, akActor)
+EndFunction
+
+; Hand `akActor` the package of one alias in aiFirst .. aiFirst+aiCount-1 of
+; `akPool` (TES4ForceGreets, TES4ForceFlees).  The package's OnEnd fragment
+; (TES4_ForceGreetDone) empties the alias again.  An actor already holding a
+; slot is only re-evaluated; with every slot busy, the first is taken over.
+Function FillPoolSlot(Quest akPool, Int aiFirst, Int aiCount, Actor akActor) Global
   If !akPool || !akActor
     Return
   EndIf

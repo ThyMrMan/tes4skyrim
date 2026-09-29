@@ -787,7 +787,7 @@ def convert_CONT(rec: dict) -> bytes:
 # ---------------------------------------------------------------------------
 
 
-def _leveled_entries(rec: dict) -> list:
+def leveled_entries(rec: dict) -> list:
     """(level, FormID, count) per entry, skipping the null-FormID slots.
 
     LVLO is `Level(U16) pad(U16) FormID(U32) Count(U16) pad(U16)`, 12 bytes.
@@ -818,7 +818,7 @@ def _convert_leveled_list(rec: dict, tes5_sig: str) -> bytes:
     flags = get_int(rec, 'LVLF.Flags')
     subs += pack_uint8_subrecord('LVLF', flags)
 
-    entries = _leveled_entries(rec)
+    entries = leveled_entries(rec)
     if entries:
         subs += pack_subrecord('LLCT', struct.pack('<B', min(len(entries), 255)))
     for level, fid, count in entries:

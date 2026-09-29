@@ -21,6 +21,7 @@
 
 #include <components/interpreter/defines.hpp>
 
+#include "actor_stats.h"
 #include "dialogue_state.h"
 #include "filter.h"
 #include "game_actor.h"
@@ -503,6 +504,21 @@ void PersuasionCases(DialogueContext& context) {
     State().EndConversation();
     Check(State().Disposition("test_actor") == 54,
           "a script's SetDisposition mid-conversation resets the baseline");
+
+    // See: docs/plans/character_sheet.md#bug-persuasion
+    const float authored = ActorAttribute("player", 6);
+    State().SetDisposition("test_actor", 50);
+    State().BeginConversation("test_actor");
+    g_roll = 80;
+    Check(!Persuade(Persuasion::Admire, FixedRoll).success,
+          "a roll of 80 misses at the authored Personality");
+    RunResultScript("player->SetPersonality 255", context);
+    State().SetDisposition("test_actor", 50);
+    Check(Persuade(Persuasion::Admire, FixedRoll).success,
+          "a script-raised Personality lifts the player's chance");
+    RunResultScript("player->SetPersonality " + std::to_string(static_cast<int>(authored)),
+                    context);
+    State().EndConversation();
     Hooks() = GameHooks();
     State().SetDisposition("test_actor", 50);
 }

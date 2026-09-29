@@ -892,6 +892,32 @@ pinned `0x02002D7C`. But the record's *identity* is only the start; xEdit's
 error on that record is what names the rule being broken, and is far cheaper
 than reverse-engineering the engine's resolution path.
 
+### <a id="scriptvar-owner-reads-masters"></a>A master package owned through GetScriptVariable
+
+**Code:** `tes5_import/packages/aliases.py` (`build_scriptvar_owner_map`)
+
+Morrowind_ob hung at the main menu once creatures started carrying their
+authored packages. The dump's pegged thread was in NPC init at
+`SkyrimSE 1.6.1170 +0x49b874`, walking `NPC_ 1AF8B87F`'s package list:
+
+- **The record:** Morrowind_ob's creature `fbmwTRGoblinChief2`, which lists
+  Oblivion.esm's `CreatureGoblinLeaderFindHeadA` (`PACK 0002DB94`).
+- **The owner:** that package's field at `+0x70` held quest `00007B2E` (MS46).
+
+When a package is rejected, the engine unlinks it by searching for the RESOLVED
+id, while the node still holds the file-relative id. When the two differ, the
+search misses and the walk restarts from the second node, so it loops forever.
+
+**Why the filter missed it.** The package names its quest only indirectly:
+`GetScriptVariable` on ref `0002FEC4`, whose variable MS46's scripts set. The
+owner map scanned only the current plugin's INFO and QUST scripts. Oblivion's
+own run found MS46, but Morrowind_ob's run did not, so `npc_packages` let the
+package through.
+
+**Fix.** The map also scans the masters' result scripts. The plugin's own
+scripts come first and win. A master INFO's `Quest` field is in the master's id
+space, so it resolves against the masters' re-keyed QUST ids by low 24 bits.
+
 ## <a id="generated-records-reuse-the-masters"></a>Generated records reuse the master's
 
 **Code:** `tes5_import/overrides/adoption.py`

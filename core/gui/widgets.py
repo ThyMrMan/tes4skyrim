@@ -27,11 +27,15 @@ case often enough that a raw compare would read as a switch and wipe it.
 See: docs/reference/pipeline.md#configuration
 """
 
+import os
+import subprocess
+import sys
 import threading
 import tkinter as tk
 from tkinter import filedialog, ttk
 
 from core.gui.config import CLR, REPO_ROOT
+from core.subprocess_flags import POPEN_FLAGS
 
 #: Vertical padding a sidebar separator owns on both sides.
 SEP_GAP = 12
@@ -58,6 +62,24 @@ def open_url(url: str) -> None:
         except Exception:
             pass
     threading.Thread(target=_go, daemon=True).start()
+
+
+def open_folder(app, path: str, what: str) -> None:
+    """Reveal `path` in the system file manager."""
+    if not path or not os.path.isdir(path):
+        app.info(f"Open {what}",
+                 f"{what} does not exist yet:\n\n{path or '(not set)'}\n\n"
+                 "Run a conversion first.")
+        return
+    try:
+        if sys.platform == "win32":
+            os.startfile(path)
+        elif sys.platform == "darwin":
+            subprocess.Popen(["open", path], **POPEN_FLAGS)
+        else:
+            subprocess.Popen(["xdg-open", path], **POPEN_FLAGS)
+    except OSError as exc:
+        app.info(f"Open {what}", f"Could not open:\n\n{path}\n\n{exc}")
 
 
 def _dialog_body(card, title: str, message: str, links, status=None) -> None:

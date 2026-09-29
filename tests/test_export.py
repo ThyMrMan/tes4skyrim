@@ -616,6 +616,29 @@ if __name__ == "__main__":
     unittest.main(verbosity=2)
 
 
+class TestSkillData:
+    """SKIL DATA starts with the skill's own Action index, before the governing attribute.
+
+    See: docs/plans/character_sheet.md#bug-skil-shift
+    """
+
+    #: SkillAlchemy (Oblivion.esm SKIL 00000044) DATA, verbatim.
+    RAW = bytes.fromhex('1300000001000000010000000000a0400000003f')
+
+    def test_fields_land_on_their_own_names(self):
+        """Alchemy: Action 19, Intelligence, Magic, use values 5.0 and 0.5."""
+        from tes4_export.tes4_reader import Record, Subrecord
+        from tes4_export.record_types.actors import export_SKIL
+        rec = Record(type='SKIL', data_size=0, flags=0, form_id=0x44,
+                     subrecords=[Subrecord('EDID', b'SkillAlchemy\x00'), Subrecord('DATA', self.RAW)])
+        got = dict(line.partition('=')[::2] for line in export_SKIL(rec))
+        assert got['DATA.Action'] == '19'
+        assert got['DATA.Attribute'] == '1'
+        assert got['DATA.Specialization'] == '1'
+        assert float(got['DATA.UseValue1']) == 5.0
+        assert float(got['DATA.UseValue2']) == 0.5
+
+
 class TestFalloutActorAcbs:
     """FO3/FNV ACBS drops TES4's SpellPoints, shifting every later field.
 

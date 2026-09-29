@@ -592,6 +592,13 @@ whole archive) and extracted once into `export/morrowind_assets/meshes/`. The
 BODY records themselves are read from the master ESMs resolved the same way,
 by `resolve_plugin_path`.
 
+The compatibility patch deliberately skips `base_anim*` when extracting, and
+Morroblivion ships no Morrowind skeleton, so the registered install is the only
+source of `base_anim.nif`. A user who built the patch (CLI
+`--build-morrowind-patch <dir>` or the GUI folder picker) but never registered
+that folder got `base_anim.nif not found; N worn meshes skipped` on Tamriel
+Rebuilt. `build_patch` now registers the Data Files folder it was given.
+
 ### <a id="who-owns-a-mesh"></a>Ownership is asked of the SOURCE, not the extracted tree
 
 **Code:** `source_meshes` in `asset_convert/sources/morrowind_assets.py`,
@@ -898,7 +905,7 @@ Morrowind enum translated to the TES4 one where they differ:
 | LHDT flags | `DATA.Flags` | identical bits; 0x10 (Fire) is masked by the importer |
 | CNDT weight, FLAG | `DATA.Weight`, `DATA.Flags` | Respawn 0x02 -> TES4 0x01 |
 | MCDT flags & 1 (key) | record becomes **KEYM** | 285 of 536 MISC records |
-| BKDT skill | `DATA.Teaches` | the 27-skill enum mapped onto TES4's 21 (medium armor -> heavy, axe/spear -> blunt, short blade -> blade, unarmored -> light armor, enchant -> mysticism) |
+| BKDT skill | `DATA.Teaches` | the 27-skill enum mapped onto TES4's 21 (medium armor -> heavy, axe/spear -> blunt, short blade -> blade, unarmored -> light armor); enchant, which TES4 lacks, is `MW_ENCHANT_SKILL` (100, actor value 112) |
 | BKDT isScroll | `DATA.Flags` 0x01 | |
 | ALDT autocalc | `ENIT.Flags` | TES4's bit is "NO auto-calc", so it is inverted |
 | REPA / PROB / LOCK | **MISC** | Skyrim has no repair or probe items; the importer had no dispatch for these signatures, so their references dangled |
@@ -996,7 +1003,7 @@ OBLIVION race FormID (`RNAM.Race=000191C1` for Dark Elf), because
 |---|---|
 | FLAG Female 0x01 / Essential 0x02 / Respawn 0x04 / Autocalc 0x10 | `ACBS.Flags` 0x01 / 0x02 / 0x08 / 0x10 |
 | CREA FLAG Biped 0x01 / Respawn 0x02 / Weapon 0x04 / Essential 0x80 | `ACBS.Flags` 0x01 / 0x08 / 0x04 / 0x02 (swims, flies, walks keep their bits) |
-| NPDT 52-byte: level, 8 attributes, 27 skills, health, mana, fatigue, gold | `ACBS.Level`, `DATA.<attribute>`, `DATA.<skill>` (the 27 folded onto 21, taking the larger where two collide), `DATA.Health`, `ACBS.SpellPoints`, `ACBS.Fatigue`, `ACBS.BarterGold` |
+| NPDT 52-byte: level, 8 attributes, 27 skills, health, mana, fatigue, gold | `ACBS.Level`, `DATA.<attribute>`, `DATA.<skill>` (the 27 folded onto 21 plus `DATA.Enchant`, taking the larger where two collide), `DATA.Health`, `ACBS.SpellPoints`, `ACBS.Fatigue`, `ACBS.BarterGold` |
 | NPDT 12-byte (autocalc): level, disposition, reputation, rank, gold | `ACBS.Level`, `ACBS.BarterGold`; stats come from the Autocalc bit |
 | AIDT hello, fight, flee, alarm, services | `AIDT.EnergyLevel` 50, `AIDT.Aggression`=fight, `AIDT.Confidence`=100-flee, `AIDT.Responsibility`=alarm, `AIDT.Services` with Morrowind-only bits (picks 0x20, probes 0x40, repair items 0x200, spellmaking 0x8000) cleared |
 | ANAM faction + NPDT rank | `Faction[0].FormID` / `.Rank` |

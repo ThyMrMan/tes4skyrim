@@ -746,18 +746,18 @@ def _info_conditions(rec: dict, injected_ctdas: bytes,
 
     Each CTDA keeps its CIS2 (the Papyrus variable name of a converted
     GetScriptVariable/GetQuestVariable read).  A Say-driven parent topic
-    retargets or drops its RunOn=Target conditions per SAY_TOPIC_DISPOSITIONS.
+    retargets or drops its RunOn=Target conditions per SAY_TOPIC_DISPOSITIONS;
+    an engine-fired one drops only its identity tests.
 
     See: docs/commentary/tes5_import_conditions.md#condition-order
     """
-    say_disp = SAY_TOPIC_DISPOSITIONS.get(
-        get_formid(rec, 'ParentDIAL') & 0xFFFFFF)
-    say_ref = say_disp[1] if say_disp and say_disp[0] == 'ref' else None
-    say_drop = bool(say_disp) and say_disp[0] == 'drop'
+    kind, say_ref = SAY_TOPIC_DISPOSITIONS.get(
+        get_formid(rec, 'ParentDIAL') & 0xFFFFFF, ('', None))
     pairs = _packed_condition_pairs(injected_ctdas)
     for ctda, cis2 in convert_ctda_list_with_strings(
-            rec, script_vars,
-            run_on_target_ref=say_ref, drop_run_on_target=say_drop):
+            rec, script_vars, run_on_target_ref=say_ref,
+            drop_run_on_target=kind == 'drop',
+            drop_identity_target=kind == 'target'):
         pairs.append((ctda, pack_string_subrecord('CIS2', cis2) if cis2
                       else b''))
     return b''.join(pack_subrecord('CTDA', ctda) + extra

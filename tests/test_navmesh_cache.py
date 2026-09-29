@@ -74,6 +74,34 @@ def test_tag_ignores_collision_mtime(tmp_path, monkeypatch):
     assert navm_pool.navmesh_geom_cache(str(col))[1] == first[1]
 
 
+def test_each_generator_keeps_its_own_cache_folder(tmp_path, monkeypatch):
+    """The lattice never writes over the corridor's (published) cache folder, and its tag differs."""
+    from core.navmesh_options import NAVMESH_GENERATOR_ENV_VAR
+    col = tmp_path / 'collision_cache.bin'
+    col.write_bytes(b'x')
+    monkeypatch.setenv(NAVMESH_GENERATOR_ENV_VAR, 'corridor')
+    corridor = navm_pool.navmesh_geom_cache(str(col))
+    monkeypatch.setenv(NAVMESH_GENERATOR_ENV_VAR, 'lattice')
+    lattice = navm_pool.navmesh_geom_cache(str(col))
+    assert os.path.basename(corridor[0]) == 'navmesh_geom_cache'
+    assert lattice[0] != corridor[0] and lattice[1] != corridor[1]
+
+
+def _hashes_lattice():
+    """True when the current generator's tag hashes any lattice/ source."""
+    return any(os.sep + 'lattice' + os.sep in s for s in navm_pool.tag_sources())
+
+
+def test_lattice_sources_never_feed_the_published_tag(monkeypatch):
+    """Only a lattice run hashes lattice/, so editing it neither misses the corridor cache nor gates a push."""
+    from core.navmesh_options import NAVMESH_GENERATOR_ENV_VAR
+    monkeypatch.setenv(NAVMESH_GENERATOR_ENV_VAR, 'corridor')
+    assert not _hashes_lattice()
+    monkeypatch.setenv(NAVMESH_GENERATOR_ENV_VAR, 'lattice')
+    assert _hashes_lattice()
+    assert hook.touches_navmesh(['tes5_import/navmesh/lattice/simplify.py']) == []
+
+
 def test_tag_tracks_navmesh_sources(tmp_path):
     """Editing a navmesh source must change the tag (self-invalidation)."""
     col = tmp_path / 'collision_cache.bin'
@@ -1035,7 +1063,7 @@ def test_no_download_env_var_is_shared_not_duplicated():
     """
     assert nc.NO_DOWNLOAD_ENV_VAR == 'TESCONV_NO_CACHE_DOWNLOAD'
     root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-    for name in ('core/gui/runner.py', 'convert.py'):
+    for name in ('core/gui/runner.py',):
         with open(os.path.join(root, name), encoding='utf-8') as fh:
             src = fh.read()
         assert 'NO_DOWNLOAD_ENV_VAR' in src, name
@@ -1047,6 +1075,16 @@ def test_no_download_env_var_is_shared_not_duplicated():
         assert not code, (
             '%s hardcodes the env var in code; import NO_DOWNLOAD_ENV_VAR: %s'
             % (name, code))
+
+
+def test_download_allowed_honors_saved_setting_and_env(monkeypatch):
+    """A CLI run must obey the saved GUI setting, not only the env var."""
+    monkeypatch.delenv(nc.NO_DOWNLOAD_ENV_VAR, raising=False)
+    assert nc.download_allowed({}) is True
+    assert nc.download_allowed({nc.DOWNLOAD_CONFIG_KEY: True}) is True
+    assert nc.download_allowed({nc.DOWNLOAD_CONFIG_KEY: False}) is False
+    monkeypatch.setenv(nc.NO_DOWNLOAD_ENV_VAR, '1')
+    assert nc.download_allowed({nc.DOWNLOAD_CONFIG_KEY: True}) is False
 
 
 def test_auto_install_explains_the_download_opt_out(
@@ -1196,6 +1234,62 @@ def test_uncertify_removes_only_the_stamp(tmp_path):
     assert (cdir / '00000001_00000002.pkl').exists()
 
 
+def _failing_convert(monkeypatch, cdir, outcomes):
+    """Patch the worker's build to replay `outcomes`, recording if the entry existed."""
+    from tes5_import.navmesh import worker as navm_worker
+    seen = []
+
+    def convert(_job, geom_cache):
+        """Raise or return the next outcome; note whether the entry is on disk."""
+        seen.append((geom_cache is not None,
+                     (cdir / '00000001_00000002.pkl').exists()))
+        got = outcomes.pop(0)
+        if isinstance(got, Exception):
+            raise got
+        return got
+    monkeypatch.setattr(navm_worker, '_convert', convert)
+    monkeypatch.setattr(navm_worker, '_GEOM_CACHE', (str(cdir), 'tag'))
+    return navm_worker, seen
+
+
+def test_a_failed_cell_drops_its_entry_and_builds_once_more(tmp_path, monkeypatch):
+    """An adopted entry that cannot be packed must not keep failing the cell.
+
+    See: docs/commentary/tes5_import_navmesh.md#a-failed-cell-keeps-no-cache-entry
+    """
+    cdir = tmp_path / 'navmesh_geom_cache'
+    cdir.mkdir()
+    (cdir / '00000001_00000002.pkl').write_bytes(b'payload')
+    worker, seen = _failing_convert(
+        monkeypatch, cdir, [ValueError('bad cached geometry'), (b'NAVM', {})])
+    key, (navm, meta) = worker.run_job({'key': (1, 2)})
+    assert key == (1, 2) and navm == b'NAVM' and 'error' not in meta
+    assert seen == [(True, True), (True, False)]
+
+
+def test_a_cell_that_fails_twice_leaves_no_entry(tmp_path, monkeypatch):
+    """A retry that fails too reports the error and deletes what it stored."""
+    cdir = tmp_path / 'navmesh_geom_cache'
+    cdir.mkdir()
+    (cdir / '00000001_00000002.pkl').write_bytes(b'payload')
+    boom = ValueError('overflow')
+    worker, _seen = _failing_convert(monkeypatch, cdir, [boom, boom])
+    _key, (navm, meta) = worker.run_job({'key': (1, 2)})
+    assert navm is None and 'overflow' in meta['error']
+    assert not (cdir / '00000001_00000002.pkl').exists()
+
+
+def test_a_prover_never_retries_or_deletes(tmp_path, monkeypatch):
+    """A prove job builds without the cache, so it has no entry to drop."""
+    cdir = tmp_path / 'navmesh_geom_cache'
+    cdir.mkdir()
+    (cdir / '00000001_00000002.pkl').write_bytes(b'payload')
+    worker, seen = _failing_convert(monkeypatch, cdir, [ValueError('x')])
+    worker.run_job({'key': (1, 2), 'prove': True})
+    assert seen == [(False, True)]
+    assert (cdir / '00000001_00000002.pkl').exists()
+
+
 def test_rekey_rewrites_only_the_hash(tmp_path):
     """Adoption changes the KEY, never the geometry."""
     path = tmp_path / 'e.pkl'
@@ -1203,13 +1297,37 @@ def test_rekey_rewrites_only_the_hash(tmp_path):
             'tris': np.zeros((1, 3), dtype=np.int32), 'ledges': [(1, 2)]}
     with open(path, 'wb') as fh:
         pickle.dump(blob, fh)
-    assert adopt.rekey(str(path), 'new') is True
+    assert navm_verify.rekey_entry(str(path), 'new') is True
     got = pickle.load(open(path, 'rb'))
     assert got['hash'] == 'new'
     assert np.array_equal(got['verts'], blob['verts'])
     assert np.array_equal(got['tris'], blob['tris'])
     assert got['ledges'] == [(1, 2)]
-    assert adopt.rekey(str(path), 'new') is False
+    assert navm_verify.rekey_entry(str(path), 'new') is False
+
+
+def test_rekey_keeps_a_cell_whose_pins_changed_stale(tmp_path, monkeypatch):
+    """A re-key stamps new pins' hash only onto geometry built with those pins.
+
+    See: docs/commentary/tes5_import_navmesh.md#adopt-and-pins
+    """
+    from tes5_import.navmesh import from_pgrd
+    monkeypatch.setattr(navm_verify, '_job_key',
+                        lambda job, gc: '%s|%s' % (gc[1], job['pins']))
+    monkeypatch.setattr(from_pgrd, 'cell_pins',
+                        lambda rec, cell, gc: ({}, rec['pins']))
+    stored = {1: 'T0|', 2: 'T0|p1', 3: 'T0|'}
+    pins = {1: '', 2: 'p1', 3: 'p2'}
+    jobs = []
+    for n, was in stored.items():
+        with open(tmp_path / ('%08X_%08X.pkl' % (n, n)), 'wb') as fh:
+            pickle.dump({'hash': was}, fh)
+        jobs.append({'key': (n, n), 'pins': pins[n], 'cell_rec': {},
+                     'pgrd_rec': {'pins': pins[n]}})
+    navm_verify.rekey_cache(jobs, (str(tmp_path), 'T1'), 'T0')
+    got = {n: pickle.load(open(tmp_path / ('%08X_%08X.pkl' % (n, n)), 'rb'))['hash']
+           for n in stored}
+    assert got == {1: 'T1|', 2: 'T1|p1', 3: 'T0|'}
 
 
 def test_environment_records_what_the_tag_cannot_see():
@@ -1223,6 +1341,37 @@ _GEOM_A = ([(0.0, 0.0, 0.0)], [(0, 0, 0)], [])
 _GEOM_B = ([(9.0, 0.0, 0.0)], [(0, 0, 0)], [])
 
 
+def _stale_entries(monkeypatch, current=()):
+    """Stub every cell's entry as stored by OLDER code, except the keys in `current`."""
+    monkeypatch.setattr(navm_verify, '_stored_hash',
+                        lambda _g, key: 'new' if key in current else 'old')
+    monkeypatch.setattr(navm_verify, '_job_key', lambda _j, _g: 'new')
+
+
+def test_proving_never_samples_entries_the_current_code_built(monkeypatch):
+    """A half-regenerated cache must be proven on its STALE half.
+
+    A stopped run left Morrowind_ob with 2,508 cells rebuilt by the new code;
+    the next import sampled only those, found 40/40 identical, and adopted the
+    2,777 cells nothing had rebuilt.
+    See: docs/commentary/tes5_import_navmesh.md#adoption-samples-only-stale-entries
+    """
+    from tes5_import.navmesh import from_pgrd
+    monkeypatch.setattr(from_pgrd, 'cached_geometry', lambda *_a: _GEOM_A)
+    jobs = [_job('interior', i) for i in range(6)]
+    _stale_entries(monkeypatch, current={(i, i) for i in range(3)})
+    seen = []
+
+    def _rebuild(js):
+        """Record which cells were proven; every one reproduces."""
+        for j in js:
+            seen.append(j['key'][0])
+            yield j['key'], (b'', {'geometry': _GEOM_A})
+
+    assert navm_verify.prove_cache(jobs, ('dir', 'tag'), 6, _rebuild) == (3, [])
+    assert seen == [3, 4, 5]
+
+
 def _prove_with_stub(monkeypatch, geoms, jobs):
     """Run prove_cache over stubbed cells; returns (checked, bad, rebuilt).
 
@@ -1230,6 +1379,7 @@ def _prove_with_stub(monkeypatch, geoms, jobs):
     geometry is always _GEOM_A, so any other value reads as a mismatch.
     """
     from tes5_import.navmesh import from_pgrd, worker as navm_worker
+    _stale_entries(monkeypatch)
     rebuilt = []
 
     def _run(job):
@@ -1278,6 +1428,7 @@ def test_proving_uses_the_rebuild_callable_it_was_given(monkeypatch):
 
     monkeypatch.setattr(from_pgrd, 'cached_geometry', lambda *_a: _GEOM_A)
     monkeypatch.setattr(navm_worker, 'run_job', _boom)
+    _stale_entries(monkeypatch)
     jobs = [_job('interior', i) for i in range(3)]
     checked, bad = navm_verify.prove_cache(
         jobs, ('dir', 'tag'), 3,
@@ -1293,6 +1444,7 @@ def test_proving_reports_the_first_mismatch_in_submission_order(monkeypatch):
     """
     from tes5_import.navmesh import from_pgrd
     monkeypatch.setattr(from_pgrd, 'cached_geometry', lambda *_a: _GEOM_A)
+    _stale_entries(monkeypatch)
     jobs = [_job('interior', i) for i in range(4)]
     geoms = {0: _GEOM_A, 1: _GEOM_B, 2: _GEOM_B, 3: _GEOM_A}
 

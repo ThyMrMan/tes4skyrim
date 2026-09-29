@@ -40,7 +40,7 @@ see the `oblivion-to-skyrim-dialog` skill.
 | CLOT | ARMO | Clothing → ARMO with ArmorType=Clothing in BOD2. Same ARMA requirement. |
 | CONT | CONT | Add OBND. Minor changes. |
 | CREA | NPC_ | **No CREA in TES5**. Must convert to NPC_. TES4 creature stats (attributes, skills) must map to TES5 DNAM. Needs race assignment. |
-| CSTY | CSTY | **Completely restructured**: TES4 CSTD/CSAD → TES5 CSGD/CSMD/CSME. |
+| CSTY | CSTY | **Completely restructured**: TES4 CSTD/CSAD chances → TES5 CSGD/CSME/CSCR/CSLR multipliers ([why](../commentary/tes5_import_actors.md#combat-styles)). FO3/FNV styles are not converted. |
 | DIAL | DIAL | Categories restructured. TES5 adds DLBR (Dialog Branch) and DLVW (Dialog View). |
 | DOOR | DOOR | Add OBND. Minor changes. |
 | EFSH | EFSH | DATA structure differs. |
@@ -193,6 +193,10 @@ because it runs too early or in the wrong order:
   (00021E81). Skipped CSTY refs are likewise replaced: ZNAM = `csWolf` (00057BE8) for animal/horse CREA,
   `DefaultCombatstyle` (0000003D) otherwise. TES4 aggression >5 now maps to TES5 tier 1 (the old >=40
   threshold left e.g. dogs at Unaggressive, which never initiates combat).
+  **Superseded:** TES4 CSTY records are now converted and ZNAM points at them; the csWolf /
+  DefaultCombatstyle fallback remains only for FO3/FNV and Morrowind sources.
+  **Superseded:** PACK records are now converted, so NPC_ and CREA keep their own packages in TES4 order
+  (quest packages excluded); creatures add `DefaultMasterPackageCreature` last as the fallback.
 - **QUST** — Alias system, objectives, and VMAD fragments are all new. Only basic stage data can be transferred.
 - **INFO** — Dialog response structure changed significantly. VMAD fragments replace result scripts.
 - **NPC_/CREA** — Attribute system removed, skill system changed, many new subsystems (templates, outfits, perks, keywords).
@@ -519,9 +523,9 @@ FormID drift and breaks saves.
 |---------------------|---------------------|-------|
 | Armorer (12) | Smithing (10) | |
 | Athletics (13) | *(none)* | Removed in TES5 |
-| Blade (14) | One-Handed (6) | |
+| Blade (14) | One-Handed (6) and Two-Handed (7) | NPC skills feed both; reads take the higher; writes, trainers and books use One-Handed |
 | Block (15) | Block (9) | |
-| Blunt (16) | One-Handed (6) | Merged with Blade |
+| Blunt (16) | One-Handed (6) and Two-Handed (7) | As Blade; Fortify Blunt is Two-Handed |
 | Hand to Hand (17) | One-Handed (6) | Merged with Blade |
 | Heavy Armor (18) | Heavy Armor (11) | |
 | Alchemy (19) | Alchemy (16) | |
@@ -529,14 +533,14 @@ FormID drift and breaks saves.
 | Conjuration (21) | Conjuration (19) | |
 | Destruction (22) | Destruction (20) | |
 | Illusion (23) | Illusion (21) | |
-| Mysticism (24) | Illusion (21) | Merged with Illusion |
+| Mysticism (24) | Alteration (18) | Where its spells' school converts |
 | Restoration (25) | Restoration (22) | |
 | Acrobatics (26) | *(none)* | Removed in TES5 |
 | Light Armor (27) | Light Armor (12) | |
 | Marksman (28) | Archery (8) | |
-| Mercantile (29) | Pickpocket (13) | Approximate |
+| Mercantile (29) | Speech (17) | Speech trains from trading and sets prices |
 | Security (30) | Lockpicking (14) | |
-| Sneak (31) | Sneak (15) | |
+| Sneak (31) | Sneak (15), and Pickpocket (13) for NPC skills | Oblivion's Sneak covered pickpocketing ("Pick pockets and move unseen") |
 | Speechcraft (32) | Speech (17) | |
 
 TES4 Attributes (Strength, Intelligence, etc.) have no TES5 equivalent. Health/Magicka/Stamina are derived from TES4 attributes for NPC conversion.

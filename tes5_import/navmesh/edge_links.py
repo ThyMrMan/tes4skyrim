@@ -171,7 +171,9 @@ def border_edges(view: NavMeshView, axis: int, coord: float):
     """[(tri_index, edge_slot, midpoint, z)] for border edges lying on a seam.
 
     A border edge is one whose neighbour field is -1 (nothing local adjoins it).
+    It must run ALONG the seam: a stub crossing the band is not one.
     `axis` 0 = the seam is a constant-X plane, 1 = constant-Y.
+    See: docs/commentary/tes5_import_navmesh.md#seam-edges-run-along-the-seam
     """
     if len(view.tris) == 0:
         return []
@@ -199,7 +201,9 @@ def border_edges(view: NavMeshView, axis: int, coord: float):
         # KEPT.  `<=` would silently drop it.  Same predicate, same result.
         with np.errstate(invalid='ignore'):
             on_seam = ~((np.abs(a[:, axis] - coord) > SEAM_BAND) |
-                        (np.abs(b[:, axis] - coord) > SEAM_BAND))
+                        (np.abs(b[:, axis] - coord) > SEAM_BAND) |
+                        (np.abs(a[:, axis] - b[:, axis]) >=
+                         np.abs(a[:, 1 - axis] - b[:, 1 - axis])))
         if not on_seam.any():
             continue
         keep = np.nonzero(on_seam)[0]

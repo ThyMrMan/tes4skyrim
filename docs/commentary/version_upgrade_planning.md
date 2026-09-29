@@ -57,6 +57,95 @@ Why each member qualifies:
 tables agree precisely because that divergence is invisible at runtime — the step
 still works, it just never stops being offered.
 
+## <a id="what-a-release-owes"></a>What a release owes: `tools/release/release_notes.py`
+
+The tag-on-push workflow writes each release's "Steps to re-run in the GUI"
+checklist, and that checklist is the ONLY input the app's upgrade planner reads.
+An over-wide checklist is not cosmetic noise: it tells every user to redo a
+multi-hour reconversion. Measured over the 30 releases 0.642–0.671 with the
+hunk-header attribution this replaced: 7 asked for all 17 steps, every one
+because `convert.py` changed, and in every case the changed code was imports,
+the module docstring, or run/dispatch helpers (`_run_pipeline`,
+`_phase_runners`, `_run_steps`, `_mod_commands`, …) that no phase calls. 0.672
+changed only `tes_runtime/` and a config helper and still asked for all 17; it
+owed only Package SKSE Mod.
+
+Three layers decide a path's cost, cheapest first.
+
+### <a id="python-files"></a>1. A Python file that runs no differently costs nothing
+
+`modified_units()` parses the file at both revisions and compares each top-level
+unit (def, class, single-name assignment) by its AST with docstrings stripped.
+So comments, docstrings, formatting and imports never count. A **brand-new**
+unit does not count either: nothing calls it until a caller changes, and that
+caller is a change of its own. Exceptions, which do count:
+
+- a new **decorated** def (a decorator can register it with no caller);
+- any change to loose top-level code that binds no name (`MODULE_UNIT`);
+- a file that is new, deleted or unparseable at either end — nothing proves it
+  unused, so its rule applies.
+
+Name-based dispatch was checked before relying on "new = unused": the only
+`getattr(module, name)` lookup in the stage packages
+(`tes5_import/overrides/builder.py`) takes its name from a table, which is
+itself a modified unit when an entry is added.
+
+With the change filtered to real units, 0.652, 0.663 and 0.664's
+`output_layout.py` edits (new helpers only) and this release's cost nothing.
+
+### <a id="convert-py"></a>2. `convert.py` costs the phases that reach the change
+
+`convert_py_steps()` builds `convert.py`'s call graph (which top-level names each
+unit loads) and charges each `phase_*` in `PHASE_STEPS` whose reachable set
+contains a modified unit. A modified unit no phase reaches — `main`,
+`_run_pipeline`, the dispatch helpers — is orchestration: it decides which
+phases run and where output goes, never what a phase writes, so it costs
+nothing. This replaced a hand-kept list of orchestration functions, which had
+fallen six helpers behind. Only a change to loose top-level code falls back to
+every step.
+
+It used to read git's `-U0` hunk headers instead. Those name the nearest
+preceding function *line*, so an import hunk read as "not in a function" →
+every step, and any helper not on the list did the same.
+
+### <a id="the-rules"></a>3. `RULES`: path → steps
+
+First match wins, so every narrow rule sits above the blanket rule that would
+swallow it. The non-obvious entries:
+
+- **Every LOD module feeds ONE step.** The whole load order's LOD, plus the
+  sibling merge, comes from the single "Create LOD" action.
+- `worldmap_clouds.py` is generated from both sides — per worldspace by Import
+  (`record_types/world.py`) and as a merged union by the sibling pass.
+- `skin_replacement.py` is imported by `nif_converter`, so it is a mesh change
+  as well as a Body Slot Patch one. `skyrim_assets.py` feeds meshes, creature
+  skeletons (`extract_skeleton_bones`) and the body patch.
+- `asset_convert` patterns allow any folder depth; a one-level pattern dropped
+  nested modules through to the mesh catch-all.
+- `native/*.md|txt` sits above `^native/`: 0.57 charged a mesh, creature and
+  LOD rebuild for `native/dist/README.md`.
+- Five `tools/` scripts ARE global actions (`create_lod`, `pack_lod`,
+  `package_start_mod`, `package_runtime_dll`, `tools/misc/convert_ui.py`)
+  and sit above the blanket `^tools/` rule.
+- `core/worker_budget|subprocess_flags|process_job` and `output_layout.py` imply
+  every step: pool plumbing and the output layout feed every stage. A new
+  helper in either costs nothing (layer 1); a modified one does.
+- `core/run_log|plugin_masters` only report. The bare `^core/` tail reads a new
+  module as a GUI change (no re-run) rather than leaving it unmapped.
+- `tes_runtime/` and `TESGameSelect/` are committed prebuilt plugins no phase
+  reads; they re-run only their own packaging action.
+- `preflight.py`, `convert_cli.py`, `source_paths.py`, `requirements.txt`: they
+  gate, parse or locate inputs; a fix there makes a failing run work but never
+  changes what a working run wrote. `game_bridge/` is a live-debug tool,
+  `navmesh_cache/` a README.
+- Packaging: 9./10. are added whenever a per-plugin producing step fires, Pack
+  LOD only with Create LOD; the standalone global actions pull in neither.
+
+`tests/test_release_notes.py` fails when any tracked path matches no rule, so
+a new top-level file is caught at PR time instead of surfacing as "Unmapped
+paths" in a public announcement. When every step fires, the notes name the
+paths that caused it.
+
 ## <a id="what-selects-convert-ui"></a>What selects "Convert Oblivion UI" in the release notes
 
 `release_notes.RULES` maps a changed path to the steps it makes stale. Three

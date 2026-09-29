@@ -126,6 +126,24 @@ WINDING_MODES = (WINDING_AUTO, WINDING_ON, WINDING_OFF)
 #: conversion_config.json key for the object-LOD detail preset index.
 LOD_DETAIL_CONFIG_KEY = "lodDetail"
 
+#: conversion_config.json key for the navmesh generator (core.navmesh_options.GENERATORS).
+NAVMESH_GENERATOR_CONFIG_KEY = "navmeshGenerator"
+
+#: conversion_config.json key for the folder the navmesh editor saves pins to.
+NAVMESH_PINS_CONFIG_KEY = "navmeshPinsDir"
+
+#: That folder until the user picks another: beside the app, so an update never replaces it.
+DEFAULT_NAVMESH_PINS_DIR = REPO_ROOT / "my_navmesh_pins"
+
+
+def navmesh_pins_dir(cfg=None) -> str:
+    """The navmesh pin save folder: the saved setting, else the default.
+
+    See: docs/commentary/tes5_import_navmesh.md#user-pin-folder
+    """
+    cfg = load_config() if cfg is None else cfg
+    return str(cfg.get(NAVMESH_PINS_CONFIG_KEY) or DEFAULT_NAVMESH_PINS_DIR)
+
 
 def lod_detail_labels() -> tuple:
     """One menu label per detail preset: its distant-LOD triangle multiplier.

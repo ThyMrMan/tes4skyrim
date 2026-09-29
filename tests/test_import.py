@@ -746,7 +746,8 @@ class TestConverters:
         writer = _DerivingWriter()
         cr.load_creature_item_index({})
         race, variants, _vnam = cr._build_race_chain(
-            writer, founder, key[0], list(key[1]), proj, key, {key: [founder, black, twin]})
+            writer, founder, key[0], list(key[1]), proj, key, {key: [founder, black, twin]},
+            set())
         assert list(variants) == [42] and variants[42] != race
         reach = {struct.unpack('<I', d[12:16])[0]:
                  struct.unpack_from('<f', self._get_subrecord_data(d, 'DATA'), 100)[0]
@@ -755,6 +756,31 @@ class TestConverters:
         arma = next(d for t, d in writer.records if t == 'ARMA')
         extra = [struct.unpack('<I', v)[0] for s, v in self._iter_subrecords(arma) if s == 'MODL']
         assert extra == [variants[42]]
+
+    def test_only_a_talking_creature_race_allows_pc_dialogue(self, tmp_path):
+        """A creature named by a GREETING GetIsID or a TES3 MWIN Topic Actor talks; one named
+        only by a combat bark does not, and only a talking race keeps Allow PC Dialogue."""
+        from tes5_import.actors import creature_races as cr
+        from tes5_import.actors.creature_speakers import talking_creatures
+        from tes5_import.base.text_reader import get_formid
+
+        def getisid(fid):
+            """A raw TES4 `GetIsID(fid) == 1` condition."""
+            return (bytes(4) + struct.pack('<fII', 1.0, 72, fid) + bytes(8)).hex()
+        crabs = [{'Signature': 'CREA', 'FormID': f'0000000{i}', 'EditorID': e}
+                 for i, e in enumerate(('talker', 'barker', 'mwtalker', 'mute'), 1)]
+        by_type = {
+            'DIAL': [{'Signature': 'DIAL', 'FormID': '00000A01', 'EditorID': 'GREETING', 'DATA.Type': '0'},
+                     {'Signature': 'DIAL', 'FormID': '00000A02', 'EditorID': 'Attack', 'DATA.Type': '2'}],
+            'INFO': [{'Signature': 'INFO', 'ParentDIAL': '00000A01', 'Condition[0].Raw': getisid(1)},
+                     {'Signature': 'INFO', 'ParentDIAL': '00000A02', 'Condition[0].Raw': getisid(2)}]}
+        (tmp_path / 'MWIN.txt').write_text(
+            '---RECORD_BEGIN---\nSignature=MWIN\nInfoType=Topic\nActor=MWTalker\n---RECORD_END---\n'
+            '---RECORD_BEGIN---\nSignature=MWIN\nInfoType=Voice\nActor=mute\n---RECORD_END---\n')
+        talkers = talking_creatures(crabs, by_type, {}, str(tmp_path))
+        assert talkers == {get_formid(crabs[0], 'FormID'), get_formid(crabs[2], 'FormID')}
+        flags = {t: struct.unpack_from('<I', cr._race_data({}, talks=t), 32)[0] for t in (False, True)}
+        assert not flags[False] & 0x200000 and flags[True] & 0x200000
 
     def test_atkd_carries_the_attack_spell(self):
         """ATKD field 3 is 'Attack Spell' (xEdit: [SPEL, SHOU, NULL]) — the
@@ -788,6 +814,27 @@ class TestConverters:
         for after in ('AIDT', 'PKID'):
             if after in order:
                 assert order.index('SPLO') < order.index(after)
+
+    def test_crea_keeps_its_authored_packages(self):
+        """A creature's own packages come first in TES4 order, quest packages
+        excluded, then DefaultMasterPackageCreature as the fallback.
+
+        See: docs/commentary/tes5_import_actors.md#creature-class-and-package
+        """
+        from tes5_import.packages import actor_wiring as aw
+        rec = {'Signature': 'CREA', 'FormID': '0003E9CD', 'RecordFlags': '0',
+               'EditorID': 'TestTroll', 'SpellCount': '0',
+               'ACBS.Flags': '0', 'ACBS.Level': '5', 'FactionCount': '0',
+               'ItemCount': '0', 'AIPackageCount': '3',
+               'AIPackage[0]': '0001AB01', 'AIPackage[1]': '0001AB02',
+               'AIPackage[2]': '0001AB03'}
+        aw.set_quest_packages({0x0001AB01})
+        try:
+            pkids = [struct.unpack('<I', d)[0]
+                     for s, d in self._iter_subrecords(convert_CREA(rec)) if s == 'PKID']
+        finally:
+            aw.set_quest_packages(())
+        assert pkids == [0x0001AB02, 0x0001AB03, aw.PKID_CREATURE_MASTER]
 
     def test_shared_race_keeps_each_creatures_unarmed_damage(self):
         """Creatures sharing a generated race keep their own AttackDamage: the
@@ -4094,6 +4141,38 @@ class TestActorScriptOnPlacedRef:
         assert not _script_uses_self_reference_call(
             'begin GameMode\\r\\n\\tset x to 1\\r\\nend')
 
+    def test_script_variable_binds_same_named_form_only_via_scro(self):
+        """A `ref` variable binds its same-named form only when the SCRO lists it.
+
+        See: docs/commentary/script_convert.md#local-shadows-form
+        """
+        from script_convert.cross_ref import CrossRefGraph
+        from tes5_import.base import object_scripts
+        from tes5_import.base.text_reader import set_formid_index_offset
+        set_formid_index_offset(0)
+        xref = CrossRefGraph()
+        for fid, edid, sig in (('00001234', 'PartnerSwitch', 'REFR'),
+                               ('00005678', 'HenIdle', 'SOUN')):
+            xref.edid_to_formid[edid.lower()] = fid
+            xref.formid_to_edid[fid] = edid
+            xref.record_type[fid] = sig
+        by_type = {
+            'SCPT': [{'FormID': '00000A01', 'EditorID': 'SwitchScript',
+                      'SCTX': 'scn SwitchScript\nref PartnerSwitch\n'
+                              'begin OnActivate\n'
+                              'PartnerSwitch.playgroup forward 1\nend',
+                      'SCRO[0]': '00001234'},
+                     {'FormID': '00000A02', 'EditorID': 'HenScript',
+                      'SCTX': 'scn HenScript\nref HenIdle\nbegin GameMode\n'
+                              'playsound HenIdle\nend'}],
+            'ACTI': [{'FormID': '00000B01', 'SCRI': '00000A01'},
+                     {'FormID': '00000B02', 'SCRI': '00000A02'}],
+        }
+        object_scripts.build_object_script_plan(by_type, xref, {})
+        switch = object_scripts.get_object_vmad(0xB01)
+        assert struct.pack('<I', 0x1234) in switch[switch.index(b'PartnerSwitch'):]
+        assert b'HenIdle' not in object_scripts.get_object_vmad(0xB02)
+
 
 class TestLoadGatedPollStart:
     """A load-gated update loop must start from OnLoad, not OnInit alone.
@@ -4750,6 +4829,48 @@ class TestWeatherConversion:
         assert sndr_gnam(0x0010 | 0x0040) == 0x0007F80B   # loop + 2D -> AMB
         assert sndr_gnam(0x0040) == 0x000172A1            # 2D one-shot -> SFX
         assert sndr_gnam(0x0010) == 0x000172A1            # 3D loop -> SFX
+
+    def _dusk_rec(self, hdr=True):
+        """Nehrim Clear's dusk Sky-Lower, fog and night in every time slot."""
+        raw = bytearray(160)
+        for slot, rgb in ((7, (164, 90, 72)), (1, (164, 90, 72)),
+                          (9, (231, 150, 122))):
+            for time in range(3):
+                o = (slot * 4 + time) * 4
+                raw[o:o + 3] = bytes(rgb)
+            o = (slot * 4 + 3) * 4
+            raw[o:o + 3] = bytes((5, 16, 31))
+        over = {'NAM0.Data': bytes(raw).hex().upper()}
+        if hdr:
+            over.update({'HNAM.TargetLum': '1.2', 'HNAM.BrightScale': '1.75',
+                         'HNAM.BrightClamp': '0.3'})
+        return self._rec(**over)
+
+    def test_dome_colors_take_oblivions_hdr_hue(self):
+        """Oblivion's per-channel bright pass reddens a warm dusk sky; the hue is baked.
+
+        See: docs/commentary/tes5_import_weather.md#baked-hdr-hue
+        """
+        nam0 = _find_subrecord(self._convert(self._dusk_rec()), b'NAM0')
+        out = self._slot(nam0, 7, 2)
+        assert out[0] / out[1] > 2.2, f'sky-lower not reddened: {out}'
+        assert abs(self._lum(out) - self._lum((164, 90, 72))) < 2
+        assert self._slot(nam0, 7, 3) == (5, 16, 31), 'dark night changed'
+        assert self._slot(nam0, 1, 2) == (164, 90, 72), 'fog must not be baked'
+
+    def test_hdr_hue_needs_authored_hdr(self):
+        """A weather with no Oblivion HNAM (FO3/FNV) keeps its colors exactly."""
+        nam0 = _find_subrecord(self._convert(self._dusk_rec(hdr=False)), b'NAM0')
+        assert self._slot(nam0, 7, 2) == (164, 90, 72)
+
+    def test_cloud_tint_takes_oblivions_hdr_hue(self):
+        """The upper cloud tint shifts the same way as the dome."""
+        from tes5_import.record_types.weather import _WTHR_UPPER_LAYER
+        plain = _find_subrecord(self._convert(self._dusk_rec(hdr=False)), b'PNAM')
+        baked = _find_subrecord(self._convert(self._dusk_rec()), b'PNAM')
+        o = (_WTHR_UPPER_LAYER * 4 + 2) * 4
+        p, b = plain[o:o + 3], baked[o:o + 3]
+        assert b[2] / b[0] < p[2] / p[0], f'cloud tint not reddened: {p} -> {b}'
 
 
 class TestClimateConversion:
@@ -6720,18 +6841,16 @@ class TestOutfitIndexAcrossMasters(TestOutfitSplit):
 
 
 class TestAidtConfidenceTiers:
-    """TES4 confidence is a 0-100 scalar; TES5 wants a 0-4 tier.
+    """Skyrim's Cowardly-Brave tiers flee by comparing strength with the enemy, which
+    sent Nehrim's 1-HP exit trolls running.  Only Cowardly (0) and Foolhardy (4)
+    are written; without a margin (Morrowind), Cowardly at 0.
 
-    xEdit wbConfidenceEnum: 0 Cowardly, 1 Cautious, 2 Average, 3 Brave,
-    4 Foolhardy.  Only Foolhardy never flees.  The original mapping
-    (`<30 -> 0, >=70 -> 3, else 2`) never produced tier 1 or tier 4, so
-    Oblivion's most common "fearless" value 100 landed on Brave and actors
-    kept running away.  Vanilla Skyrim's own 5,118 NPC_ records are
-    292/90/1730/393/2613 across the five tiers.
+    See: docs/commentary/tes5_import_actors.md#confidence-tiers
     """
 
     @staticmethod
     def _conf(raw):
+        """The TES5 tier build_aidt writes for TES4 confidence `raw`."""
         from tes5_import.record_types.actor_common import build_aidt
         rec = {'AIDT.Aggression': '5', 'AIDT.Confidence': str(raw),
                'AIDT.Responsibility': '50', 'DATA.Personality': '50'}
@@ -6740,21 +6859,226 @@ class TestAidtConfidenceTiers:
     def test_fearless_maps_to_foolhardy(self):
         assert self._conf(100) == 4
 
-    def test_all_five_tiers_reachable(self):
-        got = {self._conf(v) for v in range(0, 101)}
-        assert got == {0, 1, 2, 3, 4}, f'unreachable tiers: {got}'
+    def test_any_courage_is_foolhardy(self):
+        """No strength-comparing tier: 1-100 are all Foolhardy."""
+        assert {self._conf(v) for v in range(1, 101)} == {4}
 
     def test_tier_is_monotonic_in_confidence(self):
         tiers = [self._conf(v) for v in range(0, 101)]
         assert tiers == sorted(tiers), 'more confidence must never mean more fleeing'
 
-    def test_oblivion_default_50_is_average(self):
-        """50 is Oblivion's engine default and must not read as cowardly."""
-        assert self._conf(50) == 2
-
-    def test_timid_still_flees(self):
+    def test_zero_is_cowardly(self):
         assert self._conf(0) == 0
-        assert self._conf(5) == 0
+
+
+#: Oblivion.esm's overrides of the flee and damage settings.
+_OBLIVION_FLEE_GMSTS = {
+    'fAIFleeConfBase': '30.0', 'fAIFleeHealthMult': '10.0', 'fDamageWeaponMult': '0.5',
+    'fDamageSkillMult': '1.5', 'fDamageStrengthBase': '0.75', 'fDamageStrengthMult': '0.5',
+    'fDamageWeaponConditionBase': '0.5', 'fDamageWeaponConditionMult': '0.5', 'fFatigueBase': '1.0'}
+
+
+class TestFleeMargin:
+    """Oblivion flees when Confidence x fAIFleeConfMult + fAIFleeConfBase + lost
+    health x fAIFleeHealthMult beats the actor's best attack; the margin is what
+    Confidence has left over, flee on sight below 0 and never at Q.
+
+    See: docs/commentary/tes5_import_actors.md#flee-margin
+    """
+
+    @staticmethod
+    def _records(gmsts: dict, extra: dict = None) -> dict:
+        """Create the confidence records for a plugin authoring `gmsts`; returns their FormIDs."""
+        from tes5_import.actors.confidence import create_confidence_records
+        by_type = {'GMST': [{'EditorID': k, 'DATA.Value': v} for k, v in gmsts.items()]}
+        by_type.update(extra or {})
+        return create_confidence_records(TestCombatStyleConversion._Writer(), by_type, None)
+
+    def teardown_method(self):
+        """Switch the margin and style conversion back off for the other tests."""
+        from tes5_import.actors.combat_style import create_combat_styles
+        from tes5_import.actors.confidence import create_confidence_records
+        writer = TestCombatStyleConversion._Writer()
+        create_confidence_records(writer, {}, None, wanted=False)
+        create_combat_styles(writer, {}, None, wanted=False)
+
+    @staticmethod
+    def _creature(conf: int, damage: int) -> dict:
+        """An unarmed creature with this Confidence and AttackDamage."""
+        return {'Signature': 'CREA', 'AIDT.Confidence': str(conf),
+                'DATA.AttackDamage': str(damage)}
+
+    def test_weak_timid_animal_flees_on_sight(self):
+        """UL's ranch horse: 30 - 5 = 25 beats 1.3 x 10 = 13 at full health."""
+        from tes5_import.actors.confidence import confidence_tier, flee_margin, flee_spells
+        self._records(_OBLIVION_FLEE_GMSTS)
+        horse = self._creature(10, 10)
+        assert flee_margin(horse) == -24
+        assert confidence_tier(horse) == 0 and flee_spells(horse) == []
+
+    def test_middling_confidence_flees_below_a_health_line(self):
+        """MQHorseMartin, Confidence 50: margin 16 of Q 20, so flees under 20% health."""
+        from tes5_import.actors.confidence import (FLEE_SPELL_EDID, confidence_tier,
+                                                   flee_margin, flee_spells)
+        fids = self._records(_OBLIVION_FLEE_GMSTS)
+        horse = self._creature(50, 10)
+        assert flee_margin(horse) == 16
+        assert confidence_tier(horse) == 4 and flee_spells(horse) == [fids[FLEE_SPELL_EDID]]
+
+    def test_confidence_sixty_never_flees(self):
+        """A Confidence 75 wolf tops out at 30 - 37.5 + 10 < 10."""
+        from tes5_import.actors.confidence import confidence_tier, flee_margin, flee_spells
+        self._records(_OBLIVION_FLEE_GMSTS)
+        wolf = self._creature(75, 3)
+        assert flee_margin(wolf) >= 20
+        assert confidence_tier(wolf) == 4 and flee_spells(wolf) == []
+
+    def test_a_masterless_plugin_runs_on_the_exe_settings(self):
+        """No GMSTs (Nehrim): ConfBase 40, Q 40; Confidence 50 flees on sight."""
+        from tes5_import.actors.confidence import flee_margin
+        self._records({})
+        assert flee_margin(self._creature(50, 5)) == -10
+
+    def test_fleeing_disabled_never_flees(self):
+        """The style puts the attack term at Q whatever the Confidence."""
+        from tes5_import.actors.combat_style import create_combat_styles
+        from tes5_import.actors.confidence import flee_margin
+        self._records(_OBLIVION_FLEE_GMSTS)
+        create_combat_styles(TestCombatStyleConversion._Writer(),
+                             {'CSTY': [TestCombatStyleConversion._style()]}, None)
+        troll = dict(self._creature(0, 50), **{'ZNAM.CombatStyle': '00000ABC'})
+        assert flee_margin(troll) == 20
+
+    def test_weapon_score_is_oblivions_damage(self):
+        """2 x 0.5 x 30 x condition 1 x (0.2 + 1.5) x (0.75 + 0.5) at skill and Strength 100."""
+        from tes5_import.actors.attack_score import attack_score
+        weapon = {'Signature': 'WEAP', 'FormID': '00000B01', 'DATA.Type': '1', 'DATA.Damage': '30'}
+        self._records(_OBLIVION_FLEE_GMSTS, {'WEAP': [weapon]})
+        npc = {'Signature': 'NPC_', 'ItemCount': '1', 'Item[0].FormID': '00000B01',
+               'DATA.Blade': '100', 'DATA.Luck': '50', 'DATA.Strength': '100'}
+        assert abs(attack_score(npc) - 2 * 0.5 * 30 * 1.7 * 1.25) < 1e-6
+
+
+class TestCombatStyleConversion:
+    """TES4 CSTY records become Skyrim CSTYs; Oblivion's chances are inverted
+    onto Skyrim's min + (max - min) * mult, and Fleeing Disabled makes the
+    actor never flee.
+
+    See: docs/commentary/tes5_import_actors.md#combat-styles
+    """
+
+    class _Writer:
+        """Collects records; FormIDs count up."""
+
+        def __init__(self):
+            self.records, self.next = [], 0x900
+
+        def derive_formid(self, _site, _key):
+            """The next id."""
+            self.next += 1
+            return self.next
+
+        def add_record(self, sig, data):
+            """Keep the record."""
+            self.records.append((sig, data))
+
+    @staticmethod
+    def _style() -> dict:
+        """A Fleeing Disabled TES4 style with a 50% attack chance."""
+        return {'FormID': '00000ABC', 'EditorID': 'TrollStyle', 'CSTD.Flags': '32',
+                'CSTD.AttackChance': '50'}
+
+    def _styles(self):
+        """Index _style() as this plugin's own; returns the default style's FormID."""
+        from tes5_import.actors.combat_style import create_combat_styles
+        return create_combat_styles(self._Writer(), {'CSTY': [self._style()]}, None)
+
+    def teardown_method(self):
+        """Switch style conversion back off for the other tests."""
+        from tes5_import.actors.combat_style import create_combat_styles
+        create_combat_styles(self._Writer(), {}, None, wanted=False)
+
+    def test_attack_chance_becomes_the_offensive_mult(self):
+        """50% attack is (0.5 - 0.05) / (1.0 - 0.05) of Skyrim's attack range."""
+        from tes5_import.actors.combat_style import convert_CSTY
+        self._styles()
+        csgd = _find_subrecord(convert_CSTY(self._style()), b'CSGD')
+        assert abs(struct.unpack_from('<f', csgd)[0] - 0.45 / 0.95) < 1e-5
+
+    def test_fleeing_disabled_style_never_flees(self):
+        """An actor on a Fleeing Disabled style reads the flag through its own style."""
+        from tes5_import.actors.combat_style import actor_combat_style, fleeing_disabled
+        self._styles()
+        actor = {'ZNAM.CombatStyle': '00000ABC', 'AIDT.Confidence': '0'}
+        assert actor_combat_style(actor) == 0xABC
+        assert fleeing_disabled(actor)
+
+    def test_styleless_actor_gets_the_default(self):
+        """An actor with no authored style points at the generated default."""
+        from tes5_import.actors.combat_style import actor_combat_style
+        default = self._styles()
+        assert default and actor_combat_style({'AIDT.Confidence': '50'}) == default
+
+
+class TestCombatApproachPool:
+    """StartCombat's pool: each attacker alias carries a combat override that pulls it
+    toward its target alias only while out of reach, then leaves the fight to Skyrim.
+
+    See: docs/commentary/script_convert.md#startcombat-approaches-an-undetected-target
+    """
+
+    @staticmethod
+    def _records() -> dict:
+        """{signature: [(FormID, [(sub, payload)])]} the generator writes."""
+        from tes5_import.actors.combat_approach import create_combat_approach
+        writer = TestCombatStyleConversion._Writer()
+        create_combat_approach(writer)
+        out = {}
+        for sig, data in writer.records:
+            size = struct.unpack_from('<I', data, 4)[0]
+            body, pos, subs = data[24:24 + size], 0, []
+            while pos < len(body):
+                ln = struct.unpack_from('<H', body, pos + 4)[0]
+                subs.append((body[pos:pos + 4], body[pos + 6:pos + 6 + ln]))
+                pos += 6 + ln
+            out.setdefault(sig, []).append((struct.unpack_from('<I', data, 12)[0], subs))
+        return out
+
+    def test_only_attacker_aliases_carry_the_override(self):
+        """64 aliases; even (attacker) ones name a package list, odd (target) ones none."""
+        from tes5_import.actors.combat_approach import PAIRS
+        (_fid, subs), = self._records()['QUST']
+        aliases, current = [], None
+        for tag, data in subs:
+            if tag == b'ALST':
+                current = []
+            elif tag == b'ALED':
+                aliases.append(current)
+            elif current is not None:
+                current.append(tag)
+        assert len(aliases) == 2 * PAIRS
+        assert all((b'ECOR' in a) == (i % 2 == 0) for i, a in enumerate(aliases))
+
+    def test_quest_carries_the_combat_queue_script(self):
+        """The pool quest's VMAD, right after EDID, attaches TES4_CombatQueue."""
+        (_fid, subs), = self._records()['QUST']
+        assert [t for t, _d in subs[:3]] == [b'EDID', b'VMAD', b'FULL']
+        assert b'TES4_CombatQueue' in subs[1][1]
+
+    def test_override_applies_only_out_of_reach(self):
+        """Melee: travel-512 template, GetDistance(alias 1) > 512; ranged: 1024. Weapon drawn."""
+        packs = {}
+        for _fid, subs in self._records()['PACK']:
+            edid = next(d for t, d in subs if t == b'EDID').rstrip(b'\0').decode()
+            packs[edid] = dict((t, d) for t, d in subs if t != b'CTDA'), [d for t, d in subs if t == b'CTDA']
+        for edid, template, reach in (('TES4CombatApproach0Melee', 0x0002A85F, 512.0),
+                                      ('TES4CombatApproach0Ranged', 0x0010FAAF, 1024.0)):
+            single, ctdas = packs[edid]
+            assert struct.unpack_from('<I', single[b'PKCU'], 4)[0] == template
+            assert struct.unpack_from('<I', single[b'PKDT'])[0] & 0x00800000, 'weapon drawn'
+            gate = [c for c in ctdas if struct.unpack_from('<H', c, 8)[0] == 1]
+            assert len(gate) == 1 and gate[0][0] == 0x42, 'GetDistance > , alias parameter'
+            assert struct.unpack_from('<fHHI', gate[0], 4) == (reach, 1, 0, 1)
 
 
 class TestAggressionTierTargeting:
@@ -6909,6 +7233,56 @@ class TestFactionRelationReaction:
             (self.MYTHIC_DAWN_CG, 100), (self.EMPEROR, -100), (0x0001DBCD, 10),
         ])
         assert all(mod == 0 for mod, _ in rel.values())
+
+
+class TestNpcSkillFolding:
+    """TES4 NPC skills land where the character sheet folds them.
+
+    See: docs/plans/character_sheet.md#folding
+    """
+
+    def test_split_and_folded_skills(self):
+        """Blade feeds both weapon skills; Mysticism is Alteration; Mercantile is Speech; Sneak picks pockets."""
+        from tes5_import.base.constants import TES5_SKILL_ORDER
+        from tes5_import.record_types.npc import npc_skills_dnam
+        dnam = npc_skills_dnam({'DATA.Blade': '60', 'DATA.Mysticism': '40', 'DATA.Mercantile': '50',
+                                'DATA.Sneak': '35'})
+        got = dict(zip(TES5_SKILL_ORDER, dnam))
+        assert (got['OneHanded'], got['TwoHanded']) == (60, 60)
+        assert (got['Alteration'], got['Illusion']) == (40, 15)
+        assert (got['Speechcraft'], got['Sneak'], got['Pickpocket']) == (50, 35, 35)
+
+    def test_morrowind_enchant_is_enchanting(self):
+        """A Morrowind NPC's Enchant lands on Enchanting."""
+        from tes5_import.base.constants import TES5_SKILL_ORDER
+        from tes5_import.record_types.npc import npc_skills_dnam
+        got = dict(zip(TES5_SKILL_ORDER, npc_skills_dnam({'DATA.Enchant': '45'})))
+        assert got['Enchanting'] == 45
+
+
+class TestSkillIndexTables:
+    """Book skill indices and Morrowind Enchant reach the right TES5 skill."""
+
+    @staticmethod
+    def _book_teaches(teaches: int) -> int:
+        """The TES5 skill a converted BOOK with this DATA.Teaches teaches."""
+        rec = {'Signature': 'BOOK', 'FormID': '00006000', 'RecordFlags': '0',
+               'EditorID': 'TestBook', 'DATA.Flags': '0', 'DATA.Teaches': str(teaches),
+               'DATA.Value': '5', 'DATA.Weight': '1.0', 'Model.MODL': 'Books\\TestBook.nif'}
+        data = TestConverters()._get_subrecord_data(convert_BOOK(rec), 'DATA')
+        return struct.unpack_from('<i', data, 4)[0]
+
+    def test_book_teaches_by_skill_index(self):
+        """Book index 2 Blade, 12 Mysticism, 20 Speech; 1 Athletics none."""
+        from tes4_export.record_types.morrowind import MW_ENCHANT_SKILL
+        got = [self._book_teaches(i) for i in (2, 12, 20, 1, 255, MW_ENCHANT_SKILL)]
+        assert got == [6, 18, 17, -1, -1, 23]
+
+    def test_morrowind_fortify_enchant_effect(self):
+        """Fortify Skill on Morrowind Enchant fortifies Enchanting."""
+        from tes4_export.record_types.morrowind import MW_ENCHANT_SKILL
+        from tes5_import.record_types.magic_morrowind import mw_actor_value
+        assert mw_actor_value(83, MW_ENCHANT_SKILL + 12) == 23
 
 
 class TestLeveledActorShellDNAM:

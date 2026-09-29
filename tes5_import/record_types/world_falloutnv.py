@@ -63,10 +63,15 @@ FALLOUT_REQUIRES_KEY = 255
 _IS_FALLOUT_SOURCE = []
 
 
+def is_fallout_export(by_type: dict) -> bool:
+    """True when these exported records came from FO3/FNV."""
+    return any(by_type.get(sig) for sig in FALLOUT_ONLY_SIGS)
+
+
 def register_fallout_source(by_type: dict):
     """Detect and record whether this run's source plugin is FO3/FNV."""
     _IS_FALLOUT_SOURCE.clear()
-    if any(by_type.get(sig) for sig in FALLOUT_ONLY_SIGS):
+    if is_fallout_export(by_type):
         _IS_FALLOUT_SOURCE.append(True)
 
 

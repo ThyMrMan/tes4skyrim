@@ -35,6 +35,12 @@ TES4_MISC_STAT_NAMES = (
     'Murders', 'Horses Stolen',
 )
 
+#: TES4 skills Skyrim split in two; a read takes the higher. See: docs/plans/character_sheet.md#bug-blade-blunt
+SPLIT_SKILLS = {'blade': ('OneHanded', 'TwoHanded'), 'blunt': ('OneHanded', 'TwoHanded')}
+
+#: Misc stats Oblivion content writes; its engine keeps the rest. See: docs/commentary/script_convert.md#pc-misc-stat-names
+TES4_SCRIPT_OWNED_MISC_STATS = frozenset({14, 15, 16, 19, 27})
+
 from script_convert.reserved_names import papyrus_reserved
 
 
@@ -61,6 +67,9 @@ TES4_ATTRIBUTES = frozenset({
     'speed', 'endurance', 'personality', 'luck',
 })
 
+#: The attribute a no-rules actor reads, above every TES4 threshold: the player's Speed walk baseline.
+ATTRIBUTE_STUB_VALUE = '100.0'
+
 #: Papyrus AV native -> the TES4Polyfill function that reads or writes an attribute instead.
 ATTRIBUTE_POLYFILL = {
     'GetActorValue': 'GetTES4ActorValue', 'GetBaseActorValue': 'GetTES4ActorValue',
@@ -85,10 +94,7 @@ ACTOR_VALUE_MAP = {
     'conjuration':  'Conjuration',
     'destruction':  'Destruction',
     'illusion':     'Illusion',
-    # Mysticism was folded into Illusion in Skyrim (Detect Life, Telekinesis
-    # and Soul Trap all became Illusion/Conjuration spells); Alteration was a
-    # mismatch with the record side, which already maps it to Illusion.
-    'mysticism':    'Illusion',
+    'mysticism':    'Alteration',
     'restoration':  'Restoration',
     # Acrobatics and Athletics have no Skyrim skill at all. Stamina is the
     # athletic-capacity value the engine actually tracks, and matches the
@@ -611,6 +617,15 @@ PLACED_REF_SIGS = ('ACHR', 'ACRE', 'REFR')
 
 #: The importer's force-greet alias quest, which StartConversation's Quest property names.
 FORCE_GREET_QUEST = 'TES4ForceGreets'
+
+#: The importer's flee alias quest, which ForceFlee's Quest property names.
+FORCE_FLEE_QUEST = 'TES4ForceFlees'
+
+#: The importer's combat-approach alias quest, which StartCombat and StopCombat's Quest property names.
+COMBAT_APPROACH_QUEST = 'TES4CombatApproaches'
+
+#: The static script on that quest that queues and carries out StartCombat and StopCombat.
+COMBAT_QUEUE_SCRIPT = 'TES4_CombatQueue'
 
 #: The importer's fall-damage spell, which ResetFallDamageTimer's Spell property names.
 FALL_DAMAGE_SPELL = 'TES4NoFallDamage'

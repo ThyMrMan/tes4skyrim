@@ -8,6 +8,7 @@ The invariants are recorded in docs/commentary/tes4_export_morrowind.md.
 import os
 import struct
 
+from asset_convert.sources import source_registry
 from core.plugin_masters import is_master_export
 from tes4_export import tes3_reader as reader
 from tes4_export.export_morrowind import (MorrowindContext, convert_plugin,
@@ -170,6 +171,15 @@ def test_npc_exports_in_the_tes4_actor_vocabulary():
     assert 'Faction[0].Rank=3' in lines and 'FactionCount=1' in lines
     assert 'AIDT.Aggression=30' in lines and 'AIDT.Confidence=80' in lines
     assert 'AIDT.Services=1' in lines and 'AIPackageCount=0' in lines
+
+
+def test_enchant_keeps_its_own_skill():
+    """Morrowind Enchant exports as DATA.Enchant, never folded onto Mysticism."""
+    skills = [10] * 27
+    skills[9], skills[14] = 60, 25
+    npdt = struct.pack(_NPDT_FULL, 5, *([50] * 8), *skills, 40, 40, 40, 50, 0, 0, 0)
+    lines = export_NPC_(_rec('NPC_', 'enchanter', _sub('NPDT', npdt)), MorrowindContext())
+    assert 'DATA.Enchant=60' in lines and 'DATA.Mysticism=25' in lines
 
 
 def test_actor_placements_are_achr_and_acre():
@@ -607,6 +617,8 @@ def test_gap_patch_holds_what_morroblivion_lacks(tmp_path):
 
     assert result['ok'], result.get('error')
     assert result['records'] == 1, 'only the object Morroblivion lacks'
+    assert source_registry.directory_for(str(export), 'Morrowind.esm') == str(data), (
+        'the Data folder is registered so dependents find base_anim.nif')
     body = (export / PATCH_NAME / 'STAT.txt').read_text(encoding='utf-8')
     assert 'EditorID=ex_scrapwood01' in body
     fid = patch_formid(('STAT', 'ex_scrapwood01'), 1)

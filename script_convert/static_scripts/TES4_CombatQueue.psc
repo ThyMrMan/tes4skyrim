@@ -1,0 +1,156 @@
+ScriptName TES4_CombatQueue extends Quest Hidden
+{The TES4CombatApproaches pool's own thread. A converted StartCombat or
+StopCombat queues here and returns at once, as TES4's do, so a script that
+starts a dozen fights keeps its own timing; OnUpdate carries the calls out in
+the order they were made, one at a time, so two fights never race for a pair.
+It remembers which attacker and target hold each pair, so a pair is found
+without asking the aliases.
+See docs/commentary/script_convert.md#startcombat-approaches-an-undetected-target}
+
+; Attacker/target alias pairs the importer writes (combat_approach.PAIRS).
+Int Property Pairs = 32 AutoReadOnly
+
+; Queued calls, a ring of 128 (Papyrus's array limit); a None target is a StopCombat.
+Actor[] Attackers
+Actor[] Targets
+Faction[] AttackerFactions
+Faction[] VictimFactions
+Int Head = 0
+Int Count = 0
+Bool Draining = False
+
+; Attacker (alias 2n) and target (alias 2n+1) of pair n.
+Actor[] HeldAttackers
+Actor[] HeldTargets
+
+; Queue a StartCombat (akTarget set) or a StopCombat (akTarget None); False when the queue is full.
+Bool Function Push(Actor akAttacker, Actor akTarget, Faction akAttackers, Faction akVictims)
+  If !Attackers
+    Attackers = new Actor[128]
+    Targets = new Actor[128]
+    AttackerFactions = new Faction[128]
+    VictimFactions = new Faction[128]
+  EndIf
+  Int last = LastQueued(akAttacker)
+  If last >= 0 && Targets[last] == akTarget
+    Return True
+  EndIf
+  If Count >= 128
+    Return False
+  EndIf
+  Int slot = (Head + Count) % 128
+  Attackers[slot] = akAttacker
+  Targets[slot] = akTarget
+  AttackerFactions[slot] = akAttackers
+  VictimFactions[slot] = akVictims
+  Count += 1
+  If !IsRunning()
+    Start()
+  EndIf
+  RegisterForSingleUpdate(0.01)
+  Return True
+EndFunction
+
+; Ring slot of `akAttacker`'s latest queued call, -1 when none; a repeat of it is not queued again.
+Int Function LastQueued(Actor akAttacker)
+  Int i = Count - 1
+  While i >= 0
+    Int slot = (Head + i) % 128
+    If Attackers[slot] == akAttacker
+      Return slot
+    EndIf
+    i -= 1
+  EndWhile
+  Return -1
+EndFunction
+
+Event OnUpdate()
+  If Draining
+    Return
+  EndIf
+  Draining = True
+  While Count > 0
+    Actor attacker = Attackers[Head]
+    Actor target = Targets[Head]
+    Faction attackerFaction = AttackerFactions[Head]
+    Faction victimFaction = VictimFactions[Head]
+    Attackers[Head] = None
+    Targets[Head] = None
+    Head = (Head + 1) % 128
+    Count -= 1
+    If target
+      If TES4Polyfill.ForceCombatNow(attacker, target, attackerFaction, victimFaction)
+        Hold(attacker, target)
+      EndIf
+    Else
+      Release(attacker)
+      TES4Polyfill.EndCombat(attacker, attackerFaction)
+    EndIf
+  EndWhile
+  Draining = False
+EndEvent
+
+; Put the pair in the attacker's pair, else an empty one or one whose actors are dead, else pair 0.
+Function Hold(Actor akAttacker, Actor akTarget)
+  Int n = PairOf(akAttacker)
+  If HeldAttackers[n] == akAttacker && HeldTargets[n] == akTarget
+    Return
+  EndIf
+  HeldAttackers[n] = akAttacker
+  HeldTargets[n] = akTarget
+  (GetAlias(2 * n + 1) as ReferenceAlias).ForceRefTo(akTarget)
+  (GetAlias(2 * n) as ReferenceAlias).ForceRefTo(akAttacker)
+  akAttacker.EvaluatePackage()
+EndFunction
+
+; Empty the pair `akActor` attacks from, if any.
+Function Release(Actor akActor)
+  If !akActor
+    Return
+  EndIf
+  LoadPairs()
+  Int n = HeldAttackers.Find(akActor)
+  If n < 0
+    Return
+  EndIf
+  HeldAttackers[n] = None
+  HeldTargets[n] = None
+  (GetAlias(2 * n + 1) as ReferenceAlias).Clear()
+  (GetAlias(2 * n) as ReferenceAlias).Clear()
+EndFunction
+
+Int Function PairOf(Actor akAttacker)
+  LoadPairs()
+  Int n = HeldAttackers.Find(akAttacker)
+  If n < 0
+    n = HeldAttackers.Find(None)
+  EndIf
+  Int i = 0
+  While n < 0 && i < Pairs
+    If HeldAttackers[i].IsDead() || !HeldTargets[i] || HeldTargets[i].IsDead()
+      n = i
+    EndIf
+    i += 1
+  EndWhile
+  If n < 0
+    n = 0
+  EndIf
+  Return n
+EndFunction
+
+; Read the aliases once per save, for pairs filled before this script kept track.
+Function LoadPairs()
+  If HeldAttackers
+    Return
+  EndIf
+  Actor[] attackers = new Actor[32]
+  Actor[] targets = new Actor[32]
+  Int n = 0
+  While n < Pairs
+    attackers[n] = (GetAlias(2 * n) as ReferenceAlias).GetActorReference()
+    targets[n] = (GetAlias(2 * n + 1) as ReferenceAlias).GetActorReference()
+    n += 1
+  EndWhile
+  HeldTargets = targets
+  HeldAttackers = attackers
+EndFunction

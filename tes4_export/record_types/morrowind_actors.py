@@ -16,8 +16,8 @@ import struct
 from ..record_types.common import escape_value
 from ..tes3_reader import (Tes3Record, get_all_subrecords, get_string,
                            get_subrecord)
-from .morrowind import (MW_SKILL_TO_TES4, emit_inventory, emit_ref, emit_str,
-                        unpack)
+from .morrowind import (MW_ENCHANT_SKILL, MW_SKILL_TO_TES4, emit_inventory,
+                        emit_ref, emit_str, unpack)
 from .morrowind_packages import emit_packages
 
 #: Morrowind race ID -> the Oblivion RACE FormID the importer maps to Skyrim's.
@@ -35,12 +35,13 @@ _DEFAULT_RACE = 0x00000907
 _ATTRIBUTES = ('Strength', 'Intelligence', 'Willpower', 'Agility', 'Speed',
                'Endurance', 'Personality', 'Luck')
 
-#: TES4 skill names by TES4 skill index (the NPC DATA.<skill> keys).
-_TES4_SKILLS = ('Armorer', 'Athletics', 'Blade', 'Block', 'Blunt',
-                'HandToHand', 'HeavyArmor', 'Alchemy', 'Alteration',
-                'Conjuration', 'Destruction', 'Illusion', 'Mysticism',
-                'Restoration', 'Acrobatics', 'LightArmor', 'Marksman',
-                'Mercantile', 'Security', 'Sneak', 'Speechcraft')
+#: NPC DATA.<skill> key by TES4 skill index, plus Morrowind Enchant.
+_SKILL_NAMES = dict(enumerate((
+    'Armorer', 'Athletics', 'Blade', 'Block', 'Blunt', 'HandToHand',
+    'HeavyArmor', 'Alchemy', 'Alteration', 'Conjuration', 'Destruction',
+    'Illusion', 'Mysticism', 'Restoration', 'Acrobatics', 'LightArmor',
+    'Marksman', 'Mercantile', 'Security', 'Sneak', 'Speechcraft')))
+_SKILL_NAMES[MW_ENCHANT_SKILL] = 'Enchant'
 
 #: (Morrowind FLAG bit, TES4 ACBS bit) for NPCs: female, essential, respawn, autocalc.
 _NPC_FLAGS = ((0x01, 0x01), (0x02, 0x02), (0x04, 0x08), (0x10, 0x10))
@@ -118,7 +119,7 @@ def _emit_attributes(lines: list, values) -> None:
 
 
 def _emit_skills(lines: list, skills) -> None:
-    """DATA.<skill> for TES4's 21 skills, folding Morrowind's 27 onto them.
+    """DATA.<skill> for TES4's 21 skills plus Enchant, folding Morrowind's 27 onto them.
 
     Where two Morrowind skills land on one TES4 skill the larger wins.
     """
@@ -127,7 +128,7 @@ def _emit_skills(lines: list, skills) -> None:
         tes4 = MW_SKILL_TO_TES4.get(index)
         if tes4 is not None:
             best[tes4] = max(best.get(tes4, 0), value)
-    for index, name in enumerate(_TES4_SKILLS):
+    for index, name in _SKILL_NAMES.items():
         lines.append(f'DATA.{name}={_clamp(best.get(index, 0), 255)}')
 
 

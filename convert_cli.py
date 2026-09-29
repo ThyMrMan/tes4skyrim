@@ -6,6 +6,7 @@ Split out of convert.py.  Nothing here runs a phase.
 import argparse
 
 from core.collision_options import WINDING_FIX_DEFAULT_PLUGINS
+from core.navmesh_options import DEFAULT_GENERATOR, GENERATORS
 from tes4_export.export_morrowind import (MORROWIND_SOURCE_KEY,
                                           SOURCE_MORROBLIVION, SOURCE_VANILLA)
 
@@ -83,6 +84,13 @@ def build_parser() -> argparse.ArgumentParser:
         parser.add_argument(flag, action="store_true", help=text)
     _add_mod_args(parser)
     _add_mesh_args(parser)
+    parser.add_argument("--navmesh-generator", choices=GENERATORS, default=None,
+                        help="Navmesh generator for the import stage. Default: "
+                             + DEFAULT_GENERATOR)
+    parser.add_argument("--navmesh-pins", metavar="DIR", default=None,
+                        help="Folder of your own navmesh pins, read over the "
+                             "shipped navmesh_pins/ (the navmesh editor's save "
+                             "location)")
     return parser
 
 

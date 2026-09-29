@@ -1,15 +1,11 @@
 """Navmesh build entry point.
 
-CURRENT MODEL (Phase 1): pathgrid CORRIDOR RIBBONS — see corridor.py and
-docs/commentary/tes5_import_navmesh.md.  The navmesh is built directly on the
-pathgrid as a flat, fixed-width ribbon of triangles per edge; edges meeting at
-a node share the node vertex, so NVNM adjacency links by construction.  Doors
-get a threshold quad welded into the ribbon; cross-cell edge links and NAVI are
-downstream, unchanged.
-
-`build_navmesh` keeps its historical signature and delegates to corridor.py.
-(The old voxel/span-graph generator — voxel.py / region.py / spanmesh.py — came
-off the build path when this model landed and has since been deleted.)
+`build_navmesh` runs the generator `core.navmesh_options.navmesh_generator`
+names: the pathgrid CORRIDOR ribbons (default; corridor.py,
+docs/commentary/tes5_import_navmesh.md), or the experimental LATTICE
+(lattice/, docs/plans/navmesh_lattice.md), which meshes every floor the
+pathgrid can walk to from collision columns.
+Cross-cell edge links and NAVI are downstream of either.
 
 Returns (verts, tris) in world space.  The caller (pgrd_to_navm) owns the
 NVNM/NAVM binary packing, validated byte-exact against Skyrim.esm — do not
@@ -19,8 +15,11 @@ change it.
 import logging
 import math
 
+from core.navmesh_options import CORRIDOR, navmesh_generator
+
 from . import corridor
 from . import world
+from .lattice.build import build_lattice
 
 _log = logging.getLogger(__name__)
 
@@ -54,27 +53,30 @@ def teleport_door_positions(refr_recs):
 
 def build_navmesh(refr_recs, base_model_by_fid, get_collision, nodes, edges,
                   land_rec=None, origin_x=0.0, origin_y=0.0, budget=None,
-                  doors=None, ledges_out=None, door_bases=None, pins=None, welds=None, weld_tol=8.0):
+                  doors=None, ledges_out=None, door_bases=None):
     """Build a navmesh for one cell.  Returns (verts3d, tris) or ([], []).
 
     doors: [(x, y, z, rot_z, is_teleport, width), ...] door REFRs (teleport AND
     interior).  When None, teleport doors are recovered from XTEL alone.
     door_bases: low-24 DOOR base FormIDs, whose panel collision is EXCLUDED.
-    pins: hand-declared walkable (x, y, z).  welds: hand-recorded cracks.
+    Drop-down (Ledge Up/Down) pairs go to `ledges_out`, out of band, so the
+    (verts, tris) return stays intact for callers that only want geometry.
     See: docs/commentary/tes5_import_navmesh.md#ledges-are-returned-out-of-band
-    See: docs/commentary/tes5_import_navmesh.md#pinned-navmesh-floor
     """
     if not nodes:
         return [], []
     if doors is None:
         doors = teleport_door_positions(refr_recs)
-    verts, tris, ledges = corridor.build_corridors(
-        refr_recs, base_model_by_fid, get_collision, nodes, edges,
-        land_rec=land_rec, origin_x=origin_x, origin_y=origin_y, doors=doors,
-        door_bases=door_bases, pins=pins, welds=welds, weld_tol=weld_tol)
-    # Drop-down (Ledge Up/Down) pairs are reported OUT-OF-BAND so the long-
-    # standing (verts, tris) return stays intact for the many callers that
-    # only want geometry.  pgrd_to_navm reads this to write the edge links.
+    if navmesh_generator() == CORRIDOR:
+        verts, tris, ledges = corridor.build_corridors(
+            refr_recs, base_model_by_fid, get_collision, nodes, edges,
+            land_rec=land_rec, origin_x=origin_x, origin_y=origin_y, doors=doors,
+            door_bases=door_bases)
+    else:
+        verts, tris, ledges = build_lattice(
+            refr_recs, base_model_by_fid, get_collision, nodes, edges,
+            land_rec=land_rec, origin_x=origin_x, origin_y=origin_y, doors=doors,
+            door_bases=door_bases)
     if ledges_out is not None:
         ledges_out.extend(ledges)
     return verts, tris

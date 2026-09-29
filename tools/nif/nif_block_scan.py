@@ -28,6 +28,45 @@ from concurrent.futures import ThreadPoolExecutor
 HEADER_BYTES = 65536
 
 
+def _has_bs_header(version, user):
+    """nif.xml #BSSTREAMHEADER#: whether a BSStreamHeader follows the block count."""
+    if user < 3:
+        return False
+    return (version in (0x0A000102, 0x14020007, 0x14000005)
+            or (0x0A010000 <= version <= 0x14000004 and user <= 11))
+
+
+def _skip_export_string(data, pos):
+    """Offset past one byte-length-prefixed ExportString."""
+    return pos + 1 + data[pos]
+
+
+def _skip_bs_header(data, pos):
+    """Offset past a BSStreamHeader, laid out as nif.xml defines it."""
+    bs_ver = struct.unpack_from("<I", data, pos)[0]
+    pos = _skip_export_string(data, pos + 4)
+    if bs_ver > 130:
+        pos += 4
+    if bs_ver < 131:
+        pos = _skip_export_string(data, pos)
+    pos = _skip_export_string(data, pos)
+    if bs_ver >= 103:
+        pos = _skip_export_string(data, pos)
+    return pos
+
+
+def _type_names(data, pos):
+    """The block-type string table starting at pos."""
+    num_types = struct.unpack_from("<H", data, pos)[0]
+    pos += 2
+    types = []
+    for _ in range(num_types):
+        slen = struct.unpack_from("<I", data, pos)[0]
+        types.append(data[pos + 4:pos + 4 + slen].decode("ascii", "replace"))
+        pos += 4 + slen
+    return types
+
+
 def read_block_types(path):
     """Return the header's block-type name list (exact strings), or None on parse failure."""
     try:
@@ -35,41 +74,22 @@ def read_block_types(path):
             data = f.read(HEADER_BYTES)
     except OSError:
         return None
-    # Header: "Gamebryo File Format, Version ...\n" then binary fields.
     nl = data.find(b"\x0a")
     if nl < 0 or not data.startswith((b"Gamebryo", b"NetImmerse")):
         return None
-    pos = nl + 1
     try:
-        version = struct.unpack_from("<I", data, pos)[0]
+        version = struct.unpack_from("<I", data, nl + 1)[0]
+        if version < 0x05000001:
+            return None
+        pos = nl + 5 + (version >= 0x14000003)
+        user = 0
+        if version >= 0x0A000108:
+            user = struct.unpack_from("<I", data, pos)[0]
+            pos += 4
         pos += 4
-        if version >= 0x14000003:
-            pos += 1  # endian
-        if version >= 0x0A000108:  # user version (actually 10.0.1.8+? keep simple)
-            pos += 4
-        num_blocks = struct.unpack_from("<I", data, pos)[0]
-        pos += 4
-        if version >= 0x0A000102:  # BS header (user_version present above)
-            uv = struct.unpack_from("<I", data, pos - 8 - 4)  # not used
-        # BSStreamHeader when user version >= 3 (Bethesda): BS version u32 + 3 strings + u32
-        # Detect Bethesda stream: peek u32; Skyrim=83/100, Oblivion=11
-        bs_ver = struct.unpack_from("<I", data, pos)[0]
-        if bs_ver in (11, 34, 83, 100, 130, 155):
-            pos += 4
-            for _ in range(3):  # author, processScript, exportScript (byte-len prefixed)
-                slen = data[pos]
-                pos += 1 + slen
-            if bs_ver >= 130:
-                pos += 4  # max filepath? (FO4) — not relevant here
-        num_types = struct.unpack_from("<H", data, pos)[0]
-        pos += 2
-        types = []
-        for _ in range(num_types):
-            slen = struct.unpack_from("<I", data, pos)[0]
-            pos += 4
-            types.append(data[pos:pos + slen].decode("ascii", "replace"))
-            pos += slen
-        return types
+        if _has_bs_header(version, user):
+            pos = _skip_bs_header(data, pos)
+        return _type_names(data, pos)
     except (struct.error, IndexError):
         return None
 

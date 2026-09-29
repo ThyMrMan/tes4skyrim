@@ -209,7 +209,8 @@ Linux/Mac than on Windows.
 
 `conversion_config.json` is the only file the running application mutates: the
 GUI writes it whenever a setting changes (data paths, output directory, worker
-count, navmesh-cache toggle, collision winding, LOD detail, Morrowind source).
+count, navmesh-cache toggle, collision winding, navmesh generator, LOD detail,
+Morrowind source).
 It is therefore **gitignored** — committing it would ship one machine's paths to
 every user, and any updater that overwrote it would wipe the real ones.
 
@@ -473,7 +474,7 @@ the normal "headers not found" Missing rather than crashing.
 
 `SKIP_TYPES` in [tes5_import/base/constants.py](../../tes5_import/base/constants.py) is the
 single source of truth. Currently skipped: ROAD, SCPT, SKIL, BSGN, RACE, MGEF,
-CSTY, IDLE, GMST, EYES, HAIR.
+IDLE, GMST, EYES, HAIR.
 
 Notably **converted** (do not assume otherwise): GLOB, CLAS, CLMT, WATR, PACK,
 WTHR, REGN. PACK is converted in its own phase (3b2, after QUST) rather than
@@ -527,6 +528,7 @@ TESConversion/
     subprocess_flags.py   # POPEN_FLAGS, windows_cmd, run_streamed
     process_job.py        # Win32 Job Object containment
     collision_options.py  # collision winding-repair toggle
+    navmesh_options.py    # navmesh generator (--navmesh-generator), user pin folder (--navmesh-pins)
     plugin_masters.py     # master lists from binary headers
 
     gui/                  # the converter window

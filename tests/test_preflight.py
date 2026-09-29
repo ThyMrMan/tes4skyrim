@@ -212,6 +212,16 @@ def test_audio_probes_use_the_phases_own_lookup(monkeypatch):
         assert expect not in names, f"{finder} succeeding still reported {expect}"
 
 
+def test_skse_probe_uses_the_compile_phases_own_lookup(monkeypatch):
+    """The Scripts check reports SKSE exactly when the compiler cannot find it."""
+    import papyrus_compile
+    name = "SKSE's script files (UI.psc and friends)"
+    monkeypatch.setattr(papyrus_compile, 'find_skse_source_scripts', lambda c: '')
+    assert name in [m.name for m in preflight.check_phase('scripts')]
+    monkeypatch.setattr(papyrus_compile, 'find_skse_source_scripts', lambda c: 'X')
+    assert name not in [m.name for m in preflight.check_phase('scripts')]
+
+
 def test_native_probe_matches_the_loader_naming(monkeypatch):
     """The .pyd carries an ABI tag; the probe must use the same filename rule."""
     import sysconfig
@@ -247,37 +257,34 @@ def _all_missing_names():
         preflight.importlib.util.find_spec = real
 
 
-def test_readme_pip_line_lists_every_required_package():
-    """A user following the README must end up with every pip dependency."""
-    readme = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
-    m = re.search(r'pip install ([A-Za-z0-9_ .-]+)\n', readme)
-    assert m, "no 'pip install ...' line found in README.md"
-    listed = set(m.group(1).split())
+def _requirements() -> set:
+    """Lower-cased package names pinned in requirements.txt."""
+    lines = open(os.path.join(ROOT, 'requirements.txt'), encoding='utf-8').read()
+    return {re.split(r'[=<>~! ]', ln.strip(), 1)[0].lower()
+            for ln in lines.splitlines() if ln.strip() and not ln.startswith('#')}
 
-    wanted = {mm.install.split()[-1] for mm in _all_missing_names()
+
+def test_requirements_txt_lists_every_required_package():
+    """The launcher installs requirements.txt, so it must hold every pip dependency."""
+    wanted = {mm.install.split()[-1].lower() for mm in _all_missing_names()
               if mm.install.startswith('pip install')}
     assert wanted, "no pip requirements declared -- probe harness broken"
-    assert not (wanted - listed), \
-        f"README pip line is missing: {sorted(wanted - listed)}"
-    assert not (listed - wanted), \
-        f"README pip line lists packages nothing requires: {sorted(listed - wanted)}"
+    missing = wanted - _requirements()
+    assert not missing, f"requirements.txt is missing: {sorted(missing)}"
 
 
 def test_pytest_is_not_an_end_user_dependency():
     """Running a conversion must never require the test runner."""
     wanted = {mm.name for mm in _all_missing_names()}
     assert 'pytest' not in wanted
-
-    readme = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
-    m = re.search(r'pip install ([A-Za-z0-9_ .-]+)\n', readme)
-    assert 'pytest' not in m.group(1).split(), \
-        "pytest is in the main install line; it belongs in the contributing section"
+    assert 'pytest' not in _requirements(), \
+        "pytest is in requirements.txt; it belongs in the contributing section"
 
 
 def test_committed_binaries_are_not_listed_as_things_to_install():
     """Bundled tools ship in the repo -- telling users to install them is wrong."""
     readme = open(os.path.join(ROOT, 'README.md'), encoding='utf-8').read()
-    table = readme.split('## Requirements', 1)[1].split('```bash', 1)[0]
+    table = readme.split('## Quick start', 1)[1].split('\n## ', 1)[0]
     for name in ('BSArch', 'LODGenx64', 'hkxcmd', 'papyrus.exe',
                  'dovah_hkp_mesh_mopp_bridge'):
         assert name not in table, \

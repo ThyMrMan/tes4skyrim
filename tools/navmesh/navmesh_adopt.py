@@ -24,7 +24,6 @@ from __future__ import annotations
 
 import argparse
 import os
-import pickle
 import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.dirname(
@@ -67,23 +66,6 @@ def entry_paths(cache_dir: str) -> list:
                   if n.endswith('.pkl'))
 
 
-def rekey(path: str, want: str) -> bool:
-    """Rewrite one entry's stored hash in place.  True when it changed."""
-    try:
-        with open(path, 'rb') as fh:
-            blob = pickle.load(fh)
-    except Exception:
-        return False
-    if blob.get('hash') == want:
-        return False
-    blob['hash'] = want
-    tmp = '%s.tmp%d' % (path, os.getpid())
-    with open(tmp, 'wb') as fh:
-        pickle.dump(blob, fh, pickle.HIGHEST_PROTOCOL)
-    os.replace(tmp, path)
-    return True
-
-
 def load_plugin(plugin: str, offset: int = 1):
     """(import_main, jobs, geom_cache) with the worker initialised for it.
 
@@ -101,41 +83,13 @@ def load_plugin(plugin: str, offset: int = 1):
     return im, jobs, geom_cache
 
 
-def commit(jobs: list, cache_dir: str) -> tuple:
-    """Re-key every entry that has a job.  (re-keyed, skipped).
-
-    Hashes come from `cell_geom_key`, so NO geometry is built.  The caller
-    stamps CACHE_TAG only after this returns, leaving an interrupted run
-    unstamped -- read as stale, which is safe.
-
-    See: docs/commentary/tes5_import_navmesh.md#verifying-a-cache-against-fresh-geometry
-    """
-    from tes5_import.navmesh import worker as navm_worker
-    from tes5_import.navmesh.from_pgrd import cell_geom_key
-    by_key = {j['key']: j for j in jobs}
-    done = skipped = 0
-    for path in entry_paths(cache_dir):
-        stem = os.path.basename(path)[:-4]
-        try:
-            key = tuple(int(x, 16) for x in stem.split('_'))
-        except ValueError:
-            skipped += 1
-            continue
-        job = by_key.get(key)
-        if job is None:
-            skipped += 1
-            continue
-        fresh = cell_geom_key(job['pgrd_rec'], job['land_rec'],
-                              job['cell_rec'], job['refr_recs'],
-                              navm_worker._BASE_MODEL_BY_FID,
-                              navm_worker._DOOR_FIDS, navm_worker._GEOM_CACHE,
-                              job.get('extra_door_refrs'))
-        if not fresh:
-            skipped += 1
-            continue
-        if rekey(path, fresh):
-            done += 1
-    return done, skipped
+def _stamped_tag(cache_dir: str) -> str:
+    """The tag in a cache's CACHE_TAG, or '' when it has none."""
+    try:
+        with open(os.path.join(cache_dir, 'CACHE_TAG')) as fh:
+            return fh.read().strip()
+    except OSError:
+        return ''
 
 
 def adopt(plugin: str, sample: int = SAMPLE_DEFAULT,
@@ -154,6 +108,9 @@ def adopt(plugin: str, sample: int = SAMPLE_DEFAULT,
     print('  proving %d sampled cells reproduce...' % sample, flush=True)
     _im, jobs, geom_cache = load_plugin(plugin, offset)
     checked, bad = navm_verify.prove_cache(jobs, geom_cache, sample)
+    if not checked and _stamped_tag(cache_dir) == want:
+        print('  nothing stale: already keyed to %s.' % want[:12])
+        return ADOPT_OK
     if not checked:
         print('  REFUSED: no sampled cell had a cache entry to compare.')
         return ADOPT_REFUSED
@@ -168,7 +125,8 @@ def adopt(plugin: str, sample: int = SAMPLE_DEFAULT,
         print('  --dry-run: nothing written.')
         return ADOPT_OK
 
-    done, skipped = commit(jobs, cache_dir)
+    done, skipped = navm_verify.rekey_cache(jobs, geom_cache,
+                                            _stamped_tag(cache_dir))
     with open(os.path.join(cache_dir, 'CACHE_TAG'), 'w') as fh:
         fh.write(want)
     print('  re-keyed %d entries (%d skipped); stamped %s'

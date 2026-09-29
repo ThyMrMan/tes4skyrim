@@ -344,7 +344,8 @@ white point — with bloom threshold and receive-bloom simultaneously mapped
 bloom-heavy. In-game: the day looked like an overexposed camera (confirmed
 2026-08-09; nights were fine).
 
-The fix is **median anchoring** (`_IMGS_ANCHORED_FIELDS`):
+The fix is **median anchoring** (`_IMGS_ANCHORED_FIELDS`); a derived remap was
+tried and rejected in game, see [below](#hdr-remap-rejected):
 
     value = vanilla_slot_median + (tes4 - tes4_median) * gain,
     clamped to the vanilla p10..p90 band for that slot
@@ -1602,23 +1603,25 @@ r0.w, r0.w, 1/7; max 0; min 1`) — the direct analogue of Skyrim's
 
 ### Oblivion's HDR globals, named from their defaults
 
-`Oblivion.exe` keeps the live HDR parameters in a DOUBLE-BUFFERED global bank
-selected by the byte at `0xB43074` (HDR enabled vs not). The initialiser at
-`0x40E990` writes the defaults, and they match `Oblivion_default.ini`
-one-for-one, which names every slot:
+`Oblivion.exe` keeps the live HDR parameters in a global bank whose exterior
+or interior copy is selected by the byte at `0xB43074`. The initialiser at
+`0x40E984` copies each INI setting object into its slot; the setting objects
+are named by the string their second dword points at (`fTargetLUM:BlurShaderHDR`
+at `0xA3E9FC` -> setting `0xB06E64`), so every row below is read from the
+code, not matched by default value:
 
-| Global | default | INI field | INI section |
+| Global | default | INI field | from setting |
 |---|---|---|---|
-| `0xB431E8` | 0.35 | `fBrightClamp` | `[BlurShaderHDR]` |
-| `0xB431EC` | 0.225 | `fBrightClamp` | `[BlurShaderHDRInterior]` |
-| `0xB431F0` | 1.5 | `fBrightScale` | `[BlurShaderHDR]` |
-| `0xB431F4` | 2.25 | `fBrightScale` | `[BlurShaderHDRInterior]` |
-| `0xB43200` | 0.7 | `fEyeAdaptSpeed` | `[BlurShaderHDR]` |
-| `0xB43204` | 0.5 | (interior) | |
-| `0xB43208` | 1.0 | `fSunlightDimmer` | `[BlurShaderHDR]` |
-| `0xB4320C` | 1.0 | `fSunlightDimmer` | `[BlurShader]` |
-| `0xB43210` | 1.0 | `fGrassDimmer` | |
-| `0xB43218` | 1.2 | `fTreeDimmer` | |
+| `0xB431E8` / `EC` | 0.35 / 0.225 | `fBrightClamp` ext / int | `0xB06E04` / `0xB06E7C` |
+| `0xB431F0` / `F4` | 1.5 / 2.25 | `fBrightScale` ext / int | `0xB06E0C` / `0xB06E84` |
+| `0xB43200` / `04` | 0.7 / 0.5 | `fEyeAdaptSpeed` ext / (int) | `0xB06E3C` / `0xB06E8C` |
+| `0xB43208` / `0C` | 1.0 / 1.0 | `fEmissiveHDRMult` ext / int | `0xB06E44` / `0xB06E94` |
+| `0xB43210` / `14` | 1.0 / 1.0 | `fUpperLUMClamp` ext / int | `0xB06E5C` / `0xB06E9C` |
+| `0xB43218` / `1C` | 1.2 / 1.0 | `fTargetLUM` ext / int | `0xB06E64` / `0xB06EA4` |
+
+An earlier revision of this table matched slots to INI fields by default value
+and labelled `0xB43208/10/18` SunlightDimmer/GrassDimmer/TreeDimmer; the
+defaults coincide, the setting pointers do not.
 
 The per-weather values reach these globals through a TRANSITION LERP at
 `0x540CE0`-`0x540DC0`. The symbolic FPU trace (`oblivion_disasm.py --fpu`)
@@ -1631,9 +1634,9 @@ value = old + (new - old) * ((Sky.weatherPercent - a) / b)
 with `Sky+0xD8` = `weatherPercent`. So **every HDR parameter is cross-faded
 between the outgoing and incoming weather**, exactly as the colors are.
 
-`0xB43208` (SunlightDimmer) is then consumed at `0x848CA0` where it MULTIPLIES a
+`0xB43208` (EmissiveHDRMult) is then consumed at `0x848CA0` where it MULTIPLIES a
 three-component color (`esp`, `esp+4`, `esp+8`) after the `0xB43074`
-HDR/non-HDR bank select — i.e. it scales the directional light RGB, not the sky.
+HDR/non-HDR bank select.
 
 ### What this settles about the conversion
 
@@ -1822,7 +1825,8 @@ POST-PROCESS applied to the composed frame:
 Therefore:
 
 1. **`BrightScale`/`BrightClamp` must map to Skyrim's IMGS bloom fields, and
-   MUST NOT scale NAM0.** Skyrim's IMGS has `Bloom Threshold` and `Bloom Scale`
+   MUST NOT scale NAM0's brightness.** (They do set its HUE on the dome and
+   cloud slots — see [Baked HDR hue](#baked-hdr-hue).) Skyrim's IMGS has `Bloom Threshold` and `Bloom Scale`
    which occupy exactly these two roles (threshold subtracted, then gain), so
    the mapping is one-to-one and needs no fitting.
 2. Every earlier theory that Oblivion's colors are "pre-compensated" for a
@@ -1916,6 +1920,116 @@ This is the one remaining place where the honest answer is "the algorithms are
 different in kind, so the values cannot be copied and must be fitted to match
 appearance". Everything else in the record has a 1:1 algorithmic
 correspondence, established by disassembly on both sides.
+
+---
+
+## Baked HDR hue — Oblivion's sunset red lives in the bloom, not the colors
+<a id="baked-hdr-hue"></a>
+
+**Code:** `tes5_import/record_types/weather.py` `_hdr_hue`, applied to NAM0
+Sky-Upper/Sky-Lower/Horizon and the two cloud tints (PNAM), at
+`_HDR_HUE_STRENGTH = 0.5`. Confirmed in game on Nehrim.
+
+### Strength: half-way between authored and the full bake
+
+At full strength (1.0) the bake is the upper bound of the effect: it models a
+flat patch of color and ignores that Oblivion blurs the bloom across the frame,
+mixing it with terrain and neighbouring colors. The overshoot is most visible
+on blue skies, because the per-channel threshold favors whichever channel is
+largest: Nehrim `Clear` day Sky-Upper 70,154,204 went to 24,165,255 (teal).
+`_HDR_HUE_STRENGTH` blends linearly from the authored color toward the full
+bake; 0.5 gives day Sky-Upper 47,160,230 and dusk Sky-Lower 198,77,52
+(authored 164,90,72, full 231,64,31). The bake treats blue and red the same, so
+no strength value reduces the teal without also reducing the red.
+
+### The mechanism
+
+Oblivion's bright pass (`HDR005`) thresholds **each channel separately** and
+the composite (`HDR004`) adds it back at a constant weight:
+
+```
+shown = exposure * ( 0.5*c + TargetLum * max(c - BrightClamp, 0) * BrightScale )
+```
+
+Exposure multiplies both terms, so it moves brightness only. The **hue** on
+screen is a pure function of authored data: the color plus three HNAM fields.
+Subtracting one threshold from every channel strips green and blue first, so
+warm colors are pushed toward red. Nehrim `Clear` dusk Sky-Lower 164,90,72
+shows as 255,73,36; its upper-cloud tint 231,150,122 shows as 255,132,91.
+
+Skyrim cannot reproduce this at runtime: its tone map is hue-preserving
+Reinhard and its bloom mask `saturate(Intensity - color)` fades out in bright
+regions (see the tone-mapper comparison above). So the shown hue is baked
+into the color, **at the authored luminance** — brightness still goes through
+the knee, which preserves hue.
+
+### Why only the dome and cloud slots
+
+The bake is exact only where the slot's color IS the final pixel: the sky dome
+(`color = vertex blend`, no texture) and bright cloud texels (`texture * tint`,
+so darker texels were shifted less in Oblivion than the baked tint). Fog,
+Ambient and Sunlight are blended with lit, textured geometry before the bright
+pass, so the thresholded pixel is not the slot color; baking them turned fog
+saturated blue-violet (Oblivion `Clear` dusk fog 73,75,97 -> 65,67,157).
+
+### Which HNAM field is the bloom weight (`HDR004` `c1.x`) — TargetLum
+
+Oblivion.exe (Nehrim install) HDR pass setup, switch at `0x7C092B..0x7C0AA3`,
+stages `c1` as `[ebp+0x108..0x114]` before each pass:
+
+| case | c1.x | c1.y | c1.z | c1.w |
+|---|---|---|---|---|
+| `0x7C092B` | TargetLum (`0x5071A0`) | | | |
+| `0x7C09A6` | BrightClamp | BrightScale | | |
+| `0x7C09C7` | timer | | `0x507110` | UpperLumClamp |
+| `0x7C0AA3` | UpperLumClamp (`0x507170`) | | | |
+
+Only `HDR004` (`max(lum, c1.x)`, bloom weight `c1.x`) and `HDR007`
+(`min(len, c1.x)`) read `c1.x` alone. `HDR006` takes UpperLumClamp in `c1.w`
+as a `min` too, so UpperLumClamp is the upper clamp (`HDR007`) and **TargetLum
+is `HDR004`'s `c1.x`**.
+
+The getters read the runtime bank listed under "Oblivion's HDR globals" above.
+
+---
+
+## Rejected: remapping the IMGS bloom from both tone mappers (2026-09-27)
+<a id="hdr-remap-rejected"></a>
+
+**Tried and reverted after one in-game look on Nehrim: it "looked really bad".**
+The median-anchored IMGS mapping below stays. Record kept so it is not retried
+as-is.
+
+The two pipelines, as read:
+
+```
+Oblivion  bloom = BrightScale * max(c - BrightClamp, 0)                (HDR005)
+          out   = E_ob * (0.5*c + TargetLum*bloom)                     (HDR004)
+          E_ob  = 1 / max(sum(adapted), TargetLum), |adapted| <= UpperLumClamp  (HDR006/007)
+Skyrim    bloom = Scale * max(c - Threshold, 0)                        (ISBlur BRIGHTPASS)
+          out   = Reinhard_White(E_sk*c) + saturate(Receive - out) * bloom      (ISHDR BLEND)
+```
+
+(Skyrim side from Community Shaders' `ISHDR.hlsl` / `ISBlur.hlsl`, a
+reconstruction of vanilla.) Oblivion barely auto-exposes: with TargetLum >=
+UpperLumClamp, `E_ob` only spans `1/(1.73*U) .. 1/T` (0.52..0.83, Nehrim
+`Clear`).
+
+What was written: Bloom Threshold = BrightClamp, Bloom Scale = BrightScale,
+Receive Bloom Threshold = 2.0 (bloom on every pixel, as Oblivion), White = 1.0
+(linear), Sky Scale = 0, and the Sun disc unkneed. The model matched on-screen
+brightness assuming Skyrim's eye adaptation settles where Oblivion's exposure
+does; that assumption was never verified (Skyrim's exposure target is set
+CPU-side from the Eye Adapt fields), and Skyrim adapts far harder than
+Oblivion, so the whole-frame bloom is the likely failure.
+
+The Sun disc knee was then doubled instead of removed (30->60 makes Nehrim's
+dawn sun 224,135,97 -> 67,40,29, reported dim; vanilla `SkyrimClear` ships
+224,135,97). At 60->120 the disc brightened, but the red sunset horizon read
+visibly less red in game, with every sky, cloud and IMGS value unchanged. So
+the brighter disc costs the sunset (its bloom and/or the eye adaptation it
+drives). Reverted to 30->60, then set to 60->120 again together with the
+half-strength hue bake; that combination is the one confirmed in game.
 
 ---
 
@@ -2192,7 +2306,8 @@ lum >  knee            -> knee + (lum-knee) * (ceiling-knee)/(255-knee)
 ```
 
 with `knee = 160, ceiling = 200`, and the **Sun slot on its own much harder
-knee (30 -> 60)**. Sun is the one genuine outlier: TES4 day median 193.4 vs
+knee**, now 60 -> 120 (originally 30 -> 60, which read dim in game; see
+[HDR remap, rejected](#hdr-remap-rejected)). Sun is the one genuine outlier: TES4 day median 193.4 vs
 vanilla 42.5 (4.55x, where no other slot exceeds 1.7x), and in Skyrim the
 sun's apparent brightness comes from the glare pass and the imagespace, not
 from this color — so a near-white disc here is a pure bloom source.

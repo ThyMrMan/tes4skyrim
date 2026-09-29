@@ -503,8 +503,10 @@ def export_BSGN(rec: Record) -> list:
 
 
 def export_SKIL(rec: Record) -> list:
-    """Skill: INDX is the skill's actor value; DATA is action, attribute,
-    specialization and two use values (xEdit `wbDefinitionsTES4` SKIL)."""
+    """Skill: DATA is Action, governing Attribute, Specialization, two use values (20 bytes).
+
+    See: docs/plans/character_sheet.md#bug-skil-shift
+    """
     lines = []
     emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
     index = get_subrecord(rec, "INDX")
@@ -512,47 +514,67 @@ def export_SKIL(rec: Record) -> list:
         lines.append(f"INDX.Skill={struct.unpack_from('<i', index.data)[0]}")
     data = get_subrecord(rec, "DATA")
     if data and len(data.data) >= 20:
-        action, attribute, spec, use1, use2 = struct.unpack_from('<iII2f', data.data)
-        lines.append(f"DATA.Action={action}")
-        lines.append(f"DATA.Attribute={attribute}")
-        lines.append(f"DATA.Specialization={spec}")
-        lines.append(f"DATA.UseValue1={use1}")
-        lines.append(f"DATA.UseValue2={use2}")
+        action, attribute, spec, use1, use2 = struct.unpack_from('<iIIff', data.data)
+        lines.extend([f"DATA.Action={action}", f"DATA.Attribute={attribute}",
+                      f"DATA.Specialization={spec}", f"DATA.UseValue1={use1}",
+                      f"DATA.UseValue2={use2}"])
     emit_string(lines, "DESC", get_subrecord(rec, "DESC"))
     return lines
 
 
+#: TES4 CSTD fields as (offset, struct format, key), per xEdit wbDefinitionsTES4.
+_CSTD_FIELDS = (
+    (0, 'B', 'DodgeChance'), (1, 'B', 'LeftRightChance'),
+    (4, 'f', 'DodgeLRTimerMin'), (8, 'f', 'DodgeLRTimerMax'),
+    (12, 'f', 'DodgeForwardTimerMin'), (16, 'f', 'DodgeForwardTimerMax'),
+    (20, 'f', 'DodgeBackTimerMin'), (24, 'f', 'DodgeBackTimerMax'),
+    (28, 'f', 'IdleTimerMin'), (32, 'f', 'IdleTimerMax'),
+    (36, 'B', 'BlockChance'), (37, 'B', 'AttackChance'),
+    (40, 'f', 'RecoilStaggerBonusToAttack'), (44, 'f', 'UnconsciousBonusToAttack'),
+    (48, 'f', 'HandToHandBonusToAttack'), (52, 'B', 'PowerAttackChance'),
+    (56, 'f', 'RecoilStaggerBonusToPowerAttack'), (60, 'f', 'UnconsciousBonusToPowerAttack'),
+    (64, 'B', 'PowerAttackNormal'), (65, 'B', 'PowerAttackForward'),
+    (66, 'B', 'PowerAttackBack'), (67, 'B', 'PowerAttackLeft'), (68, 'B', 'PowerAttackRight'),
+    (72, 'f', 'HoldTimerMin'), (76, 'f', 'HoldTimerMax'),
+    (80, 'B', 'Flags'), (81, 'B', 'AcrobaticDodgeChance'),
+    (84, 'f', 'RangeMultOptimal'), (88, 'f', 'RangeMultMax'),
+    (92, 'f', 'SwitchDistanceMelee'), (96, 'f', 'SwitchDistanceRanged'),
+    (100, 'f', 'BuffStandoffDistance'), (104, 'f', 'RangedStandoffDistance'),
+    (108, 'f', 'GroupStandoffDistance'), (112, 'B', 'RushingAttackChance'),
+    (116, 'f', 'RushingAttackDistanceMult'), (120, 'I', 'DoNotAcquire'),
+)
+
+#: TES4 CSAD (Advanced) fields, all floats, in record order.
+_CSAD_FIELDS = (
+    'DodgeFatigueModMult', 'DodgeFatigueModBase', 'EncumberedSpeedModBase',
+    'EncumberedSpeedModMult', 'DodgeWhileUnderAttackMult', 'DodgeNotUnderAttackMult',
+    'DodgeBackWhileUnderAttackMult', 'DodgeBackNotUnderAttackMult',
+    'DodgeForwardWhileAttackingMult', 'DodgeForwardNotAttackingMult',
+    'BlockSkillModifierMult', 'BlockSkillModifierBase', 'BlockWhileUnderAttackMult',
+    'BlockNotUnderAttackMult', 'AttackSkillModifierMult', 'AttackSkillModifierBase',
+    'AttackWhileUnderAttackMult', 'AttackNotUnderAttackMult', 'AttackDuringBlockMult',
+    'PowerAttackFatigueModBase', 'PowerAttackFatigueModMult',
+)
+
+
+def _emit_fields(lines: list, prefix: str, data: bytes, fields) -> None:
+    """Emit each (offset, format, key) field that fits inside `data`."""
+    for off, fmt, key in fields:
+        if off + struct.calcsize(fmt) <= len(data):
+            lines.append(f"{prefix}.{key}={struct.unpack_from('<' + fmt, data, off)[0]}")
+
+
 def export_CSTY(rec: Record) -> list:
-    """Combat Style."""
+    """Combat Style: every CSTD and CSAD field present in the record."""
     lines = []
     emit_string(lines, "EditorID", get_subrecord(rec, "EDID"))
     cstd = get_subrecord(rec, "CSTD")
-    if cstd and len(cstd.data) >= 112:
-        d = cstd.data
-        lines.append(f"CSTD.DodgeChance={d[0]}")
-        lines.append(f"CSTD.DodgeLRChance={d[1]}")
-        lines.append(f"CSTD.DodgeFWTimer={struct.unpack_from('<f', d, 4)[0]}")
-        lines.append(f"CSTD.DodgeBackTimer={struct.unpack_from('<f', d, 8)[0]}")
-        lines.append(f"CSTD.IdleTimer={struct.unpack_from('<f', d, 12)[0]}")
-        lines.append(f"CSTD.BlockChance={d[16]}")
-        lines.append(f"CSTD.AttackChance={d[17]}")
-        lines.append(f"CSTD.StaggerRecoilTimer={struct.unpack_from('<f', d, 20)[0]}")
-        lines.append(f"CSTD.AcrobaticDodge={struct.unpack_from('<f', d, 24)[0]}")
-        lines.append(f"CSTD.RangeMultOptimal={struct.unpack_from('<f', d, 28)[0]}")
-        lines.append(f"CSTD.RangeMultMax={struct.unpack_from('<f', d, 32)[0]}")
-        lines.append(f"CSTD.SwitchDist={struct.unpack_from('<f', d, 36)[0]}")
-        lines.append(f"CSTD.BuffStandoff={struct.unpack_from('<f', d, 40)[0]}")
-        lines.append(f"CSTD.GroupStandoff={struct.unpack_from('<f', d, 48)[0]}")
-        lines.append(f"CSTD.RushAttackChance={d[56]}")
-        lines.append(f"CSTD.RushAttackDist={struct.unpack_from('<f', d, 60)[0]}")
+    if cstd:
+        _emit_fields(lines, "CSTD", cstd.data, _CSTD_FIELDS)
     csad = get_subrecord(rec, "CSAD")
-    if csad and len(csad.data) >= 20:
-        d = csad.data
-        lines.append(f"CSAD.DodgeFatigueModMul={struct.unpack_from('<f', d, 0)[0]}")
-        lines.append(f"CSAD.DodgeFatigueModBase={struct.unpack_from('<f', d, 4)[0]}")
-        lines.append(f"CSAD.EncMultiplier={struct.unpack_from('<f', d, 8)[0]}")
-        lines.append(f"CSAD.EncBase={struct.unpack_from('<f', d, 12)[0]}")
-        lines.append(f"CSAD.DodgeUnder={struct.unpack_from('<f', d, 16)[0]}")
+    if csad:
+        _emit_fields(lines, "CSAD", csad.data,
+                     [(4 * i, 'f', key) for i, key in enumerate(_CSAD_FIELDS)])
     return lines
 
 

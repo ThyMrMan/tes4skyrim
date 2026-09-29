@@ -18,9 +18,9 @@ argument text -- so those are properties of the CALL and live on it.
 
 from script_convert import resolve_name as _resolve_name
 from script_convert.constants import (
-    ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, AV_ARGUMENT_NAMES, CASTABLE,
-    FORCE_GREET_QUEST, PLACED_REF_SIGS, PRIMARY_STATS, TES4_ASSAULT_BOUNTY,
-    TES4_MISC_STAT_NAMES, TES4_MURDER_BOUNTY,
+    ANIM_GROUP_EVENTS, ATTRIBUTE_POLYFILL, ATTRIBUTE_STUB_VALUE, AV_ARGUMENT_NAMES, CASTABLE,
+    FORCE_FLEE_QUEST, FORCE_GREET_QUEST, PLACED_REF_SIGS, PRIMARY_STATS, SPLIT_SKILLS,
+    TES4_ASSAULT_BOUNTY, TES4_MISC_STAT_NAMES, TES4_MURDER_BOUNTY, TES4_SCRIPT_OWNED_MISC_STATS,
     TES4_STEAL_BOUNTY, is_generated_script_type, mgef_family_keyword_name,
     safe_property_name, papyrus_script_name
 )
@@ -37,6 +37,10 @@ from script_convert.constants import typed_already
 from script_convert.constants_falloutnv import (FALLOUT_COMMAND_ALIASES,
                                                 FALLOUT_UNMAPPED_ACTOR_VALUES)
 from tes5_import.dialogue.say_topics import PLAYER_TOKENS
+from tes5_import.actors.confidence import (
+    FACTION_EDID as CONFIDENCE_FACTION, FLEE_SPELL_EDID as CONFIDENCE_FLEE_SPELL,
+    MARGIN_FACTION_EDID as FLEE_MARGIN_FACTION, SCALE_EDID as FLEE_HEALTH_SCALE)
+from tes5_import.dialogue.say_topics import flee_key
 
 #: TES4 command name (lowercase) -> handler `(ctx, call) -> str | None`.
 REGISTRY: dict = dict(FALLOUT_HANDLERS)
@@ -248,6 +252,8 @@ def pc_misc_stat(ctx, call) -> str:
     name = TES4_MISC_STAT_NAMES[idx] if 0 <= idx < len(TES4_MISC_STAT_NAMES) else ''
     if not name:
         return ctx.note(f'{call.raw_name} {src} - Skyrim tracks no such stat')
+    if call.name == 'modpcmiscstat' and idx not in TES4_SCRIPT_OWNED_MISC_STATS:
+        return ctx.note(f'{call.raw_name} {src} - the engine keeps this stat; a script writing it repurposed it')
     if call.name == 'modpcmiscstat':
         return f'Game.IncrementStat("{name}", {call.arg(1, "1")})'
     return f'Game.QueryStat("{name}")'
@@ -353,6 +359,28 @@ def _force_greet(ctx, ref: str, parts: list) -> str:
     ctx.sc.property_refs[FORCE_GREET_QUEST] = 'Quest'
     return (f'TES4Polyfill.ForceGreet({FORCE_GREET_QUEST}, {slot[0]}, '
             f'{slot[1]}, {ref})')
+
+
+def _actor_arg(ctx, call) -> str:
+    """The call's receiver as an Actor expression, for passing to TES4Polyfill."""
+    ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)
+    if ref != 'Self' or call.extends == 'Actor':
+        return ref
+    return '(Self as Actor)'
+
+
+@command('forceflee', 'flee')
+def force_flee(ctx, call) -> str:
+    """ForceFlee [cell] [ref]: hand the actor its destination's Flee package.
+
+    See: docs/commentary/script_convert.md#forceflee-is-a-package
+    """
+    slot = ctx.force_flee_slots.get(flee_key(ctx.arg_srcs()))
+    if not slot:
+        return ctx.note(f'NE: {call.raw_name} - no ForceFlee pool for this destination')
+    ctx.sc.property_refs[FORCE_FLEE_QUEST] = 'Quest'
+    return (f'TES4Polyfill.FillPoolSlot({FORCE_FLEE_QUEST}, {slot[0]}, '
+            f'{slot[1]}, {_actor_arg(ctx, call)})')
 
 
 #: SayLine's assumed length for an unmeasured line, and the beat between them.
@@ -591,6 +619,18 @@ def start_combat(ctx, call) -> str:
         # is a logged no-op -- what Oblivion did with it too.
         ref = '(Self as Actor)'
     return ctx._force_combat_call(ref, target)
+
+
+@command('stopcombat')
+def stop_combat(ctx, call) -> str:
+    """StopCombat -- also takes back the hostility ForceCombat added.
+
+    See: docs/commentary/script_convert.md#stopcombat-undoes-forcecombat
+    """
+    ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)
+    if ref == 'Self' and call.extends == 'ObjectReference':
+        ref = '(Self as Actor)'
+    return ctx._end_combat_call(ref)
 
 
 @command('moddisposition')
@@ -838,8 +878,7 @@ def message(ctx, call) -> str:
         shown = _button_box(ctx, call)
         if shown is not None:
             return shown
-    papyrus = ('Debug.Notification' if call.name == 'message'
-               else 'Debug.MessageBox')
+    papyrus = _message_function(ctx, call.name)
     sources = ctx.arg_sources()
     if not sources:
         return f'{papyrus}("")'
@@ -852,6 +891,36 @@ def message(ctx, call) -> str:
         return f'{papyrus}({ctx._format_message_args(sources, call.extends)})'
     return (f'{papyrus}({first})' if first.startswith('"')
             else f'{papyrus}({ctx._quote_msg(first)})')
+
+
+def _message_function(ctx, name: str) -> str:
+    """The Papyrus call a text-only Message / MessageBox becomes.
+
+    A full script's `Message` goes through its TES4_Notify helper
+    (assemble.notify_helper); a fragment has no helpers and calls Debug directly.
+    """
+    if name == 'messagebox':
+        return 'Debug.MessageBox'
+    if not ctx.sc.edid:
+        return 'Debug.Notification'
+    ctx.sc.uses_notify = True
+    return 'TES4_Notify'
+
+
+def _box_values(ctx, call) -> list:
+    """The box's format values, as Show()'s Float arguments (at most 9).
+
+    They are the unquoted arguments between the text and the first button;
+    Show() fills the text's `%f` specifiers from them in order.
+
+    See: docs/commentary/script_convert.md#messagebox-values-fill-show
+    """
+    values = []
+    for i, src in enumerate(ctx.arg_sources()[1:], start=1):
+        if src.startswith('"') or len(values) == 9:
+            break
+        values.append(f'({ctx.arg_expr(i, call.extends)}) as Float')
+    return values
 
 
 def _button_box(ctx, call) -> str:
@@ -872,7 +941,7 @@ def _button_box(ctx, call) -> str:
         return None
     ctx.sc.property_refs[mesg] = 'Message'
     ctx.sc.uses_msg_buttons = True
-    return f'TES4_MsgButton = TES4_ShowMsg({mesg})'
+    return f'TES4_MsgButton = TES4_ShowMsg({", ".join([mesg] + _box_values(ctx, call))})'
 
 
 @command('isactionref')
@@ -1405,7 +1474,37 @@ _AV_SET = frozenset({'setactorvalue', 'setav', 'forceactorvalue', 'forceav',
 _AV_READ = frozenset({'getactorvalue', 'getav'})
 
 #: AVs the engine refuses to Force/Mod/Damage/Restore from Papyrus; only SetActorValue writes them.
-_AV_SET_ONLY = frozenset({'aggression', 'confidence', 'morality', 'mood', 'assistance'})
+_AV_SET_ONLY = frozenset({'aggression', 'morality', 'mood', 'assistance'})
+
+
+def _confidence(ctx, call) -> str:
+    """Get/Set/Force/Mod Confidence as TES4's 0-100 value, through TES4Polyfill.
+
+    See: docs/commentary/script_convert.md#confidence-through-the-polyfill
+    """
+    ref = _actor_arg(ctx, call)
+    ctx.sc.property_refs[CONFIDENCE_FACTION] = 'Faction'
+    current = f'TES4Polyfill.GetConfidence({ref}, {CONFIDENCE_FACTION})'
+    if call.name in ACTOR_VALUE_READ_FUNCTIONS:
+        return current
+    ctx.sc.property_refs.update({FLEE_MARGIN_FACTION: 'Faction', CONFIDENCE_FLEE_SPELL: 'Spell',
+                                 FLEE_HEALTH_SCALE: 'GlobalVariable'})
+    value = call.arg(1)
+    if _AV_PAPYRUS[call.name] == 'ModActorValue':
+        value = f'{current} + ({value})'
+    return (f'TES4Polyfill.SetConfidence({ref}, {value}, {CONFIDENCE_FACTION}, '
+            f'{FLEE_MARGIN_FACTION}, {CONFIDENCE_FLEE_SPELL}, {FLEE_HEALTH_SCALE})')
+
+
+#: Reads a split skill answers with the higher half; a BASE read feeds a write, so it stays One-Handed.
+_SPLIT_READS = frozenset({'GetActorValue'})
+
+
+def _actor_subject(ref: str, extends: str) -> str:
+    """The subject as an Actor expression: `ref`, `Self`, or `(Self as Actor)`."""
+    if ref != 'Self' or extends == 'Actor':
+        return ref
+    return '(Self as Actor)'
 
 
 def _unmapped_actor_value(ctx, call, raw: str) -> str:
@@ -1436,22 +1535,20 @@ def _karma_call(ctx, call) -> str:
 
 @command(*sorted(ACTOR_VALUE_FUNCTIONS))
 def actor_value(ctx, call) -> str:
-    """Get/Set/Mod ActorValue: the AV name is a quoted string in Papyrus, the
-    OBSE `...2` aliases included. An attribute, which Skyrim lacks, goes
-    through TES4Polyfill, which keeps the player's for a game's character rules.
+    """Get/Set/Mod ActorValue with the AV name quoted; attributes through TES4Polyfill, split skills read the higher.
 
+    See: docs/commentary/script_convert.md#actor-value-reads
     See: docs/commentary/script_convert.md#skyrim-has-no-attributes
     """
     if not len(call):
         return None
     raw = call.source(0).rstrip(',').strip('"\'')
-    if raw.lower() in PRIMARY_STATS:
-        return _attribute_call(ctx, call, raw)
-    if raw.lower() in FALLOUT_UNMAPPED_ACTOR_VALUES:
-        return _unmapped_actor_value(ctx, call, raw)
-    if raw.lower() == 'karma':
-        return _karma_call(ctx, call)
+    special = _special_actor_value(ctx, call, raw)
+    if special is not None:
+        return special
     av = _av_name(raw, call)
+    if av.lower() == 'confidence' and call.name in _AV_PAPYRUS:
+        return _confidence(ctx, call)
     args = [f'"{av}"']
     if len(call) > 1:
         scaled = (ctx._scale_enum_av(av, call.source(1))
@@ -1460,7 +1557,28 @@ def actor_value(ctx, call) -> str:
     papyrus = _av_papyrus(call)
     if papyrus == 'ForceActorValue' and av.lower() in _AV_SET_ONLY:
         papyrus = 'SetActorValue'
-    return f'{_av_subject(ctx, call)}{papyrus}({", ".join(args)})'
+    subject = _av_actor(ctx, call)
+    split = SPLIT_SKILLS.get(raw.lower())
+    if split and papyrus in _SPLIT_READS:
+        return f'TES4Polyfill.HigherActorValue({subject}, "{split[0]}", "{split[1]}")'
+    expr = f'{papyrus}({", ".join(args)})'
+    return expr if subject == 'Self' else f'{subject}.{expr}'
+
+
+def _special_actor_value(ctx, call, raw: str) -> 'str | None':
+    """An attribute, a Fallout value Skyrim lacks, or karma, converted; None for a Skyrim actor value.
+
+    Speed goes through the subject's walk formula when it has one.
+    """
+    low = raw.lower()
+    if low in PRIMARY_STATS:
+        speed = _speed_access(ctx, call) if low == 'speed' else None
+        return speed or _attribute_call(ctx, call, raw)
+    if low in FALLOUT_UNMAPPED_ACTOR_VALUES:
+        return _unmapped_actor_value(ctx, call, raw)
+    if low == 'karma':
+        return _karma_call(ctx, call)
+    return None
 
 
 def _av_name(raw: str, call) -> str:
@@ -1480,16 +1598,11 @@ def _av_papyrus(call) -> str:
             or 'GetActorValue')
 
 
-def _av_subject(ctx, call) -> str:
-    """The actor an AV call names, as a call prefix: the player for the
-    PC-only commands, nothing in an Actor script's own body (where `Self.`
-    would change only the output text) and `(Self as Actor).` in any other."""
+def _av_actor(ctx, call) -> str:
+    """The actor an AV call names: the player for the PC-only commands, else the subject as an Actor."""
     if call.name in _AV_PLAYER_ONLY:
-        return 'Game.GetPlayer().'
-    ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)
-    if ref != 'Self':
-        return f'{ref}.'
-    return '' if call.extends == 'Actor' else '(Self as Actor).'
+        return 'Game.GetPlayer()'
+    return _actor_subject(ctx._resolve_self_ref(call.ref, call.extends, actor_func=True), call.extends)
 
 
 def _attribute_call(ctx, call, raw: str) -> str:
@@ -1501,10 +1614,32 @@ def _attribute_call(ctx, call, raw: str) -> str:
     fn = ATTRIBUTE_POLYFILL.get(_av_papyrus(call))
     if not fn:
         return f';TES4 attribute {raw}: {call.name} is not kept -- dropped'
-    args = [_av_subject(ctx, call)[:-1] or 'Self', f'"{raw.capitalize()}"']
+    args = [_av_actor(ctx, call), f'"{raw.capitalize()}"']
     if len(call) > 1:
         args.append(call.arg(1))
     return f'TES4Polyfill.{fn}({", ".join(args)})'
+
+
+def _speed_access(ctx, call):
+    """A Speed read or write through the subject's TES4 walk formula, or None.
+
+    Reads and writes share one baseline, so a saved-and-restored Speed round-trips.
+    The player's baseline is ATTRIBUTE_STUB_VALUE, what its other attribute reads return.
+    See: docs/commentary/script_convert.md#speed-write-becomes-speedmult
+    """
+    formula = ctx.walk_speed_formula(call.ref)
+    reading = call.name in ACTOR_VALUE_READ_FUNCTIONS
+    if formula is None or not (reading or (call.name in _AV_SET and len(call) > 1)):
+        return None
+    base, low, high = formula
+    if (call.ref or '').lower() in PLAYER_TOKENS:
+        base = ATTRIBUTE_STUB_VALUE
+    ref = ctx._resolve_self_ref(call.ref, call.extends, actor_func=True)
+    if ref == 'Self' and call.extends == 'ObjectReference':
+        ref = '(Self as Actor)'
+    if reading:
+        return f'TES4Polyfill.GetTES4Speed({ref}, {base}, {low}, {high})'
+    return f'TES4Polyfill.SetTES4Speed({ref}, {call.arg(1)}, {base}, {low}, {high})'
 
 
 #: AV commands naming the PLAYER by definition, whatever script calls them.

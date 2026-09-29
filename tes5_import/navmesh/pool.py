@@ -19,6 +19,7 @@ import time
 from collections import defaultdict
 from concurrent.futures import ProcessPoolExecutor
 
+from core.navmesh_options import CORRIDOR, navmesh_generator
 from core.worker_budget import worker_count
 from . import cache_audit as navm_verify, worker as navm_worker
 from .world import base_fid
@@ -108,24 +109,26 @@ def base_model_key(rec: dict):
 
 
 def _records_of(by_type: dict, master_export: dict, sigs) -> list:
-    """(base_fid, record) of *sigs*, MASTERS FIRST, keyed as a REFR names them.
+    """(fid, record) of *sigs*: the masters' plus this plugin's, one per FormID.
 
-    Masters first so an override in this plugin wins the key.  `master_export`
-    keys by the raw TES4 slot while `get_formid` shifts every reference by the
-    load-order offset, so a master's id is shifted here to match what a NAME
-    actually resolves to.
+    `master_export` keys by the raw TES4 slot while `get_formid` shifts every id
+    by the load-order offset, so a master's key is shifted to match.  The
+    plugin's override replaces the master's record; one it flags deleted drops
+    out entirely.  Masters come first, then the plugin's own.
 
-    See: docs/commentary/tes5_import_navmesh.md#base-ids-carry-their-plugin-index
+    See: docs/commentary/tes5_import_navmesh.md#master-owned-cells
     """
-    out = []
-    if master_export:
-        offset = get_formid_index_offset()
-        out.append((_shift_index(key, offset), r)
-                   for key, r in master_export.items()
-                   if r.get('Signature') in sigs)
-    out.append((get_formid(r, 'FormID'), r)
-               for sig in sigs for r in by_type.get(sig, []))
-    return [(fid, r) for src in out for fid, r in src if fid]
+    own = [(get_formid(r, 'FormID'), r)
+           for sig in sigs for r in by_type.get(sig, [])]
+    own_fids = {fid for fid, _r in own}
+    offset = get_formid_index_offset()
+    masters = [(_shift_index(key, offset), r)
+               for key, r in (master_export or {}).items()
+               if r.get('Signature') in sigs]
+    out = [(fid, r) for fid, r in masters if fid and fid not in own_fids]
+    out.extend((fid, r) for fid, r in own
+               if not get_int(r, 'RecordFlags') & DELETED_FLAG)
+    return out
 
 
 def _shift_index(fid_str: str, offset: int):
@@ -191,6 +194,11 @@ def build_door_fid_set(by_type: dict, master_export: dict = None) -> dict:
     return out
 
 
+def build_activator_fid_set(by_type: dict, master_export: dict = None) -> frozenset:
+    """ACTI base FormIDs (index byte included), masters' too: moving parts."""
+    return frozenset(fid for fid, _rec in _records_of(by_type, master_export, ('ACTI',)))
+
+
 def build_teleport_grid(by_type: dict, master_export: dict = None):
     """(occupied exterior grid squares, teleport-door placements).
 
@@ -229,26 +237,9 @@ def _by_parent_cell(recs) -> dict:
     return out
 
 
-def _merge_master_cell_records(by_type: dict, master_export: dict,
-                               sig: str) -> list:
-    """`sig` records the plugin navmeshes with: the masters' plus its own.
-
-    A child plugin re-states only the references it edits, so navmeshing from
-    `by_type` alone carves a cell the masters furnished as if it were bare.
-    The masters' records are the baseline; the plugin's own override them by
-    FormID, and one the plugin flags deleted drops out entirely.
-
-    See: docs/commentary/tes5_import_navmesh.md#master-owned-cells
-    """
-    own = by_type.get(sig, [])
-    if not master_export:
-        return own
-    own_fids = {get_formid(rec, 'FormID') for rec in own}
-    merged = [rec for key, rec in master_export.items()
-              if rec.get('Signature') == sig and int(key, 16) not in own_fids]
-    merged.extend(rec for rec in own
-                  if not (get_int(rec, 'RecordFlags') & DELETED_FLAG))
-    return merged
+def _merged(by_type: dict, master_export: dict, sig: str) -> list:
+    """The `sig` records `_records_of` keeps, without their FormIDs."""
+    return [rec for _fid, rec in _records_of(by_type, master_export, (sig,))]
 
 
 def _is_door_ref(rec: dict, door_fids) -> bool:
@@ -410,13 +401,11 @@ def navmesh_land_at(by_type: dict, master_export: dict = None):
     PARENT's LAND (what the engine draws); its own LAND is only the fallback
     where the parent has none.  Masters are included.
     """
-    worlds = {get_formid(w, 'FormID'): w for w in
-              _merge_master_cell_records(by_type, master_export, 'WRLD')}
+    worlds = dict(_records_of(by_type, master_export, ('WRLD',)))
     land_world = _land_world_of(worlds)
     grid = _land_by_grid(
-        _merge_master_cell_records(by_type, master_export, 'CELL'),
-        _by_parent_cell(_merge_master_cell_records(by_type, master_export,
-                                                   'LAND')))
+        _merged(by_type, master_export, 'CELL'),
+        _by_parent_cell(_merged(by_type, master_export, 'LAND')))
 
     def land_at(square):
         wrld, gx, gy = square
@@ -493,8 +482,7 @@ def gather_navm_jobs(by_type: dict, door_fids: set = None,
     See: docs/commentary/tes5_import_navmesh.md#pool-orchestration
     """
     cells = by_type.get('CELL', [])
-    refr_by_cell = _by_parent_cell(
-        _merge_master_cell_records(by_type, master_export, 'REFR'))
+    refr_by_cell = _by_parent_cell(_merged(by_type, master_export, 'REFR'))
     pgrd_by_cell = _by_parent_cell(by_type.get('PGRD', []))
     indexes = (refr_by_cell, navmesh_land_at(by_type, master_export),
                pgrd_by_cell)
@@ -521,7 +509,7 @@ def gather_navm_jobs(by_type: dict, door_fids: set = None,
 #: Cannot reach the cached payload; see #the-tag-hashes-geometry-only.
 _TAG_EXCLUDE = frozenset({
     'edge_links.py', 'navi.py', 'split.py', 'cache_audit.py', 'pool.py',
-    'worker.py', '__init__.py',
+    'worker.py', '__init__.py', 'lookup_grid.py',
 })
 
 #: Native SOURCES deciding cell geometry; hashed with the Python, never the .pyd.
@@ -591,24 +579,36 @@ def collision_cache_chain(export_dir: str) -> tuple:
     return asset_cache_chain(export_dir, 'collision_cache.bin')
 
 
+def tag_sources() -> list:
+    """The Python sources the current generator's tag hashes.
+
+    The corridor's (the published cache, gated on push) are the top-level
+    navmesh modules only; the lattice adds its own package, which never
+    moves the corridor's tag.
+    """
+    here = os.path.dirname(os.path.abspath(__file__))
+    srcs = glob.glob(os.path.join(here, '*.py'))
+    if navmesh_generator() != CORRIDOR:
+        srcs += glob.glob(os.path.join(here, 'lattice', '*.py'))
+    return sorted(s for s in srcs if os.path.basename(s) not in _TAG_EXCLUDE)
+
+
 def navmesh_geom_cache(collision_cache: str):
     """(cache_dir, tag) for the on-disk navmesh geometry cache, or None.
 
-    The tag hashes the navmesh generator SOURCES, so editing any navmesh code
-    (params and the native march included) invalidates every entry
-    automatically.  Collision enters per-cell via `from_pgrd._geom_hash`, never
-    here.  Newlines are normalized to LF so the tag is a property of the
-    CONTENT, not of the checkout's line-ending mode.
+    The tag hashes `tag_sources` and the native march, so editing navmesh
+    code misses every entry.  Each generator has its own folder (the
+    corridor's is the published one), so switching never overwrites the
+    other's entries.  Collision enters per-cell via `from_pgrd._geom_hash`.
+    Sources are hashed with LF newlines.
 
     See: docs/commentary/tes5_import_navmesh.md#pool-orchestration
     """
     if not collision_cache or not os.path.exists(collision_cache):
         return None
-    h = hashlib.sha1()
-    here = os.path.dirname(os.path.abspath(__file__))
-    srcs = sorted(s for s in glob.glob(os.path.join(here, '*.py'))
-                  if os.path.basename(s) not in _TAG_EXCLUDE)
-    for src in srcs:
+    lattice = navmesh_generator() != CORRIDOR
+    h = hashlib.sha1(b'lattice' if lattice else b'')
+    for src in tag_sources():
         try:
             with open(src, 'rb') as fh:
                 h.update(fh.read().replace(b'\r\n', b'\n'))
@@ -616,8 +616,8 @@ def navmesh_geom_cache(collision_cache: str):
             return None
     for body in _native_tag_sources():
         h.update(body)
-    cache_dir = os.path.join(os.path.dirname(collision_cache),
-                             'navmesh_geom_cache')
+    folder = 'navmesh_geom_cache' + ('_lattice' if lattice else '')
+    cache_dir = os.path.join(os.path.dirname(collision_cache), folder)
     os.makedirs(cache_dir, exist_ok=True)
     return cache_dir, h.hexdigest()
 
@@ -752,7 +752,8 @@ def _adopt_master_navm_fids(jobs: list, master_index) -> int:
 
 def precompute_navmeshes(by_type: dict, writer, base_model_by_fid: dict,
                          door_fids: set, collision_cache: str = '',
-                         master_index=None, master_export: dict = None) -> dict:
+                         master_index=None, master_export: dict = None,
+                         activator_fids: frozenset = frozenset()) -> dict:
     """Run every PGRD->NAVM conversion in parallel; return {key: (bytes, meta)}.
 
     FormIDs are pre-allocated serially in builder-visit order, so results are
@@ -785,15 +786,15 @@ def precompute_navmeshes(by_type: dict, writer, base_model_by_fid: dict,
     geom_cache = navmesh_geom_cache(own_cache)
     door_centers = navm_verify.door_centers_cache_path(collision_cache)
     initargs = (base_model_by_fid, door_fids, collision_cache, formid_offset,
-                geom_cache, get_injected_formids(), True, door_centers)
+                geom_cache, get_injected_formids(), True, door_centers, activator_fids)
     navm_verify.init_context(base_model_by_fid, door_fids, collision_cache,
                              formid_offset, geom_cache,
                              get_injected_formids(), door_centers)
     navm_verify.prepare(jobs, geom_cache,
                         pooled_prover(initargs, n_workers))
 
-    print(f"  Generating {len(jobs)} navmeshes (PGRD->NAVM) "
-          f"across {n_workers} processes...")
+    print(f"  Generating {len(jobs)} navmeshes (PGRD->NAVM, {navmesh_generator()} "
+          f"generator) across {n_workers} processes...")
     t0 = time.time()
     if len(jobs) == 1 or n_workers == 1:
         cache = _run_inline(jobs)
@@ -806,6 +807,8 @@ def precompute_navmeshes(by_type: dict, writer, base_model_by_fid: dict,
           f"{hits} geometry-cache hits)")
 
     navm_verify.report_verification(cache, geom_cache)
-    if not navm_verify.report_failures(cache):
+    if navm_verify.report_failures(cache):
+        navm_verify.uncertify(geom_cache)
+    else:
         stamp_navmesh_cache_tag(geom_cache)
     return cache

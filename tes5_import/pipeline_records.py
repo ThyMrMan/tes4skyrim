@@ -51,6 +51,7 @@ from .base.owned_records import (
 )
 from .navmesh.navi import NAVI_SINGLETON_FID, build_navi_record
 from .navmesh import pool as navm_pool
+from .navmesh.lattice.build import set_activators
 from .actors.lava_placement import LavaPlanner
 from .base.locations import build_marker_locations
 from .record_types.world import (
@@ -355,13 +356,16 @@ def _phase4a_navmesh(st, export_dir: str, phase_done, skip_types) -> None:
     st.base_model_by_fid = navm_pool.build_base_model_index(st.by_type,
                                                          _navm_master_export)
     st.door_fids = navm_pool.build_door_fid_set(st.by_type, _navm_master_export)
+    acti_fids = navm_pool.build_activator_fid_set(st.by_type, _navm_master_export)
+    set_activators(acti_fids)
     st.navm_metas = []
 
     st.navm_cache = navm_pool.precompute_navmeshes(
         st.by_type, st.writer, st.base_model_by_fid, st.door_fids,
         collision_cache=navm_pool.collision_cache_chain(export_dir),
         master_index=getattr(st.ctx, 'master_index', None) if st.ctx else None,
-        master_export=getattr(st.ctx, 'master_export', None) if st.ctx else None)
+        master_export=getattr(st.ctx, 'master_export', None) if st.ctx else None,
+        activator_fids=acti_fids)
 
     _dump_to = os.environ.get('TESCONV_DUMP_NAVM_CACHE', '').strip()
     if _dump_to:

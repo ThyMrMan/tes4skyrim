@@ -10,15 +10,15 @@ Two things still come from vanilla:
 * DPLT — the default package LIST every vanilla actor carries underneath its
   own packages (the fallback that keeps an actor doing *something* when none of
   its own packages apply).
-* Creatures — creature AI is driven by the generated behaviour graph, not by
-  TES4 packages (see docs/commentary/asset_convert_creature.md), and every vanilla creature
-  carries exactly one package: DefaultMasterPackageCreature.  Keep that.
+* Creatures — their own packages come first, like an NPC's, then
+  DefaultMasterPackageCreature, the one package every vanilla creature carries,
+  for when none of their own apply.
 
 Quest packages are NOT in the actor's PKID list: they hang off a QUST reference
 alias (ALPC), which is how they outrank the standing schedule.  See pack_aliases.
 """
 
-from ..base.text_reader import get_int
+from ..base.text_reader import get_formid, get_int
 
 # Vanilla Skyrim.esm records (master index 0 — written unremapped)
 PKID_CREATURE_MASTER = 0x0010F2A5   # PACK DefaultMasterPackageCreature
@@ -52,7 +52,6 @@ def load_package_types(by_type: dict, master_export: dict = None) -> None:
     Keys are the REMAPPED FormID, matching `PackagePlan.owner_quest` and the
     actor's converted AIPackage list (both come from get_formid()).
     """
-    from ..base.text_reader import get_formid
     _PACK_TYPES.clear()
     sources = [by_type.get('PACK', [])]
     if master_export:
@@ -102,6 +101,12 @@ _PACKAGE_CHAINS = {}
 def set_package_chains(chains: dict) -> None:
     _PACKAGE_CHAINS.clear()
     _PACKAGE_CHAINS.update(chains)
+
+
+def authored_packages(rec: dict) -> list:
+    """The actor's TES4 AIPackage list, in authored order."""
+    return [get_formid(rec, f'AIPackage[{i}]')
+            for i in range(get_int(rec, 'AIPackageCount'))]
 
 
 def npc_packages(pack_fids) -> list:

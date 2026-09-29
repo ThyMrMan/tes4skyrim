@@ -162,10 +162,6 @@ def _emit_source_bare(node: N.Expr) -> str:
     if isinstance(node, N.Call):
         head = f'{emit_source(node.receiver)}.' if node.receiver else ''
         args = ' '.join(emit_source(a) for a in node.args)
-        # The LEADING comma is meaningful, not punctuation: for a
-        # zero-argument command the token after it is the receiver, so
-        # `StopCombat, Player` is Player's combat and dropping the comma made
-        # the call act on Self.
         if node.leading_comma and args:
             args = f', {args}'
         return f'{head}{node.name} {args}'.rstrip()
