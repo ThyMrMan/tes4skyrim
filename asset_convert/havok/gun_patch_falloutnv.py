@@ -190,15 +190,17 @@ def patch_master(g: HumanoidGraph, clips: GunClips, out_path: str) -> list:
 def patch_sprint(g: HumanoidGraph, clips: GunClips, out_path: str) -> list:
     """Both sprint side selectors play the class' run clip."""
     gb = _prepare(g, clips)
-    sprint = sprint_selector(gb)
+    sprint = sprint_selector(gb, g.vanilla_slot(SPRINT_SELECTORS[0]))
     return _finish(g, gb, sprint, {n: sprint.ref for n in SPRINT_SELECTORS},
                    out_path)
 
 
 def patch_locomotion(g: HumanoidGraph, clips: GunClips, out_path: str) -> list:
-    """The drawn-gun direction blend as the type-13 locomotion state."""
+    """The drawn-gun direction blend as the type-13 locomotion state; a class
+    without gaits keeps the vanilla direction blend."""
     gb = _prepare(g, clips)
-    loco = class_selector(gb, 'TES4Gun_Loco_MSG', lambda c: loco_machine(gb, c))
+    loco = class_selector(gb, 'TES4Gun_Loco_MSG', lambda c: loco_machine(gb, c),
+                          g.vanilla_slot('Melee_Direction_Behavior'))
     return _finish(g, gb, loco, {'Melee_Direction_Behavior': loco.ref},
                    out_path)
 

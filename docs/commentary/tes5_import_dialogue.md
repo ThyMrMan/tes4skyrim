@@ -118,6 +118,22 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
   holding a line with follow-ups is therefore written as a Blocking `CUST`
   topic (same FormID and EditorID, so voice paths and the force greet's PDTO
   are unchanged; lines keep their order, so the first passing one still wins).
+- <a id="greeting-choices-block"></a>**A greeting that offers replies opens
+  as Blocking too (2026-09-28, unconfirmed in game)** (`groups.greets_with_choices`).
+  In FO3's birthday party, Amata's force greet opens CG02's GREETING topic and
+  says "Happy birthday! We really surprised you, didn't we?" (`000319BD`),
+  whose three Choices lead to her present (`setstage CG02 21`). The flight
+  recorder shows the line end and, 8 ms later, a second line from the same
+  Hello topic: "Go on, mingle!" (`000784E0`, Goodbye). The force greet said
+  its line, then the menu opened with an ordinary Hello, and the Goodbye
+  closed the talk before any reply showed. Stage 21 never came, and neither
+  did stage 34, which needs every present. Vanilla never force-greets a Hello
+  topic: its 712 Blocking branches are what it says when dialogue starts, and
+  they carry choices. So a quest's GREETING group is written as the Blocking
+  `CUST` topic above whenever one of its lines keeps a reply link
+  (`info_tclt`, the same filter the INFO writer uses), not only when one has
+  follow-ups. A greeting whose links all lead to menu topics keeps no TCLT
+  and stays a Hello.
 - <a id="fallout-follow-ups-resume"></a>**A follow-up chain the player walked
   away from resumes** (`follow_up_marks_falloutnv.py`). FO3/FNV could not
   leave a conversation mid-line; Skyrim can, and then the Invisible Continue

@@ -4639,6 +4639,35 @@ class TestFaceUnderAFloorFacesUp:
         assert out[0] == 1 and out[1] == -1
 
 
+class TestCoplanarNeighboursAgree:
+    """A face the render mesh cannot see takes its coplanar neighbour's winding.
+
+    WoodPlanksGroup01: one collision box over separate render planks, the
+    down-facing half of the top quad centred over a gap between them.
+    See: docs/commentary/asset_convert_collision.md#coplanar-neighbours-agree
+    """
+
+    _QUAD = TestFaceUnderAFloorFacesUp._QUAD
+    #: An up-facing render plank under the first half's centre only.
+    _PLANK = [((0.0, 0.0, 0.3), (3.0, 0.0, 0.3), (0.0, 3.0, 0.3))]
+
+    def _normals(self, tris, visual, monkeypatch):
+        """Run the gated repair; each face's normal z, rounded."""
+        from asset_convert.collision import collision_winding as W
+        monkeypatch.setenv('TESCONV_COLLISION_WINDING_FIX', '1')
+        out, _n = W.repair_inverted_floors(list(tris), visual, None, None)
+        return [round(W.face_normal(t)[2]) for t in out]
+
+    def test_half_over_a_gap_follows_its_seen_half(self, monkeypatch):
+        """The half no render plank covers turns up with the half one does."""
+        assert self._normals(self._QUAD, self._PLANK, monkeypatch) == [1, 1]
+
+    def test_a_folded_sheet_is_left_alone(self, monkeypatch):
+        """A face folded back over its neighbour is two-sided, not one surface."""
+        folded = (self._QUAD[0], ((4.0, 0.0, 0.0), (1.0, 1.0, 0.0), (0.0, 4.0, 0.0)))
+        assert self._normals(folded, self._PLANK, monkeypatch) == [1, -1]
+
+
 class TestWindingRepairNeverRemovesFloor:
     r"""A mesh solid at source must stay solid: the repair may add standable
     surface, never take it away.
@@ -5235,4 +5264,19 @@ class TestMeshSubdirFilter:
     def test_nested_folder_and_single_mesh(self, tmp_path):
         self._tree(tmp_path)
         assert self._kept(tmp_path, ['TR\\l', 'td/vfx.nif']) == ['td/vfx.nif', 'tr/l/candle.nif']
+
+    def test_a_worn_item_in_a_skipped_folder_converts(self, tmp_path):
+        """FO3's glasses live under characters/hair; their ARMO names them.
+
+        See: docs/commentary/asset_convert_nif.md#skip-paths-fixtures
+        """
+        from asset_convert.nif.fixture_plan import FIXTURE_KEY
+        from asset_convert.nif.nif_batch import _named_by_records
+        for rel in ('characters/hair/glassesreading.nif', 'characters/hair/hairbun.nif'):
+            (tmp_path / rel).parent.mkdir(parents=True, exist_ok=True)
+            (tmp_path / rel).write_bytes(b'')
+        plan = {'characters/hair/glassesreading.nif': {}, FIXTURE_KEY: set()}
+        kept, _skipped = _collect_nifs(tmp_path, None, _named_by_records(plan))
+        assert [p.relative_to(tmp_path).as_posix() for p in kept] == [
+            'characters/hair/glassesreading.nif']
 

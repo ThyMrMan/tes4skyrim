@@ -284,6 +284,34 @@ WEAP can only load bolts, so a converted gun could never equip its rounds
 and `arrowRelease` had nothing to spend. A Fallout-sourced AMMO leaves that
 bit clear.
 
+### <a id="embedded-weapons"></a>Embedded weapons (2026-09-28, unconfirmed in game)
+
+**Code:** `falloutnv.py` `_emit_weap_fire` (NNAM), `equipment_falloutnv.py`
+`weapon_flags`, `embedded_node_subs`
+
+A robot's flamer or a turret's gun is part of the creature's own mesh. FO3
+marks such a weapon Embedded (DNAM Flags1 `0x20`) and names in `NNAM` the node
+it fires from (`ProjectileNode_HeadLaser`, or `Weapon` for the Mister Handy
+buzzsaw). Fallout3.esm has 31 embedded weapons, all with an `NNAM`, and 29 of
+them have no model. We used to drop both the flag and the node, so Skyrim
+treated `MisterHandyFlamer2HL` as an ordinary weapon without a mesh. It drew
+the red missing-model marker where Andy stood behind the diner counter at the
+birthday party.
+
+Skyrim keeps the mechanism. Its DNAM Flags word has the same bit layout as FO3
+Flags1, and 1.6.1170 tests the bit at weapon offset 0x19E in ten places:
+
+- `0x286330` returns the embedded weapon actor value only when the bit is set.
+- `0x286b00` looks up the `NNAM` node (offset 0x210) in a 3D root.
+- `0x3bf2ca` drops an embedded weapon from an actor's list when that node is
+  not in the actor's 3D.
+
+Vanilla uses it for the Dwemer ballista traps (flags `0xA8`, `NNAM`
+`BoltNode01`-`03`). The importer now keeps Flags1's meaningful bits (ignores
+resistance, can't drop, embedded, non-playable; xEdit marks the others unused)
+and writes `NNAM`. The converted Mister Gutsy meshes keep their
+`ProjectileNode_*` nodes.
+
 ### <a id="projectiles"></a>Projectiles and the gun's fire fields
 
 **Code:** `tes4_export/record_types/falloutnv.py` (`_emit_weap_fire`,
@@ -781,9 +809,19 @@ per-actor face already rides on `NPC_.FGGS` -> `NAM9`, which needs no race table
 Ghoul is deliberately left unmapped -- it falls through to the Oblivion default.
 Aliasing it to a human race makes ghouls look human, which is worse than a wrong
 ethnicity; it needs `HeadGhoul.NIF` registered as a `head_fit.py` race pack.
-Child likewise: FNV children are a 0.8-scale variant with `DATA.Flags` bit 2 and
-child head/body meshes, and Skyrim's child races carry their own skeleton and
-armor-race handling.
+**Children take Skyrim's child races** (`fallout_child_race`). FO3/FNV
+children are a 0.8-scale variant with `DATA.Flags` bit 2 and child meshes; they
+were first stripped to the adult race, so Fallout 3's birthday party (CG02) was
+a room of adults. Each child race now takes its ethnicity's Skyrim child race:
+`ImperialRaceChild` `0002C659`, `RedguardRaceChild` `0002C65A`, `NordRaceChild`
+`0002C65B`, `BretonRaceChild` `0002C65C`, the four the ethnicities already use.
+Skyrim's child races share the adult skeleton (`ANAM` is
+`Character Assets\skeleton.nif` for both), so converted clothing needs no
+retarget, only a race: an ARMA lists the ten adult races, and a child wearing
+it renders nothing. `register_child_wear` records every item a child-race NPC
+carries (`KIDVaultSuitChild101`, `KIDHatPartyChild`, ...), and those ARMAs add
+the four child races. Untested in game: the child head against the converted
+face, and items children get only from leveled lists.
 
 ## <a id="voice-files"></a>Voice files: no gender level, Ogg Vorbis
 

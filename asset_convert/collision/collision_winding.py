@@ -39,6 +39,9 @@ _CONSENSUS_MARGIN = 0.05
 #: A render face further than this many triangle-widths away is another surface.
 _MAX_MATCH_WIDTHS = 2.0
 
+#: Two faces' normals must be this parallel (either sign) to count as one plane.
+COPLANAR_DOT = 0.999
+
 
 def face_normal(tri):
     """Normalized face normal for a triangle given as three xyz tuples."""
@@ -253,10 +256,10 @@ def _authored_flips(tris, authored_normals):
     return out
 
 
-def _render_flips(tris, faces):
-    """Indices the render mesh says are wound backwards."""
+def _render_verdicts(tris, faces):
+    """{index: inverted?} for each face the render mesh decides."""
     twins = _twin_index(faces)
-    flip = set()
+    verdicts = {}
     for i, t in enumerate(tris):
         n = face_normal(t)
         if not (n[0] or n[1] or n[2]):
@@ -266,9 +269,91 @@ def _render_flips(tris, faces):
             verdict = _floor_says_inverted(t, n, faces)
         if verdict is None:
             verdict = _nearest_says_inverted(t, n, faces)
-        if verdict:
-            flip.add(i)
-    return flip
+        if verdict is not None:
+            verdicts[i] = verdict
+    return verdicts
+
+
+def _edge_neighbours(tris):
+    """{index: [indices sharing an edge]}, corners matched by the twin quantum."""
+    by_edge = {}
+    for i, t in enumerate(tris):
+        keys = [tuple(round(c / _TWIN_QUANTUM) for c in v) for v in t]
+        for a in range(3):
+            by_edge.setdefault(frozenset((keys[a], keys[(a + 1) % 3])), []).append(i)
+    out = {}
+    for owners in by_edge.values():
+        for i in owners:
+            out.setdefault(i, []).extend(j for j in owners if j != i)
+    return out
+
+
+def _coplanar(a, na, b, nb):
+    """Whether two edge-sharing faces continue one plane: parallel normals,
+    the same offset, and the two faces on opposite sides of their edge (a
+    face folded back over the other is a two-sided sheet, left alone)."""
+    if abs(na[0]*nb[0] + na[1]*nb[1] + na[2]*nb[2]) < COPLANAR_DOT:
+        return False
+    offset = sum(na[k] * (a[0][k] - b[0][k]) for k in range(3))
+    if abs(offset) > _TWIN_QUANTUM * 4:
+        return False
+    return _edge_side(a, b, na) * _edge_side(b, a, na) < 0
+
+
+def _edge_side(t, other, n):
+    """Which side of the edge shared with `other` t's third corner lies on."""
+    def key(v):
+        """The corner quantized as the twin match does."""
+        return tuple(round(c / _TWIN_QUANTUM) for c in v)
+
+    keys = {key(v) for v in other}
+    shared = sorted((v for v in t if key(v) in keys), key=key)
+    apex = [v for v in t if key(v) not in keys]
+    if len(shared) != 2 or len(apex) != 1:
+        return 0.0
+    (p, q), r = shared, apex[0]
+    e = [q[k] - p[k] for k in range(3)]
+    d = [r[k] - p[k] for k in range(3)]
+    cross = (e[1]*d[2] - e[2]*d[1], e[2]*d[0] - e[0]*d[2], e[0]*d[1] - e[1]*d[0])
+    return sum(cross[k] * n[k] for k in range(3))
+
+
+def _spread_to_coplanar(tris, verdicts):
+    """Decide each undecided face from a decided coplanar edge neighbour.
+
+    Two triangles of one flat surface must face the same way; a face the
+    render mesh cannot see (a gap between render planks) takes its winding
+    from the half of its quad that it can. Neighbours that disagree decide
+    nothing.
+    See: docs/commentary/asset_convert_collision.md#coplanar-neighbours-agree
+    """
+    normals = [face_normal(t) for t in tris]
+    neighbours = _edge_neighbours(tris)
+    changed = True
+    while changed:
+        changed = False
+        for i in range(len(tris)):
+            if i in verdicts or not any(normals[i]):
+                continue
+            wants = {_opposes(normals[i], normals[j], verdicts[j])
+                     for j in neighbours.get(i, ())
+                     if j in verdicts and _coplanar(tris[i], normals[i], tris[j], normals[j])}
+            if len(wants) == 1:
+                verdicts[i] = wants.pop()
+                changed = True
+    return verdicts
+
+
+def _opposes(n, other, other_inverted):
+    """Whether normal `n` faces against `other` as it will be once repaired."""
+    dot = n[0]*other[0] + n[1]*other[1] + n[2]*other[2]
+    return (dot < 0) != other_inverted
+
+
+def _render_flips(tris, faces):
+    """Indices the render mesh says are wound backwards."""
+    verdicts = _spread_to_coplanar(tris, _render_verdicts(tris, faces))
+    return {i for i, inverted in verdicts.items() if inverted}
 
 
 def _rewound(tris, flip):

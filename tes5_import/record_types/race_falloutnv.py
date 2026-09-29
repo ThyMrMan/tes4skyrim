@@ -13,11 +13,14 @@ four separate tints rather than collapsing 686 actors onto one.
 
 Raider/Old/OldAged suffixes are texture and FaceGen variants of their base
 ethnicity, not separate peoples, so they resolve to the same Skyrim race; the
-per-actor face already rides on NPC_.FGGS.
+per-actor face already rides on NPC_.FGGS. Child is not: a child takes its
+ethnicity's Skyrim child race, and the clothing children carry lists the child
+races on its armor addons.
 
 See: docs/commentary/tes4_export_falloutnv.md#humanoid-races
 """
 
+from ..base.text_reader import get_formid, get_int
 from .world_falloutnv import is_fallout_source
 
 #: FNV ethnicity -> Oblivion race EditorID keying RACE_MAP and the face tables.
@@ -56,6 +59,48 @@ _FNV_RACE_FID_TO_EDID = {
     0x000987DE: 'AfricanAmericanOldAged',
     0x000987DF: 'CaucasianOldAged',
 }
+
+
+#: Skyrim.esm child race of each stand-in ethnicity (references/Skyrim.esm RACE).
+SKYRIM_CHILD_RACES = {
+    'Imperial': 0x0002C659,
+    'Redguard': 0x0002C65A,
+    'Nord': 0x0002C65B,
+    'Breton': 0x0002C65C,
+}
+
+#: Source FormIDs of the ARMO/CLOT records a child-race NPC carries, per run.
+_CHILD_WORN: set = set()
+
+
+def _is_child_race(race_fid: int) -> bool:
+    """Whether a Fallout RACE id is one of the child races."""
+    return _FNV_RACE_FID_TO_EDID.get(race_fid & 0x00FFFFFF, '').endswith('Child')
+
+
+def fallout_child_race(race_fid: int):
+    """The Skyrim child race for a Fallout child race id, else None."""
+    if not is_fallout_source() or not _is_child_race(race_fid):
+        return None
+    return SKYRIM_CHILD_RACES.get(fallout_race_edid(race_fid))
+
+
+def register_child_wear(by_type: dict) -> int:
+    """Record the items child-race NPCs carry; the count recorded."""
+    _CHILD_WORN.clear()
+    if not is_fallout_source():
+        return 0
+    for rec in by_type.get('NPC_', []):
+        if not _is_child_race(get_formid(rec, 'RNAM.Race')):
+            continue
+        for i in range(get_int(rec, 'ItemCount')):
+            _CHILD_WORN.add(get_formid(rec, f'Item[{i}].FormID') & 0x00FFFFFF)
+    return len(_CHILD_WORN)
+
+
+def child_wears(rec: dict) -> bool:
+    """Whether a child-race NPC carries this ARMO/CLOT record."""
+    return (get_formid(rec, 'FormID') & 0x00FFFFFF) in _CHILD_WORN
 
 
 def fallout_race_edid(race_fid: int):

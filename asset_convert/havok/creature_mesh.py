@@ -14,6 +14,7 @@ apply_patches()
 from pyffi.formats.nif import NifFormat
 
 from asset_convert.nif.nif_flags import NIF_FLAGS
+from asset_convert.character.skyrim_overrides import SBP_32_BODY
 
 #: Oblivion havok -> game units; the box is written pre-rescale.
 _PILE_HAVOK_SCALE = 7.0
@@ -445,7 +446,8 @@ def _cap_skin_bones(root):
     for shape in _shape_blocks(root):
         si = shape.skin_instance
         if si is not None:
-            regen_skin_partition(shape, si, _node_name(shape))
+            regen_skin_partition(shape, si, _node_name(shape),
+                                 authored_body_part=SBP_32_BODY)
 
 
 def merge_creature_body(part_paths, dst_path, skeleton_path=None,

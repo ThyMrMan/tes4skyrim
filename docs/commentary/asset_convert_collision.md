@@ -775,6 +775,36 @@ Add Oblivion to `WINDING_FIX_DEFAULT_PLUGINS` only if it gains cells and loses
 none. The scratch harness (convert a folder with the real converter; score two
 trees by downward raycast, ignoring down-facing faces) is described above.
 
+### <a id="coplanar-neighbours-agree"></a>Round 4e — coplanar neighbours agree
+
+User report: New Vegas's `WoodPlanksGroup01` (`000039D0`) drops the player,
+first bridging the broken overpass outside Primm (`001568A5`), then on the
+second floor of the NCR Correctional Facility administration (`0008DEAE`).
+Its collision is one closed box, 6 units thick, over a render mesh of several
+separate planks with gaps between them. On the top face, triangle 2 faced up
+and triangle 3 faced down, with the same shape on the bottom face. Every rule
+above abstained on triangle 3: its centre, (-24.6, 67.1), lies in a gap
+between render planks, so no up-facing skin covers it and nearest-skin finds
+no consistent match. Half of the plank was open from above. The earlier look at
+this plank checked the box's shape, placement and MOPP, not the winding of
+each triangle.
+
+`_spread_to_coplanar` runs after the render verdicts. A face they leave
+undecided takes its winding from its edge neighbours in the same plane:
+normals within `COPLANAR_DOT` (0.999) either way, the same plane offset, and
+the two faces on opposite sides of their shared edge. A face folded back
+over its neighbour is a two-sided sheet, not a continuing surface. All
+decided coplanar neighbours must agree, or the face stays undecided, and a
+decision spreads across the plane until nothing changes.
+
+Measured with the real converter on 287 New Vegas meshes (Goodsprings,
+`clutter/junk`, Primm, Novac, NCR): 996 faces newly decided, 404 of them
+flipped, and no face whose decided neighbours disagreed. Goodsprings' mixed
+up/down edge pairs (`collision_winding.py --converted`) went from 36 to 31,
+with no mesh getting worse. The pairs left are faces the render mesh itself
+decided both ways, which this rule does not override. Navmesh extraction
+classifies by `abs(nz)`, so no walkable output and no cache version changed.
+
 ### <a id="welding-is-per-group"></a>Welding is scoped PER GROUP
 
 The packed triangle list stores each triangle's corners independently, so
@@ -817,6 +847,7 @@ Besides the non-T rotation root cause above, the "chains/traps look right but ne
    - mass>0 AND owns a constraint → DYNAMIC. Oblivion marks entire swinging traps keyframed ("Unyielding=1" links) because ITS engine holds traps rigid until the trap script enables havok; Skyrim's trapmace01 ships the same links DYNAMIC (ms 3, quality 4). Keyframing them = trap welded solid.
    - everything else (constrained-island anchors cellchain01/cellChainMiddle mass=100, unyielding props) → STATIC with mass forced to 0. Vanilla chain/noose/trap anchors are ALWAYS static mass-0 bodies (NooseRopePiece01 root, trapmace Base01), NEVER keyframed — a keyframed body with anim flags on a non-animated object flips the engine into the baked path and the whole compound (all its dynamic children included) acts welded solid.
 - **Trigger phantoms are SUPPORTED by Skyrim** — do NOT strip `bhkSPCollisionObject`/`bhkSimpleShapePhantom`: vanilla ships 31 under meshes/traps alone (tripwire, pressure plates, bear trap), always collObj flags=129 + layer 12 TRIGGER. Convert the inner shape (×0.1 + material) and keep. Stripping them killed every Oblivion trigger volume (tripwire never fired).
+- <a id="phantom-collision-objects"></a>**`bhkPCollisionObject` takes the same path** (`PHANTOM_COLLISION_OBJECTS`): a `bhkSimpleShapePhantom` body is kept, any other phantom is dropped. It used to fall through to the rigid-body code, which crashed on `rb.translation`. The only phantom of another kind in either Fallout master is `bhkAabbPhantom`, on Fallout 3's five `meshes/temp/stairs*.nif` STATs (none in New Vegas). There it is the mesh's only collision: an AABB overlap volume with no shape and no solid surface, and pyffi reads its body as 15 unknown ints, so there is nothing to scale. Dropping it leaves the stairs exactly as solid as the source: not at all.
 - Vanilla reference meshes: `traps/macetrap/trapmace01.nif` (swinging mace analogue), `traps/tripwire/traptripwire01.nif`, `clutter/woodfires/spitpot*.nif` (hinge), `clutter/deadsoldiers/desecratedimperial.nif` (prop ragdoll constraints).
 - Debug tool: `python tools/nif/havok_constraint_dump.py <nif|dir>` prints per-body filter (layer/flags/group), inertia, motion/quality, damping, and full constraint descriptors (pivots/axes/limits/friction) — the scene-tree analyzers hide all of this.
 
@@ -834,6 +865,22 @@ Besides the non-T rotation root cause above, the "chains/traps look right but ne
 <a id="nif-bhkmultisphereshape"></a>
 - **0 of 17,216 vanilla Skyrim meshes ship bhkMultiSphereShape** (deprecated Havok path). The only Oblivion source that has one is `clutter\magesguild\apparatusalembicnovice.nif`, and shipping it converted CRASHES SSE at cell load (Anvil Mages Guild) with no crash log. Vanilla expresses the same thing as ConvexTransform+Sphere children in a list shape (`clutter\kitchen\woodenladle01.nif`).
 - `_expand_multisphere()` in collision.py expands it: each sphere → a `bhkSphereShape` (radius ×0.1) wrapped in a `bhkConvexTransformShape` (identity rotation, sphere center ×0.1 in the 4th column, 4th matrix row all zeros incl. m_44 — matches vanilla). 1 sphere → bare wrapper, N → bhkListShape. `_convert_shape`'s bhkListShape branch now FLATTENS a nested list produced by the expansion (a list shape has no transform of its own so flattening is safe; vanilla never nests list shapes).
+
+## FO3 bhkConvexListShape (no class in Skyrim, 2026-09-28, unconfirmed in game)
+<a id="convex-list-shapes"></a>
+
+**Code:** `collision._convert_shape`, `collision_hulls.list_shape_over`
+
+`bhkConvexListShape` has no RTTI in SkyrimSE 1.6.1170, so the engine cannot
+construct it (`tools/validate/nif_block_type_audit.py`). A mesh that carries
+one fails to load, and the game draws its red missing-model marker in its
+place. Nothing converted the block, so it passed through unchanged. 51 of
+Fallout3.esm's 11,148 converted meshes had one, none in FalloutNV.esm. They
+include the kid's party hat `PartyHatGO.nif` (three sit on the diner counter
+at the birthday party, the red mark by Andy), `VDoor01.nif`,
+`OperatingLight01.nif` and the Megaton walkway ramps. It holds a list of
+convex shapes, as `bhkListShape` does, so it is rebuilt as one over the same
+pieces, keeping its material. The list branch then converts each piece.
 
 ## Constraint descriptor conversion
 <a id="constraint-descriptors"></a>

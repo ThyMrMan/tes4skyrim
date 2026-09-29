@@ -5719,6 +5719,47 @@ class TestPackageFragments:
                        '  Debug.SendAnimationEvent(akSpeakerRef, "aim")']
 
 
+class TestRunOncePackageChange:
+    """A Once Per Day package's stage-setting OnChange runs at its end.
+
+    See docs/commentary/script_convert.md#run-once-package-change.
+    """
+
+    @staticmethod
+    def _rec(flags='5124'):
+        """CG02AndyCutCake: OnEnd a comment, OnChange sets CG02 stage 16."""
+        return {'FormID': '0009F64C', 'EditorID': 'CG02AndyCutCake', 'PKDT.Flags': flags,
+                'OnEnd.Script': '; play cake cutting idle\n',
+                'OnChange.Script': 'setstage CG02 16', 'OnChange.SCRO[0]': '00014E84'}
+
+    @staticmethod
+    def _xref():
+        """A graph naming the quest."""
+        xref = CrossRefGraph()
+        xref.formid_to_edid['00014E84'] = 'CG02'
+        xref.edid_to_formid['cg02'] = '00014E84'
+        xref.record_type['00014E84'] = 'QUST'
+        return xref
+
+    def test_the_end_fragment_runs_the_change_then_reevaluates(self):
+        """OnEnd exists for the fold; its fragment sets the stage, then EVPs."""
+        from script_convert.package_fragments import package_psc
+        from tes5_import.packages.scripts_falloutnv import package_sections
+        assert [s for s, _f in package_sections(self._rec())] == ['OnEnd', 'OnChange']
+        end = package_psc(self._rec(), self._xref()).split('Fragment_0', 1)[1].split('EndFunction')[0]
+        assert '16)' in end and end.index('16)') < end.index('EvaluatePackage')
+
+    def test_the_package_ends_once_the_stage_is_done(self):
+        """GetStageDone CG02 16 == 0 joins the conditions; no flag, no condition."""
+        from tes5_import.packages.converter import PackContext, _run_once_guard
+        ctx = PackContext()
+        ctx.xref = self._xref()
+        ctda = _run_once_guard(self._rec(), ctx)
+        assert ctda[:4] == b'CTDA'
+        assert struct.unpack_from('<HHII', ctda, 6 + 8) == (59, 0, 0x14E84, 16)
+        assert _run_once_guard(self._rec('4'), ctx) == b''
+
+
 def test_fallout_barter_opens_the_speakers_menu():
     """A dialogue line's ShowBarterMenu opens the speaker's barter; Skyrim has no price argument.
 
@@ -5743,3 +5784,81 @@ def test_fallout_quest_completed_reads_the_quest_not_nothing():
     assert 'If vDialogueEDE.IsCompleted() && vDialogueEDE.GetStage() < 100 && b == 0' in out
     assert 'b = vDialogueEDE.IsCompleted() as Int' in out
     assert 'If VMS55.IsRunning()' in out
+
+
+def _fo3(body, extends='ObjectReference', head=''):
+    """Convert one FO3 activate-block body; the Papyrus text."""
+    src = f'scn T\n{head}begin onActivate\n{body}\nend\n'
+    return ScriptConverter(CrossRefGraph()).convert_standalone('T', src, extends, 'T')
+
+
+def test_fallout3_bare_engine_function_is_inert():
+    """`if GetKillingBlowLimb == 1` names an engine function, not a variable.
+
+    See: docs/commentary/script_convert.md#unknown-bare-names
+    """
+    out = _fo3('if GetKillingBlowLimb == 1\n  set x to 1\nendif', head='short x\n')
+    assert 'GetKillingBlowLimb ==' not in out
+    assert 'NE: TODO: GetKillingBlowLimb' in out
+
+
+def test_fallout3_islimbgone_negative_argument_and_or_chain():
+    """`IsLimbGone -1` passes -1; an inert call in an || chain stays inert.
+
+    See: docs/commentary/script_convert.md#fo3-compile-failures
+    """
+    out = _fo3('if IsLimbGone -1 || IsLimbGone 0 || IsLimbGone 1\nelse\n  resurrect\nendif')
+    assert 'If 0 || 0 || 0' in out
+    assert 'TODO: IsLimbGone -1' in out
+
+
+def test_fallout3_inverse_trig_flag():
+    """`tan x 1` is the arctangent; `tan x 0` the tangent.
+
+    See: docs/commentary/script_convert.md#trig-inverse-flag
+    """
+    out = _fo3('set a to tan a 1\nset a to tan a 0\nset a to sin a', head='float a\n')
+    assert 'a = Math.atan(a)' in out
+    assert 'a = Math.tan(a)' in out
+    assert 'a = Math.sin(a)' in out
+
+
+def test_fallout3_sca_on_a_door_casts_self():
+    """`SCAOnActor Player` compiles to a bare call on Self; a door needs the cast.
+
+    See: docs/commentary/script_convert.md#fo3-compile-failures
+    """
+    assert '(Self as Actor).StopCombatAlarm()' in _fo3('SCAOnActor Player')
+    assert 'Game.GetPlayer().StopCombatAlarm()' in _fo3('player.SCAOnActor')
+
+
+def test_fallout3_control_byte_is_blank():
+    """A stray DEL before a comment is whitespace, not a statement."""
+    out = _fo3('\x7f\t;note\nset x to 1', head='short x\n')
+    assert '\x7f' not in out
+    assert ';note' in out
+
+
+def test_quest_script_bare_reference_call_has_no_subject():
+    """A quest has no reference: `Playsound3D X` plays on None, not the Quest.
+
+    See: docs/commentary/script_convert.md#quest-script-has-no-reference
+    """
+    src = 'scn T\nbegin GameMode\n  Playsound3D AMBThing\nend\n'
+    out = ScriptConverter(CrossRefGraph()).convert_standalone('T', src, 'Quest', 'T')
+    assert 'AMBThing.Play(None)' in out
+
+
+def test_dispel_of_an_ingestible_is_neutralised():
+    """`Player.Dispel StealthBoy` names an ALCH; DispelSpell takes only a Spell.
+
+    See: docs/commentary/script_convert.md#dispel-needs-a-spell
+    """
+    x = CrossRefGraph()
+    x.edid_to_formid['stealthboy'] = '00012345'
+    x.formid_to_edid['00012345'] = 'StealthBoy'
+    x.record_type['00012345'] = 'ALCH'
+    src = 'scn T\nbegin GameMode\n  Player.Dispel StealthBoy\nend\n'
+    out = ScriptConverter(x).convert_standalone('T', src, 'Quest', 'T')
+    assert 'DispelSpell' not in out
+    assert 'names an ingestible' in out

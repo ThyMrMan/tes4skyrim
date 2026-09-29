@@ -353,6 +353,19 @@ class HumanoidGraph:
                 out.append((el, 'sm'))
         return out
 
+    def vanilla_slot(self, name: str):
+        """The generator ref the last vanilla hand type plays in slot `name`;
+        None when the slot has no entry for it."""
+        for el, kind in self.hand_type_slots():
+            if param_text(el, 'name') != name:
+                continue
+            if kind == 'msg':
+                gens = self.ref_list(el, 'generators')
+                return gens[LAST_VANILLA_TYPE] if len(gens) > LAST_VANILLA_TYPE else None
+            state = self.state_of(el, LAST_VANILLA_TYPE)
+            return None if state is None else param_text(state, 'generator')
+        return None
+
     def extend_type_slots(self, new_type: int, replacements: dict) -> list:
         """Give every hand-type slot an entry for `new_type`.
 

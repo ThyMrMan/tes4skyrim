@@ -2086,9 +2086,14 @@ class ScriptConverter:
         `Self` of ActiveMagicEffect/TopicInfo scripts (whose Self is NOT a
         reference) onto the reference they act on — but it does not add the
         `as Actor` cast, because the callee is declared on ObjectReference and
-        works for actors and objects alike.
+        works for actors and objects alike. A bare call in a Quest script
+        (outside an OBSE user function, whose Self is its caller) has no
+        reference at all, in the source game as here: its subject is None.
+        See: docs/commentary/script_convert.md#quest-script-has-no-reference
         """
         if not ref_name:
+            if extends == 'Quest' and not self.sc.in_udf:
+                return 'None'
             return self._self_reference(extends)
         if (ref_name.lower() in SELF_NAMES
                 and extends in ('ActiveMagicEffect', 'TopicInfo',

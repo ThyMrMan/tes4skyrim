@@ -15,6 +15,7 @@ import pytest
 from asset_convert.audio.audio_converter import (
     FONIX_MUTEX_NAME,
     VOICE_FILENAME_RE,
+    SilentSource,
     _resolve_voice_type,
     build_lipgen_pool,
     convert_file_to_xwm,
@@ -22,7 +23,9 @@ from asset_convert.audio.audio_converter import (
     find_ffmpeg,
     find_lipgenerator,
     find_xwmaencode,
+    has_samples,
     load_lip_text,
+    non_voice_jobs,
     organize_voice_files,
     pack_fuz,
 )
@@ -651,6 +654,36 @@ def test_organize_voice_files_no_match_counted(tmp_path):
     )
     assert result['no_match'] == 1
     assert result['organized'] == 0
+
+
+def test_non_voice_mp3_wins_its_wav_twin(tmp_path):
+    """A .wav beside a same-named .mp3 is skipped; both would write one .wav."""
+    src = tmp_path / 'sound'
+    songs = src / 'songs'
+    _make_wav(songs / 'Song_Mono.wav')
+    (songs / 'song_mono.mp3').write_bytes(b'mp3')
+    _make_wav(songs / 'alone.wav')
+    _make_wav(src / 'voice' / 'x.wav')
+    jobs = non_voice_jobs(src, tmp_path / 'out')
+    assert sorted((s.name, d.name) for s, d in jobs) == [
+        ('alone.wav', 'alone.wav'), ('song_mono.mp3', 'song_mono.wav')]
+
+
+def test_has_samples_rejects_an_empty_wav(tmp_path):
+    """A WAV with no frames has no samples; one with frames does."""
+    assert not has_samples(_make_wav(tmp_path / 'empty.wav', duration_s=0))
+    assert has_samples(_make_wav(tmp_path / 'full.wav'))
+
+
+@needs_ffmpeg
+@needs_xwmaencode
+def test_silent_source_raises_instead_of_failing(tmp_path):
+    """A source that decodes to no audio raises SilentSource, writing nothing."""
+    src = _make_wav(tmp_path / 'silent.wav', duration_s=0)
+    dst = tmp_path / 'out' / 'silent.xwm'
+    with pytest.raises(SilentSource):
+        convert_file_to_xwm(src, dst, FFMPEG, xwmaencode=XWMAENCODE)
+    assert not dst.exists()
 
 
 def test_organize_voice_files_missing_voice_dir(tmp_path):

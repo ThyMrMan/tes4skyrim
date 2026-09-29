@@ -6,7 +6,9 @@ import struct
 
 from script_convert.converter import ScriptConverter
 from script_convert.cross_ref import CrossRefGraph
+from tes5_import.base.tes5_reader import subrecords
 from tes5_import.base.writer import PluginWriter
+from tes5_import.record_types.equipment import convert_WEAP
 from tes5_import.record_types import world_falloutnv
 from tes5_import.record_types.equipment_falloutnv import WEAPON_ANIM_LISTS, create_weapon_anim_lists
 
@@ -41,3 +43,20 @@ def test_a_rifle_check_reads_the_fallout_type():
     assert 'FormList Property TES4WeapAnimType5 Auto' in out
     assert '5 * (TES4WeapAnimType5.HasForm((Game.GetPlayer() as Actor).GetEquippedWeapon()) as Int)' in out
     assert 'GetEquippedItemType' not in out
+
+
+def test_an_embedded_weapon_keeps_its_flag_and_node():
+    """Andy's flamer: Embedded 0x20 in DNAM Flags, NNAM before INAM, no model.
+
+    See: docs/commentary/tes4_export_falloutnv.md#embedded-weapons
+    """
+    rec = {'Signature': 'WEAP', 'FormID': '000A0C02', 'EditorID': 'MisterHandyFlamer2HL',
+           'DATA.Type': '5', 'DNAM.FalloutAnimType': '9', 'DNAM.Flags1': '170',
+           'NNAM': 'ProjectileNode_HeadLaser', 'INAM': '0006C303'}
+    body = convert_WEAP(rec)[24:]
+    subs = [(sig.decode(), data) for sig, data in subrecords(body)]
+    names = [sig for sig, _d in subs]
+    flags = struct.unpack_from('<H', dict(subs)['DNAM'], 12)[0]
+    assert flags & 0xA9 == 0xA8 and 'MODL' not in names
+    assert dict(subs)['NNAM'] == b'ProjectileNode_HeadLaser\0'
+    assert names.index('NNAM') < names.index('INAM')

@@ -67,11 +67,13 @@ def jump_replacements(g: HumanoidGraph, gb: GunGraphBuilder) -> dict:
 
 
 def _run_clip(gb: GunGraphBuilder, cls):
-    """The class' run (else walk) clip, looping, for sprint."""
+    """The class' run (else walk) clip, looping, for sprint; None without one."""
     stem = gb.clips.find(cls, 'fastforward') or gb.clips.find(cls, 'forward')
-    return gb.clip(f'TES4Gun_{cls}_Sprint', stem, True)
+    return gb.clip(f'TES4Gun_{cls}_Sprint', stem, True) if stem else None
 
 
-def sprint_selector(gb: GunGraphBuilder):
-    """The class selector of run clips both sprint sides play."""
-    return class_selector(gb, 'TES4Gun_Sprint_MSG', lambda c: _run_clip(gb, c))
+def sprint_selector(gb: GunGraphBuilder, fallback):
+    """The class selector of run clips both sprint sides play; a class
+    without one plays `fallback`, the vanilla sprint."""
+    return class_selector(gb, 'TES4Gun_Sprint_MSG', lambda c: _run_clip(gb, c),
+                          fallback)

@@ -45,7 +45,7 @@ from .converter import (DIAL_TYPE_CONVERSATION, SERVICE_MENU_SCRIPTS,
     is_npc_to_npc_conversation, make_conversation_quest,
     make_generic_quest, register_conversation_chains,
     SCENE_TOPIC, classify_topic, collect_tclt_target_fids,
-    convert_DIAL, convert_INFO, make_dlbr, make_dlvw, service_menu_kind,
+    convert_DIAL, convert_INFO, info_tclt, make_dlbr, make_dlvw, service_menu_kind,
     should_skip_dial, voice_file_prefix,
     GREET_TOPIC_BY_QUEST, EMPTY_DIAL_FIDS, lip_texts, startable_quests)
 from .say_topics import (FORCE_GREET_SLOTS, SAY_TOPIC_DISPOSITIONS,
@@ -1091,6 +1091,17 @@ def _bark_group_ctx(ctx, g, edid: str) -> dict:
     return group_ctx
 
 
+def greets_with_choices(g, ctx) -> bool:
+    """Whether a GREETING group has a line whose reply links survive, so opens as Blocking.
+
+    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
+    """
+    if (g['edid'] or '').upper() != 'GREETING':
+        return False
+    return any(info_tclt(r, ctx.get('bark_dial_fids'), ctx.get('menu_topic_fids', ()))
+               for r in g['infos'])
+
+
 def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
     """One bark group's DIAL and INFOs, plus a GREETING's arrest force-greet.
 
@@ -1105,7 +1116,7 @@ def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
     if not count:
         return b''
     shape, branch = (g['cat'], subtype, g['snam']), 0
-    if opens_with_follow_up(g['infos']):
+    if opens_with_follow_up(g['infos']) or greets_with_choices(g, ctx):
         shape = (0, 0, b'CUST')
         branch, dlbr = blocking_branch(writer, key, edid, owner_qfid, dial_fid)
         ctx.setdefault('blocking_branches', []).append(dlbr)

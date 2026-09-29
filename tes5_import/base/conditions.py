@@ -1173,8 +1173,12 @@ def has_audience_condition(rec: dict) -> bool:
     An INFO gated on a cell, class, race, faction or actor has stated its own
     audience — injecting a GetIsID OR-chain harvested from its siblings on top
     would narrow it to a handful of NPCs (e.g. AnvilTopic, gated GetInCell
-    (Anvil), would stop reaching most Anvil NPCs).
+    (Anvil), would stop reaching most Anvil NPCs). A Fallout voice type is an
+    audience too: CG00's Mom lost every line to her husband's GetIsID list.
+    See: docs/commentary/tes5_import_conditions.md#authored-voice-types
     """
+    if authors_voice_type(rec):
+        return True
     i = 0
     while True:
         raw_hex = rec.get(f'Condition[{i}].Raw')

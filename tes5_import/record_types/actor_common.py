@@ -31,7 +31,7 @@ from .common import (
     pack_string_subrecord,
     pack_subrecord,
 )
-from .race_falloutnv import fallout_race_edid
+from .race_falloutnv import fallout_child_race, fallout_race_edid
 from .trainers_morrowind import morrowind_trainers
 from .vendor_stock_morrowind import claim_stock, owned_stock, plvd_in_cell
 from .world_falloutnv import is_fallout_source
@@ -780,7 +780,8 @@ def _actor_race_edid(rec: dict) -> str:
 def resolve_npc_race(rec: dict):
     """Resolve TES4 race FormID to (race_edid, skyrim_race_fid, gender_str)."""
     race_edid = _actor_race_edid(rec)
-    skyrim_race = RACE_MAP.get(race_edid, DEFAULT_RACE)
+    skyrim_race = (fallout_child_race(get_formid(rec, 'RNAM.Race'))
+                   or RACE_MAP.get(race_edid, DEFAULT_RACE))
     tes4_flags = get_int(rec, 'ACBS.Flags')
     gender = 'Female' if (tes4_flags & 1) else 'Male'
     return race_edid, skyrim_race, gender

@@ -37,7 +37,7 @@ from tes5_import.base.conditions import (
 )
 from tes5_import.base.owned_records import _source_counts_whole_days
 from tes5_import.dialogue.converter import DIAL_TYPE_COMBAT, DIAL_TYPE_CONVERSATION, DIAL_TYPE_DETECTION, DIAL_TYPE_MISC, DIAL_TYPE_PERSUASION, DIAL_TYPE_SERVICE, DIAL_TYPE_TOPIC, _EDID_SUBTYPE, classify_topic, convert_DIAL, convert_INFO, make_dlbr, make_dlvw, should_skip_dial
-from tes5_import.dialogue.groups import build_dialog_groups
+from tes5_import.dialogue.groups import build_dialog_groups, greets_with_choices
 from tes5_import.dialogue.topics_falloutnv import shown_text
 from tes5_import.dialogue.quest import (convert_QUST,
                                         set_assigned_var_names)
@@ -1147,6 +1147,24 @@ class TestFalloutConditions:
         world_falloutnv.register_fallout_source({'TERM': [1]})
         try:
             assert authors_voice_type(rec)
+        finally:
+            world_falloutnv._IS_FALLOUT_SOURCE.clear()
+
+    def test_an_authored_voice_type_is_an_audience(self):
+        """A Fallout line gated on its speaker's voice gets no GetIsID list.
+
+        CG00's Mom lines test FemaleUniqueMom; her husband's GetIsID list
+        stopped every one of them. See
+        docs/commentary/tes5_import_conditions.md#authored-voice-types.
+        """
+        from tes5_import.base.conditions import has_audience_condition
+        from tes5_import.record_types import world_falloutnv
+        rec = {'Condition[0].Raw':
+               '000000000000803fab010000dced0500000000000000000000000000'}
+        assert not has_audience_condition(rec)
+        world_falloutnv.register_fallout_source({'TERM': [1]})
+        try:
+            assert has_audience_condition(rec)
         finally:
             world_falloutnv._IS_FALLOUT_SOURCE.clear()
 
@@ -2829,3 +2847,16 @@ def test_fallout_greetings_use_their_own_lockout():
     finally:
         world_falloutnv._IS_FALLOUT_SOURCE.clear()
     assert resets == [0, 65535]
+
+
+def test_a_greeting_that_offers_replies_opens_as_blocking():
+    """Amata's greeting links to reply topics outside the menu, so its group is Blocking.
+
+    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
+    """
+    greeting = {'FormID': '000319BD', 'ChoiceCount': '1', 'Choice[0]': '000784A3'}
+    group = {'edid': 'GREETING', 'infos': [greeting]}
+    ctx = {'bark_dial_fids': {0xC8}, 'menu_topic_fids': set()}
+    assert greets_with_choices(group, ctx)
+    assert not greets_with_choices(group, dict(ctx, menu_topic_fids={0x784A3}))
+    assert not greets_with_choices(dict(group, edid='HELLO'), ctx)

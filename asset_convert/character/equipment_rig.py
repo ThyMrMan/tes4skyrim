@@ -38,6 +38,7 @@ from asset_convert.character.skin_retarget import (dominant_body_part,
 from asset_convert.character.skyrim_overrides import (
     ARMOR_PIECE_OFFSETS,
     ARMOR_PIECE_OFFSETS_PRN,
+    SBP_32_BODY,
     SHIELD_INV_MARKER_ROT_X,
     SHIELD_INV_MARKER_ROT_Y,
     SHIELD_INV_MARKER_ROT_Z,
@@ -499,8 +500,12 @@ def regen_creature_skins(data, authored_bp, authored_allowed):
     verbatim -- the skeleton is the same -- so only the partition changes. It
     must run after the strips-to-shapes pass, which is what gives
     update_skin_partition triangles to read. The 80-bone cap is applied later,
-    in merge_creature_body, because part NIFs store bones flat.
+    in merge_creature_body, because part NIFs store bones flat. With no
+    record's slot, a creature partition is the body slot its skin claims.
+    See: docs/commentary/asset_convert_creature.md#creature-partitions-are-body
     """
+    if authored_bp is None:
+        authored_bp = SBP_32_BODY
     for root in data.roots:
         if root is None:
             continue

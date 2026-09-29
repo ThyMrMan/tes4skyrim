@@ -12,12 +12,16 @@ The chain is now four ordered steps, each a dict lookup:
     2. a fixed READING -- `BARE_READINGS`, the names with one constant answer
     3. a COMMAND read with no arguments -- routed to the command layer
     4. a RECORD the plugin defines -> a typed property
+    5. an ENGINE FUNCTION the converter has no row for -> an inert `;NE:` read
 
 Steps 2 and 3 are data (`BARE_READINGS`, `BARE_COMMANDS`); only step 4 needs
-the graph.
+the graph.  Any other name passes through for the later passes.
+See: docs/commentary/script_convert.md#unknown-bare-names
 """
 
+import json
 import re
+from pathlib import Path
 
 from script_convert.constants import (
     FAME_GLOBALS, KNOWN_GLOBALS, TES4_MURDER_BOUNTY, _FORM_TYPE_TESTS,
@@ -38,6 +42,25 @@ from script_convert.resolve import digit_stripped_formid
 #: A-F digit or a leading zero is required -- which every real FormID here has
 #: and no decimal literal in these scripts does.
 _FORMID_RE = re.compile(r'[0-9A-Fa-f]{6,8}')
+
+#: The engine function tables extracted from Oblivion.exe and SkyrimSE.exe (which keeps FO3's functions).
+ENGINE_TABLES = ('tes4_export/oblivion_engine_tables.json',
+                 'tes5_import/generated/dialog_engine_tables.json')
+
+
+def _engine_functions() -> frozenset:
+    """Every script function name either engine table lists, lowercased."""
+    root = Path(__file__).resolve().parent.parent
+    names = set()
+    for rel in ENGINE_TABLES:
+        with open(root / rel, encoding='utf-8') as f:
+            names |= {fn['name'].lower() for fn in json.load(f)['functions']
+                      if fn.get('name')}
+    return frozenset(names)
+
+
+#: Script function names of the engines; a bare one is a call, never a variable.
+ENGINE_FUNCTIONS = _engine_functions()
 
 #: Bare names whose reading NEVER depends on the script.  Each was an `if low
 #: ==` arm returning one constant expression.
@@ -145,6 +168,9 @@ def resolve(conv, expr: str, extends: str) -> str:
         return f'{canonical}.GetValue()'
     if low in ACTOR_VALUE_MAP_LOW:
         return ACTOR_VALUE_MAP_LOW[low]
+    if (low in ENGINE_FUNCTIONS and low not in sc.var_renames
+            and not conv._is_known_command(low)):
+        return conv.note(f'TODO: {expr}')
     return sc.var_renames.get(low, expr)
 
 

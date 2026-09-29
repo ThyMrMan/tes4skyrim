@@ -34,6 +34,7 @@ import struct
 import subprocess
 import sys
 import tempfile
+import wave
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from pathlib import Path
 
@@ -269,6 +270,19 @@ def pack_fuz(lip_bytes: bytes, audio_bytes: bytes) -> bytes:
             + lip_bytes + audio_bytes)
 
 
+class SilentSource(Exception):
+    """A voice source that decodes to no audio at all.
+
+    See: docs/commentary/asset_convert_audio.md#silent-voice-sources
+    """
+
+
+def has_samples(wav_path) -> bool:
+    """True when a PCM WAV holds at least one frame."""
+    with wave.open(str(wav_path)) as w:
+        return w.getnframes() > 0
+
+
 def convert_file_to_xwm(src_path, dst_path, ffmpeg: str,
                          xwmaencode: 'str | None' = None,
                          lipgenerator: 'str | None' = None,
@@ -321,6 +335,8 @@ def convert_file_to_xwm(src_path, dst_path, ffmpeg: str,
                             **POPEN_FLAGS)
         if r1.returncode != 0 or not wav_path.is_file():
             return False
+        if not has_samples(wav_path):
+            raise SilentSource(src_path.name)
 
         # Stage 2: lip sync track (only meaningful for .fuz destinations)
         lip_bytes = None
@@ -376,29 +392,12 @@ def convert_sounds(
     ffmpeg_path: str = 'ffmpeg',
     formid_index: int = 1,
 ) -> dict:
-    """Convert all extracted sounds (MP3/WAV → XWM) with multi-threaded ffmpeg.
+    """Convert a plugin's extracted sounds; {converted, copied, failed, total}.
 
-    Handles two distinct subtrees under ``extract_dir/<source_name>/sound/``:
-
-    * ``sound/Voice/`` — reorganised into TES5 voice layout via
-      :func:`organize_voice_files` (race/gender folders → VoiceType folders,
-      FormIDs shifted by *formid_index*).
-    * Everything else — ENCODED to xWMA under
-      ``output/<source_name>/sound/tes4/``. SSE has no MP3 support (no '.mp3'
-      string in the exe) and does not play raw PCM .wav for actor sounds; the
-      SNDR record still names .wav, exactly as vanilla does, and the engine
-      resolves it to the .xwm on disk.
-
-    Args:
-        source_file:   Plugin filename (e.g. 'Oblivion.esm').
-        extract_dir:   Root extraction directory (default: export).
-        output_dir:    Final output root (default: output).
-        ffmpeg_path:   Path to ffmpeg executable (default: 'ffmpeg' from PATH).
-        formid_index:  Load-order index byte for this plugin (default 1 —
-                       Oblivion.esm is index 1 when Skyrim.esm is master 0).
-
-    Returns:
-        dict with keys: converted, copied, failed, total.
+    ``sound/Voice/`` goes through :func:`organize_voice_files` (VoiceType
+    folders, FormIDs shifted by *formid_index*); every other sound goes
+    through :func:`convert_non_voice` into ``sound/<namespace>/``.
+    See: docs/commentary/asset_convert_audio.md#non-voice-sounds-stay-pcm
     """
     extract_dir = Path(extract_dir)
     output_dir  = Path(output_dir)
@@ -417,7 +416,6 @@ def convert_sounds(
                / namespace_for(record_dir(extract_dir, source_name)))
     ffmpeg    = find_ffmpeg(ffmpeg_path)
 
-    # ── Voice files: reorganise into TES5 layout ────────────────────────────
     print('\n  [Voice files]')
     voice_stats = organize_voice_files(
         source_dir=_asset_root(extract_dir, source_name),
@@ -431,83 +429,8 @@ def convert_sounds(
         lip_text=find_lip_text(output_dir, source_name),
     )
 
-    # ── Non-voice sounds: keep .wav, transcode only .mp3 ────────────────────
-    # Non-voice (actor/effect) sounds are PCM .wav in BOTH games, so the file
-    # extension must survive the copy unchanged.
-    #
-    # An earlier version encoded these to xWMA on the theory that "SSE only
-    # plays xWMA, and vanilla ANAMs name .wav because the engine substitutes
-    # the extension". Both halves are wrong, and together they made every
-    # creature silent:
-    #   * Vanilla ships real PCM .wav for these. The cached vanilla asset
-    #     sound/fx/npc/bear/npc_bear_idlerooting_01.wav is RIFF/WAVE with
-    #     wFormatTag=0x1 (PCM, 32 kHz mono) — not xWMA. Vanilla ANAM names
-    #     .wav because a .wav is genuinely there.
-    #   * No extension substitution exists. The only exe code touching the
-    #     ".wav"/".xwm"/".fuz" string trio (0x140512485, GOG build) is the
-    #     sound\ / data\sound\ PATH-PREFIX helper; the other .xwm strings are
-    #     music paths and the BSA archive-type table. Nothing rewrites a .wav
-    #     reference into .xwm.
-    # So renaming the files to .xwm left all ~2000 SNDR ANAMs pointing at
-    # paths with no file behind them. Only VOICE lines are xWMA/.fuz (that
-    # path is separate, above, and keeps its own encoding).
-    #
-    # MP3 still has to go: the SSE exe contains no '.mp3' string at all. Those
-    # transcode to PCM .wav, which is what vanilla would have shipped.
     print('\n  [Non-voice sounds]')
-    jobs = []
-    for root_dir, dirs, files in os.walk(snd_src):
-        # Skip the Voice subtree — already handled by organize_voice_files above
-        if Path(root_dir).resolve() == snd_src.resolve():
-            dirs[:] = [d for d in dirs if d.lower() != 'voice']
-        for fname in files:
-            src = Path(root_dir) / fname
-            rel = src.relative_to(snd_src)
-            if src.suffix.lower() == '.mp3':
-                dst = snd_dst / rel.with_suffix('.wav')   # SSE cannot read mp3
-            else:
-                dst = snd_dst / rel                       # .wav/.xwm: as-is
-            if dst.exists():
-                continue
-            jobs.append((src, dst))
-
-    count = failed = copied = 0
-    if not jobs:
-        print('  No non-voice sound files to convert (all already present).')
-    else:
-        need_ffmpeg = any(s.suffix.lower() == '.mp3' for s, _ in jobs)
-        if need_ffmpeg and not ffmpeg:
-            print('  WARNING: ffmpeg not found — .mp3 sounds will be copied '
-                  'unconverted and will NOT play in SSE.')
-
-        def _encode(job):
-            src, dst = job
-            dst.parent.mkdir(parents=True, exist_ok=True)
-            if src.suffix.lower() != '.mp3':
-                shutil.copy2(src, dst)
-                return None
-            if not ffmpeg:
-                shutil.copy2(src, dst.with_suffix(src.suffix))
-                return None
-            # 16-bit PCM, matching the vanilla non-voice container.
-            r = subprocess.run(
-                [ffmpeg, '-y', '-loglevel', 'error', '-i', str(src),
-                 '-acodec', 'pcm_s16le', str(dst)],
-                capture_output=True, timeout=120, **POPEN_FLAGS)
-            return r.returncode == 0 and dst.is_file() and dst.stat().st_size > 0
-
-        # I/O- and subprocess-bound: threads are the right pool here.
-        with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as pool:
-            for ok in pool.map(_encode, jobs):
-                if ok is None:
-                    copied += 1
-                elif ok:
-                    count += 1
-                else:
-                    failed += 1
-        print(f'  Copied {copied} sounds'
-              + (f', transcoded {count} mp3 -> wav' if count else '')
-              + (f', {failed} FAILED' if failed else ''))
+    copied, count, failed = convert_non_voice(snd_src, snd_dst, ffmpeg)
 
     non_voice = copied + count
     total = voice_stats.get('organized', 0) + non_voice
@@ -519,6 +442,70 @@ def convert_sounds(
     return {'converted': count, 'copied': total,
             'failed': voice_stats.get('errors', 0) + failed,
             'total': total}
+
+
+def non_voice_jobs(snd_src: Path, snd_dst: Path) -> list:
+    """(src, dst) for every missing non-voice sound; an .mp3 wins its .wav twin.
+
+    See: docs/commentary/asset_convert_audio.md#non-voice-sounds-stay-pcm
+    """
+    jobs = []
+    for root_dir, dirs, files in os.walk(snd_src):
+        if Path(root_dir).resolve() == snd_src.resolve():
+            dirs[:] = [d for d in dirs if d.lower() != 'voice']
+        mp3_stems = {Path(f).stem.lower() for f in files
+                     if f.lower().endswith('.mp3')}
+        for fname in files:
+            src = Path(root_dir) / fname
+            suffix = src.suffix.lower()
+            if suffix == '.wav' and src.stem.lower() in mp3_stems:
+                continue
+            rel = src.relative_to(snd_src)
+            dst = snd_dst / (rel.with_suffix('.wav') if suffix == '.mp3'
+                             else rel)
+            if not dst.exists():
+                jobs.append((src, dst))
+    return jobs
+
+
+def _encode_non_voice(job, ffmpeg):
+    """Copy one sound, or transcode an .mp3 to PCM .wav; None when copied."""
+    src, dst = job
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    if src.suffix.lower() != '.mp3':
+        shutil.copy2(src, dst)
+        return None
+    if not ffmpeg:
+        shutil.copy2(src, dst.with_suffix(src.suffix))
+        return None
+    r = subprocess.run(
+        [ffmpeg, '-y', '-loglevel', 'error', '-i', str(src),
+         '-acodec', 'pcm_s16le', str(dst)],
+        capture_output=True, timeout=120, **POPEN_FLAGS)
+    return r.returncode == 0 and dst.is_file() and dst.stat().st_size > 0
+
+
+def convert_non_voice(snd_src: Path, snd_dst: Path, ffmpeg) -> tuple:
+    """Copy .wav/.xwm as-is and transcode .mp3 to .wav; (copied, mp3s, failed).
+
+    See: docs/commentary/asset_convert_audio.md#non-voice-sounds-stay-pcm
+    """
+    jobs = non_voice_jobs(snd_src, snd_dst)
+    if not jobs:
+        print('  No non-voice sound files to convert (all already present).')
+        return 0, 0, 0
+    if not ffmpeg and any(s.suffix.lower() == '.mp3' for s, _ in jobs):
+        print('  WARNING: ffmpeg not found — .mp3 sounds will be copied '
+              'unconverted and will NOT play in SSE.')
+    with ThreadPoolExecutor(max_workers=(os.cpu_count() or 4)) as pool:
+        results = list(pool.map(lambda j: _encode_non_voice(j, ffmpeg), jobs))
+    copied = results.count(None)
+    count = results.count(True)
+    failed = results.count(False)
+    print(f'  Copied {copied} sounds'
+          + (f', transcoded {count} mp3 -> wav' if count else '')
+          + (f', {failed} FAILED' if failed else ''))
+    return copied, count, failed
 
 
 # ---------------------------------------------------------------------------
@@ -772,7 +759,7 @@ def _lip_worker_pool(lipgenerator, conversion_jobs):
 
 
 def _convert_one(job, ffmpeg, xwmaencode, lipgenerator, lip_pool, copy):
-    """Transcode or copy one (src, dst, text) job; 'ok'/'error'/'exception:..'."""
+    """Transcode or copy one (src, dst, text) job; 'ok'/'silent'/'error'/'exception:..'."""
     src_path, dst_path, text = job
     try:
         if ffmpeg and dst_path.suffix in ('.xwm', '.fuz'):
@@ -792,6 +779,8 @@ def _convert_one(job, ffmpeg, xwmaencode, lipgenerator, lip_pool, copy):
         else:
             shutil.move(str(src_path), dst_path)
         return 'ok'
+    except SilentSource:
+        return 'silent'
     except Exception as e:
         return f'exception:{e}'
 
@@ -812,16 +801,26 @@ def _run_conversion_jobs(conversion_jobs, stats, tools, copy):
             futures = {pool.submit(_convert_one, job, ffmpeg, xwmaencode,
                                    lipgenerator, lip_pool, copy): job
                        for job in conversion_jobs}
-            for fut in as_completed(futures):
-                result = fut.result()
-                stats['organized' if result == 'ok' else 'errors'] += 1
-                if result != 'ok' and stats['errors'] <= 5:
-                    detail = (result[10:] if result.startswith('exception:')
-                              else f'ffmpeg failed on {futures[fut][0].name}')
-                    print(f'    ERROR: {detail}')
+            silent = [futures[fut][0].name for fut in as_completed(futures)
+                      if _tally(fut.result(), futures[fut][0].name, stats)]
     finally:
         if lip_pool_dir is not None:
             shutil.rmtree(lip_pool_dir, ignore_errors=True)
+    if silent:
+        print(f'  {len(silent)} silent voice source(s) left unvoiced: '
+              f'{", ".join(sorted(silent)[:5])}')
+
+
+def _tally(result: str, name: str, stats: dict) -> bool:
+    """Count one voice job's result into *stats*; True when it was silent."""
+    if result == 'silent':
+        return True
+    stats['organized' if result == 'ok' else 'errors'] += 1
+    if result != 'ok' and stats['errors'] <= 5:
+        detail = (result[10:] if result.startswith('exception:')
+                  else f'ffmpeg failed on {name}')
+        print(f'    ERROR: {detail}')
+    return False
 
 
 def organize_voice_files(

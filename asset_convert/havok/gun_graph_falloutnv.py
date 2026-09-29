@@ -473,10 +473,16 @@ def pose_gen(gb: GunGraphBuilder, cls, name, sneak_switch=True,
 
 def moving_gen(gb: GunGraphBuilder, cls, lower_bw, upper_bw):
     """1HM_Locomotion while moving and, on the zoom variable, the class'
-    iron-sight aim pose over its lower body (FNV overlays the pose).
+    iron-sight aim pose over its lower body (FNV overlays the pose). A class
+    without gaits always wears its aim pose over the vanilla legs.
     See: docs/commentary/tes_runtime_guns.md#zoom
+    See: docs/commentary/asset_convert_falloutnv.md#classes-without-gaits
     """
     loco = gb.bref(f'TES4Gun_{cls}_LocoBFR', 'Behaviors\\1HM_Locomotion.hkx')
+    if not has_gait(gb.clips, cls):
+        torso = pose_gen(gb, cls, f'TES4Gun_{cls}_MovingPose')
+        return gb.body_blend(f'TES4Gun_{cls}_MovingBlend', loco.ref, torso.ref,
+                             lower_bw, upper_bw)
     if pose_stems(gb.clips, cls, iron=True) is None:
         return loco
     legs = gb.bref(f'TES4Gun_{cls}_LocoISBFR', 'Behaviors\\1HM_Locomotion.hkx')
@@ -692,11 +698,16 @@ def attack_machine(gb: GunGraphBuilder, cls, lower_bw, upper_bw,
                          lower_bw, upper_bw)
 
 
-def class_selector(gb: GunGraphBuilder, name, build):
-    """MSG over GUN_CLASSES (iGunClass); absent classes reuse the first."""
-    present = gb.clips.present_classes()
-    built = {c: build(c).ref for c in present}
-    first = built[present[0]]
+def class_selector(gb: GunGraphBuilder, name, build, fallback=None):
+    """MSG over GUN_CLASSES (iGunClass); a class `build` returns None for
+    plays `fallback`, and absent classes (or both None) reuse the first."""
+    built = {}
+    for c in gb.clips.present_classes():
+        gen = build(c)
+        ref = fallback if gen is None else gen.ref
+        if ref is not None:
+            built[c] = ref
+    first = next(iter(built.values()))
     return gb.msg(name, [built.get(c, first) for c in GUN_CLASSES], 'iGunClass')
 
 
@@ -727,13 +738,23 @@ def _gait(gb: GunGraphBuilder, cls, direction, name):
     return gb.parametric_blend(name, plan)
 
 
+def has_gait(clips: GunClips, cls) -> bool:
+    """True when the class has a walk or run clip in any direction."""
+    return any(clips.find(cls, p + d) for d, _ in _DIRS for p in ('', 'fast'))
+
+
 def loco_machine(gb: GunGraphBuilder, cls):
-    """Direction blend of the class' walk/run clips, tagged as ranged stance."""
+    """Direction blend of the class' walk/run clips, tagged as ranged stance;
+    None for a class without any (Fallout 3's third-person rifles).
+    See: docs/commentary/asset_convert_falloutnv.md#classes-without-gaits
+    """
     kids = []
     for d, anchor in _DIRS:
         g = _gait(gb, cls, d, f'TES4Gun_{cls}_{d}')
         if g is not None:
             kids.append((g, anchor))
+    if not kids:
+        return None
     blend = (gb.eased_direction_blend(f'TES4Gun_{cls}_DirectionBlend',
                                       [(g.ref, a) for g, a in kids])
              if len(kids) > 1 else kids[0][0])

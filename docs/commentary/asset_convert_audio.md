@@ -43,6 +43,8 @@ the script wrote, so the sound stage transcodes an `.mp3` a script called
 - [The one authored value](#one-authored-value)
 - [Verified output](#section)
 - [Running the extract stage for a standalone conversion](#running-extract-stage-standalone-conversion)
+- [Non-voice sounds stay PCM .wav](#non-voice-sounds-stay-pcm)
+- [Silent voice sources](#silent-voice-sources)
 
 Implemented 2026-08-25. Built and verified on Oblivion.esm and Nehrim.esm.
 
@@ -436,6 +438,45 @@ With `tes4DataPath` empty, a bare CLI run registry-detects Oblivion and finds
 none of Nehrim's BSAs or its loose `Music\`. That is a configuration state, not
 a bug: set the path (or use the GUI) and both the BSA pass and the loose-music
 ingest resolve correctly.
+
+## Non-voice sounds stay PCM .wav
+<a id="non-voice-sounds-stay-pcm"></a>
+
+**Code:** `convert_non_voice()`, `non_voice_jobs()`.
+
+Actor and effect sounds are PCM `.wav` in both games, so they copy with their
+extension unchanged. An earlier version encoded them to xWMA, on the theory that
+SSE plays only xWMA and substitutes the extension. Both halves are wrong, and
+together they made every creature silent:
+
+- Vanilla ships real PCM `.wav`: `sound/fx/npc/bear/npc_bear_idlerooting_01.wav`
+  is RIFF/WAVE with wFormatTag=0x1 (PCM, 32 kHz mono).
+- No extension substitution exists. The only exe code touching the
+  `.wav`/`.xwm`/`.fuz` strings (0x140512485, GOG build) is the `sound\` path
+  prefix helper. Nothing rewrites a `.wav` reference into `.xwm`, so the renamed
+  files left all ~2,000 SNDR ANAMs pointing at nothing.
+
+Only `.mp3` is transcoded (to 16-bit PCM `.wav`), since the SSE exe has no
+`.mp3` string at all.
+
+**An `.mp3` beats its `.wav` twin.** Fallout 3 ships 26 radio songs as both
+`x_mono.mp3` (44.1 kHz) and `x_mono.wav` (22 kHz) in the same folder, and its
+SOUN records name the `.mp3`. Both map to the same output `x_mono.wav`. When both
+were queued, a copy and a transcode raced on one file: two jobs failed on the
+locked file each run, and which version survived depended on thread timing. The
+`.wav` twin is now skipped, so the authored `.mp3` always wins.
+
+## Silent voice sources
+<a id="silent-voice-sources"></a>
+
+**Code:** `SilentSource`, `has_samples()`, `_tally()`.
+
+Some shipped voice files hold no audio. Fallout 3's
+`maleuniquethreedog/radiogalax_radiognrnewssto_00098716_1.ogg` (3,252 bytes)
+decodes to a WAV with zero frames, and xWMAEncode rejects that with
+`PCM file has no data` (E_INVALIDARG). There is nothing to encode, so the line
+is left without a voice file, the nearest match to the source's empty clip. The
+run lists these lines as silent instead of counting them as errors.
 
 ## Voice conversion: the LipGenerator Fonix mutex
 <a id="lipgenerator-fonix-mutex"></a>

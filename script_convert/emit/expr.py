@@ -548,8 +548,8 @@ def _binop(conv, node: N.BinOp, extends: str) -> str:
     # reference token is redundant.  The tree sees it as a Call (`Player 500`),
     # which emitted `Player(500)` and failed to compile.  Only a bare name
     # applied to a single numeric literal; anything else is a real call.
-    if (isinstance(right, N.Call) and len(right.args) == 1
-            and right.receiver is None
+    if (op in _MIRROR_OP and isinstance(right, N.Call)
+            and len(right.args) == 1 and right.receiver is None
             and isinstance(right.args[0], N.Literal)
             and not right.args[0].is_string
             and not conv._is_known_command(right.name)):

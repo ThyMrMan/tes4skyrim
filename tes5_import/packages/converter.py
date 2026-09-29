@@ -55,9 +55,10 @@ from .templates import (
     null_target,
     target_payload,
 )
-from ..base.conditions import convert_ctda_list_with_strings
+from ..base.conditions import FUNC_GET_STAGE_DONE, convert_ctda_list_with_strings
 from .interrupt_morrowind import morrowind_interrupt
 from .fragments_falloutnv import package_vmad
+from .scripts_falloutnv import change_stages, folds_change, section_refs
 from .types_falloutnv import FALLOUT_PICK_BY_TYPE, is_player_conversation
 from ..base.text_reader import (get_formid, get_int, get_str, remap_formid,
                           PLAYER_REF_FID, PLAYER_BASE_FID)
@@ -1285,6 +1286,7 @@ def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
     # the Papyrus property — see dialog_conditions; the legacy function is dead
     # in Skyrim, so without this the package could never fire.
     subs += _source_conditions(rec, ctx)
+    subs += _run_once_guard(rec, ctx)
 
     owner = ctx.quest_of(pack_fid)
     if owner:
@@ -1393,6 +1395,26 @@ def _source_conditions(rec: dict, ctx: PackContext) -> bytes:
         out += pack_subrecord('CTDA', ctda)
         if cis2:
             out += pack_string_subrecord('CIS2', cis2)
+    return out
+
+
+def _run_once_guard(rec: dict, ctx: PackContext) -> bytes:
+    """`GetStageDone <quest> <stage> == 0` CTDAs for the stages a folded OnChange sets.
+
+    The package then ends once its folded OnEnd has run, as Once Per Day left it.
+    See: docs/commentary/script_convert.md#run-once-package-change
+    """
+    if not folds_change(rec) or ctx.xref is None:
+        return b''
+    quests = {ctx.xref.formid_to_edid.get(fid, '').lower(): fid
+              for fid in section_refs(rec, 'OnChange')}
+    out = b''
+    for edid, stage in change_stages(rec):
+        fid = quests.get(edid.lower())
+        if fid:
+            out += pack_subrecord('CTDA', struct.pack(
+                '<B3xfHHIIII I', 0, 0.0, FUNC_GET_STAGE_DONE, 0,
+                remap_formid(int(fid, 16)), stage, 0, 0, 0xFFFFFFFF))
     return out
 
 

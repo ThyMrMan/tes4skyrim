@@ -11,7 +11,7 @@ from script_convert.constants import script_prefix
 from script_convert.converter import ScriptConverter
 from script_convert.scro_refs import add_scro_ref, resolve_scro_aliases, scro_list
 from script_convert.symbols import property_declarations
-from tes5_import.packages.scripts_falloutnv import package_sections, section_source
+from tes5_import.packages.scripts_falloutnv import folds_change, package_sections, section_source
 
 
 def package_fragment_name(formid: str) -> str:
@@ -30,6 +30,8 @@ def _convert_package(rec: dict, xref) -> tuple:
     for i, (section, _flag) in enumerate(package_sections(rec)):
         source = section_source(rec, section, xref.formid_to_edid)
         refs = scro_list(rec, f'{section}.')
+        if section == 'OnEnd' and folds_change(rec):
+            refs += scro_list(rec, 'OnChange.')
         for fid in refs:
             add_scro_ref(conv, fid, xref)
         conv.set_scro_aliases(resolve_scro_aliases(source, refs, xref))

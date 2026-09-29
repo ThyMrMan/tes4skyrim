@@ -71,6 +71,7 @@
 - [Papyrus VALUE types, and why a global is one](#papyrus-value-types)
 - [Command families matched by PREFIX](#command-prefix-families)
 - [FO3/FNV commands that reach the compiler unrouted](#fnv-unrouted-commands)
+- [Fallout 3's first build: 17 scripts, six causes](#fo3-compile-failures)
 - [An unmapped AV command silently became a READ](#unmapped-av-command-became-a-read)
 - [FO3/FNV actor-value names](#fallout-actor-value-names)
 - [A negative comparand is still a number](#negative-comparand)
@@ -278,6 +279,35 @@ fragment: a leading `.` (`.disable`, "this reference" in FO3/FNV) now parses
 as no reference, `MarkForDelete` takes the fragment's subject like the other
 `objref_self` commands, and a receiverless `PlayGroup` in a TopicInfo or
 ActiveMagicEffect fragment is an actor's animation event, not `Self`'s.
+
+### A run-once package's OnChange runs at its end (2026-09-28, unconfirmed in game)
+<a id="run-once-package-change"></a>
+
+**Code:** `scripts_falloutnv.py` `folds_change`, `converter.py` `_run_once_guard`
+
+The flight recorder shows when each fragment runs. `CG01DadShowBibleVerse`'s
+OnEnd (`setstage CG01 74`) set its stage 17 ms after the recorder's package
+`change` event. So Skyrim runs a package's OnEnd fragment when the package
+completes, and the actor stays in the package afterwards. Its OnChange runs
+only when the actor leaves the package.
+
+In FO3/FNV, Once Per Day makes the actor leave the package as soon as it
+completes, and some packages rely on that to reach their OnChange. The
+importer drops that flag from quest-owned packages
+([Once Per Day](../commentary/tes5_import_package.md)). Take
+`CG02AndyCutCake`, gated on `GetStage CG02 >= 15`: Andy reached the cake,
+its OnEnd ran, and he stayed in the package. His OnChange, `setstage CG02
+16`, never ran, so the birthday party stalled. His script also refuses to be
+activated while he runs that package, so the player could not talk to him.
+
+A Once Per Day package whose OnChange runs `setstage` now runs its OnChange
+right after its OnEnd, inside the OnEnd fragment, followed by `evp`. The
+package also gets `GetStageDone <quest> <stage> == 0` for each of those
+stages, so it ends the moment its OnEnd has run, as FO3 left it. OnChange is
+still wired as it was. Fallout3.esm has one such package; FalloutNV.esm has
+none. Fourteen more FO3 Once Per Day packages have an OnChange that sets a
+variable rather than a stage. They get no condition to test, so they are left
+unchanged.
 
 ## `begin SayToDone`: the speaker's script runs as its line ends
 <a id="saytodone"></a>
@@ -3758,12 +3788,63 @@ Routed to a real native, verified against the vanilla headers:
 | `GetDestructionStage` | `ObjectReference.GetCurrentDestructionStage()` | the honest native; returns 0 because this conversion writes no DEST |
 | `GetMapMarkerVisible` | `ObjectReference.IsMapMarkerVisible()` | `bare_bool cmp_bool`, so `== 0` collapses to `!(...)` rather than comparing Bool to Int |
 | `CIOS <spell>` / `CastImmediateOnSelf` | `Spell.Cast(self, self)` | the shared `cast` handler under FNV's names (`FALLOUT_COMMAND_ALIASES`; 49 SCPT + 28 INFO sites) |
+| `ShowSPECIALBookMenu` / `ssbmp` | the rules' `TESCharacterMenu` "special" event | FO3's baby book (`CG01SpecialBookSCRIPT`). `Fallout3.exe` gives the command no parameters, so the compiler drops the `40` CG01 writes; the row sends that 40-point total, as New Vegas's `SetSPECIALPoints` does |
 
 Neutralised — no equivalent exists: `GetFurnitureMarkerID`, `GetHitLocation`,
 `IsHardcore`, `GetWeaponHealthPerc`, `GetActorFactionPlayerEnemy`,
 `GetAnimAction`, `GetIgnoreCrime`, `IsGoreDisabled`, `GetXPForNextLevel`.
 `IsWin32` answers **1**: it guards a platform branch, and the Windows build is
 the one that exists.
+
+### <a id="fo3-compile-failures"></a>Fallout 3's first build: 17 scripts, six causes
+
+The first Fallout 3 conversion compiled 14,340 of 14,357 scripts. Each cause
+was confirmed against the compiled bytecode (`SCDA`) in `Fallout3.esm` or the
+command table in `Fallout3.exe`, not the source text alone.
+
+- <a id="unknown-bare-names"></a>**An engine function written bare**
+  (`if GetKillingBlowLimb == 1`, `GetIsLockBroken`, `GetPCSleepHours`,
+  `IsChild`) parses as an identifier, not a call, so no command row saw it and
+  it reached Papyrus as an undefined name (7 scripts). `resolve_name` now ends
+  with a fifth step: a name in either engine's function table
+  (`ENGINE_FUNCTIONS`, from `oblivion_engine_tables.json` and Skyrim's
+  `dialog_engine_tables.json`, which keeps FO3's functions) that the converter
+  has no row for becomes an inert `;NE:` read. Other unknown names still pass
+  through, because later passes rewrite some, and a missing form's name
+  becomes a property through its command's `types`.
+- **`IsLimbGone -1`** is the call with argument -1 (bytecode
+  `8e 11 07 00 01 00 6e ff ff ff ff`), not a subtraction, so `IsLimbGone`
+  joins `_NEGATIVE_FIRST_ARG`. The same line exposed an older bug: `_binop`
+  replaced an unknown `Name <number>` on the right with its number (the
+  `GetDistance Player <= Player 500` rule) for every operator, so the second
+  `IsLimbGone 1` in an `||` chain read as `1` and made the guard always true.
+  That rule now applies to comparisons only.
+- <a id="dispel-needs-a-spell"></a>**`Player.Dispel StealthBoy`** names an
+  ALCH. Papyrus's `DispelSpell` takes only a Spell, and nothing removes a
+  potion's effect, so an ingestible or ingredient operand is neutralised like
+  an enchantment.
+- <a id="trig-inverse-flag"></a>**`tan fvar 1`**: FO3's `Sin`/`Cos`/`Tan` take
+  an optional int. `Tan`'s handler (`0x7AB640`) calls the arctangent on the raw
+  value and multiplies by 57.2958 when it is nonzero; otherwise it scales
+  degrees to radians and calls the tangent. So a nonzero flag is
+  `Math.atan`/`asin`/`acos`, which return degrees too, and a zero flag drops
+  the argument Papyrus has no slot for.
+- <a id="quest-script-has-no-reference"></a>**A bare reference call in a quest
+  script** (`Playsound3D X` in `MS18QuestScript`) has no subject in FO3 either;
+  the call fails at runtime. `Self` there is the Quest, which no reference
+  parameter accepts, so the implicit subject of an `OBJREF` row in a quest
+  script is `None`: the same failed call. An OBSE user function is the
+  exception, since its Self is the calling reference. `SetDestroyed` and
+  `GetDestroyed` became `OBJREF` rows, so in a package or INFO fragment they
+  act on the fragment's actor instead of the fragment script.
+- **`SCAOnActor Player`** in a door script compiles to `01 11 00 00`: opcode
+  0x1101 with no reference prefix and no parameters. FO3's compiler dropped
+  `Player`, so the call ran on the door and did nothing. The three
+  StopCombatAlarm rows are now `ACTOR` rows, which cast a bare `Self` to
+  `Actor`: the same no-op on a door, the real call on an actor.
+- **Two INFO result scripts carry a DEL byte (0x7F)** before a comment. The
+  lexer skips every control byte but newline as blank (`BLANK`), as the FO3
+  compiler evidently did.
 
 **A row whose emit reads arguments must match how the command is WRITTEN.**
 `getfactionrelation` was first written `{p0}.GetReaction({p1})`, reading

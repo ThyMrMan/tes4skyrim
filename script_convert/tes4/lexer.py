@@ -68,6 +68,8 @@ _OPERATORS = (
     '(', ')', '[', ']', ',', '.', ':',
 )
 
+#: Skipped between tokens: space, tab, and any stray control byte (FO3 ships DEL in two INFO scripts).
+BLANK = frozenset(' \t') | frozenset(map(chr, (*range(32), 127))) - {'\n'}
 #: One game's operator spelling -> the TES4 form the tree speaks.
 _OPERATOR_ALIASES = {'->': '.'}
 
@@ -152,7 +154,7 @@ def tokenize(source: str) -> list[Token]:
             line_start = i
             continue
 
-        if ch in ' \t':
+        if ch in BLANK:
             i += 1
             continue
 
