@@ -191,9 +191,17 @@ hide an Oblivion loss but never invent one.
 
 ## Converted setters
 <a id="converted-setters"></a>
-`quest_converted.load_scripts` reads every generated `.psc`. It records three
-forms of SetStage, `X.TES4SetStage(Q as T, n)`, `Q.SetStage(n)` and a bare
-`SetStage(n)`, and two forms of StartQuest: `Q.Start()` for a quest with no
+`quest_converted.load_scripts` reads every generated `.psc`. It records four
+forms of SetStage and two forms of StartQuest. The SetStage forms are:
+- `X.TES4SetStage(Q as T, n)`;
+- `TES4Polyfill.SetStage(Q, n)`, used for a quest with no converted script;
+- `Q.SetStage(n)`;
+- a bare `SetStage(n)`.
+
+The polyfill form came with the upstream 0.674 merge. Until the audit read it
+(2026-09-30), it reported 31 FO3 and 52 FNV stages, and 14 quest starts, as
+lost (CG03Test, MQA, VMQHouse2 and others) that the scripts still set. The
+StartQuest forms are: `Q.Start()` for a quest with no
 script, and `X.TES4Start(Q as X)` for one with a script. Each call keeps the
 function it sits in. It also records the calls that survive only in comments:
 - a `;NE:` line;
@@ -220,6 +228,15 @@ The scope a source site's SetStage must sit in depends on its kind:
 
 A SetStage for the right quest and stage found in some other script also makes
 the site a review ("setter moved").
+
+A dialogue site is spoken only when a placed actor passes its speaker GetIsID
+and, outside a Custom topic, its **listener** can be the player: Skyrim says
+Hello, Goodbye and menu lines only to the player, so a line whose run-on-target
+GetIsID names an NPC (`quest_source.addressed_elsewhere`) is lost there. FO3's
+CG02 stage 38 is set only by Dad's "Thanks. I'll send him right down."
+(`00031D43`, `00063AA4`), said to Jonas over the diner intercom; the build
+put it in the quest's Goodbye topic, and the audit missed it until listeners
+were checked.
 
 Skyrim's dialogue model (`ConvertedDialogue`) treats these topics as
 reachable:
@@ -273,6 +290,13 @@ Allow Reserved (FNAM 0x292). On 2026-09-28, all 1,288 Fallout 3 forced-ref
 aliases filled; 48 of those point at the player in Skyrim.esm. So today this
 check is a guard against regressions and against other plugins' aliases.
 
+`quest_start.journal_findings` reports a Fallout quest (the source DIALs carry
+`DATA.Flags`) with journal text (CNAM) on a stage as an error. Fallout stage
+log text is designer notes that the Pip-Boy never showed. Built as journal
+text, it listed control quests in the journal; FO3's G.O.A.T. test quest,
+`CG03Test`, stayed there
+([Fallout stage log text](tes5_import_quest.md#fallout-stage-log-text)).
+
 ## Dialogue loss
 <a id="dialogue-loss"></a>
 `dialogue_loss.audit` reuses the quest audit's two dialogue models instead of
@@ -304,6 +328,70 @@ reports every (quest, subtype) that owns two or more topics, for any subtype
 other than CUST and SCEN. A census of vanilla Skyrim.esm found no quest owning
 two topics of the same subtype, across all 70 such subtypes, which supports
 applying the rule beyond Hello.
+
+### Greeting replies
+<a id="greeting-replies"></a>
+`greeting_replies.audit` (part of `--audit dialogue`) follows every source
+GREETING or HELLO line that offers Choices into player topics, the pattern of
+Amata's birthday greeting in Fallout 3. Skyrim closes a Hello line before any
+menu shows, so each reply is sorted by how the build offers it:
+- **after the greeting:** the line, or a shared copy of it, is spoken from a
+  reachable non-Hello topic that keeps the link (a Blocking greeting);
+- **as a menu topic:** the reply opens a Top-Level branch of its own;
+- **never:** neither, so the reply and whatever it gates are lost;
+- **missing:** the build has no topic for the reply at all.
+
+It reports one error per (quest, never or missing), with sample greetings as
+`speaker: greeting -> replies`. Two kinds of Choice are not counted:
+- **Conversation-typed topics (source type 1):** another NPC's answer in
+  NPC-to-NPC chatter, not a player menu;
+- **empty topics:** a reply topic with no line in the source, which the source
+  game hides too.
+
+Before those two exclusions, the check flagged thousands of replies:
+- FO3 1,186 NPC-conversation replies (`ConvMegaton` and similar);
+- FNV 424 replies into empty topics (Benny, Cass, Mr. House).
+
+A census over the source exports (2026-09-29) counts the greeting replies the
+2026-09-28 layout (greetings as Hello, a reply promoted to a menu topic only
+behind a stage-gated greeting) could not show: FO3 415, FNV 1,566,
+Oblivion 93. That count still includes NPC-conversation and empty topics.
+
+### Dialogue engine rules
+<a id="dialogue-engine-rules"></a>
+`dialogue_rules.audit` (part of `--audit dialogue`) checks the dialogue rules
+that the FO3 tutorial play-tests of 2026-09-29 and 2026-09-30 taught. The
+first three guard converter fixes; the last lists the lines that fix leaves
+out.
+
+| Rule | Finding |
+|---|---|
+| A scene line (SCEN topic) is a shared copy (DNAM) of an original held outside a Shared Info (IDAT) or custom (CUST) topic | error per original's topic: the copy never plays |
+| A source GREETING line the source can say is spoken from a live topic without IsInDialogueWithPlayer (function 249) | error per quest: it is barked on approach, again and again |
+| A Fallout player topic that isn't Top-level, is never added and is reached only as a reply starts a Top-level or Blocking branch | error per quest: its line shows in the root menu, out of order |
+| A Say Once line in a player topic whose reply tree (up to 8 deep) sets a stage kept Say Once in the build | review per quest: a player who leaves mid-tree loses the stage |
+
+Where each rule comes from:
+- **Scene originals:** the CG02 intercom conversation stalled at step 3 while
+  its original sat in a Goodbye topic. Vanilla holds all 727 of its scene
+  originals in Shared Info. The intercom scene played in full with two
+  originals in a custom topic, so CUST passes too
+  ([scenes](tes5_import_dialogue.md#fallout-conversation-scenes)).
+- **Greeting gate:** Dad repeated his lines whenever the player stood close
+  ([greetings only open a talk](tes5_import_dialogue.md#greetings-only-open-a-talk)).
+- **Reply topics:** lines from Dad's BB gun talk and Amata's talk showed out
+  of order ([Fallout topic links](tes5_import_dialogue.md#fallout-topic-links)).
+- **Say Once:** backing out of Stanley's Pip-Boy talk lost stage 23
+  ([Say Once reply trees](tes5_import_dialogue.md#say-once-reply-trees)). The
+  converter drops Say Once only when the line's own script is safe to run
+  again. So the lines this rule lists pay caps, XP or items, and deciding
+  them is a manual call.
+
+On 2026-09-30:
+- FO3 checked 2,473 greeting lines, all gated, and 3,335 reached reply topics,
+  none opened.
+- Say Once findings: FO3 12 quests, FNV 29, Oblivion 12.
+- Scene originals: none outside IDAT or CUST.
 
 ## Script health
 <a id="script-health"></a>
@@ -400,6 +488,14 @@ the plugin holds its packages for an actor known only at runtime.
 | An NPC_ or alias holds a package missing from the plugin | error |
 | The package's GetIsID chains exclude every actor that holds it | review: the source package may be just as dead |
 | A destination (near-reference PLDT, specific-reference PTDA, or in-cell PLDT) is in a cell with no NAVM | review, one per cell |
+| An NPC_ or alias holds a run-once package (GetInFaction `TES4RunOnce_*` == 0), but no quest holds it in an alias whose VMAD names both the package and its faction | error: nothing adds the faction, so the package reruns forever |
+
+The run-once check guards the
+[run-once quest packages](tes5_import_package.md#run-once-quest-packages).
+Without that rule, FO3's Dad kept walking back to the speech marker instead of
+going to the intercom. A guarded package that nothing holds is skipped: it
+runs only through a script, if at all. On 2026-09-30, 12 FO3, 7 FNV and 3
+Oblivion guarded packages had no holder, and every held one was watched.
 
 Day-of-week values 7 to 10 are day groups (weekdays, weekends, Mon/Wed/Fri,
 Tue/Thu), not errors. The GetIsID check is a review because of New Vegas's
@@ -633,5 +729,19 @@ player base fills. So no raider can say it. New Vegas's package
   rather than dropped.
 - **Paths and animation.** Navmesh is checked only as "the destination cell
   has one", not whether a path exists.
+- **Terminal item scripts.** The source model reads stage setters from
+  quests, packages, INFOs and scripts, not from terminal items, so a stage
+  only a terminal sets is never judged. CG04 stage 120, set by the Overseer's
+  terminal, went unflagged while no terminal converted.
+- **Runtime timing.** Rules about when things happen in game have no static
+  trace. Two examples:
+  - a stage re-check must wait until any conversation closes, or the package
+    switch walks the NPC out of the talk
+    ([re-check](script_convert.md#setstage-re-evaluates-alias-packages));
+  - DisablePlayerControls must keep its source flags, or the player freezes
+    ([control flags](script_convert.md#player-control-flags)).
+
+  Only a play-test shows these, through `--audit logs` and the flight
+  recorder.
 - **Assets outside the game's folder.** They are only grouped for review,
   since vanilla Skyrim is never read.

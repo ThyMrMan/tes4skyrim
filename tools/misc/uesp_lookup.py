@@ -15,13 +15,19 @@ Usage:
     python tools/misc/uesp_lookup.py --grep "fAIGreetingTimer" --title-filter "Tes5Mod|Skyrim"
 """
 import argparse
+import glob
 import os
 import re
 import sys
 import xml.etree.ElementTree as ET
 
-DUMP = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
-                    'references', 'UESP', 'uespwiki-2026-07-12-current.xml')
+#: Folder holding the dated UESP dumps (`uespwiki-YYYY-MM-DD-current.xml`).
+DUMP_DIR = os.path.join(os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__)))),
+                        'references', 'UESP')
+
+#: The newest dump in DUMP_DIR, or where one is expected when there is none.
+DUMP = max(glob.glob(os.path.join(DUMP_DIR, 'uespwiki-*-current.xml')),
+           default=os.path.join(DUMP_DIR, 'uespwiki-current.xml'))
 NS = '{http://www.mediawiki.org/xml/export-0.11/}'
 
 

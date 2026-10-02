@@ -9,11 +9,13 @@ import sys
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
 from tools.esm.tes5_esm_reader import Sub, TES5Record
-from tools.validate.preflight import (asset_load, build_diff, dialogue_loss, findings, log_triage, package_ai,
-                                      quest_progression, quest_start, script_health, world_links)
+from tools.validate.preflight import (asset_load, build_diff, dialogue_loss, dialogue_rules, findings,
+                                      greeting_replies, log_triage, package_ai, quest_progression, quest_start,
+                                      script_health, world_links)
 from tools.validate.preflight.plugin_index import PluginIndex, vmad_scripts
-from tools.validate.preflight.quest_converted import Script, load_scripts, parse_script
-from tools.validate.preflight.quest_source import SourceGame, find_setters, required_speakers
+from tools.validate.preflight.quest_converted import ConvertedDialogue, Script, load_scripts, parse_script
+from tools.validate.preflight.quest_source import (SourceGame, SourceInfo, addressed_elsewhere, find_setters,
+                                                   required_speakers)
 from tools.validate.vmad_property_typecheck import binding_problem, reference_problem
 
 
@@ -250,12 +252,34 @@ def test_only_an_all_getisid_or_chain_binds_the_speaker():
     assert required_speakers([ctda(72, 5), ctda(72, 6)]) == []
 
 
+def test_a_line_said_to_an_npc_is_addressed_elsewhere():
+    """A target GetIsID naming an NPC addresses the line away from the player; the player or no target does not."""
+    said_to = [ctda(72, 7), (0, 1.0, 72, 0x300E7, 1)]
+    assert addressed_elsewhere(said_to) == [0x300E7]
+    assert addressed_elsewhere([(0, 1.0, 72, 0x14, 1)]) == []
+    assert addressed_elsewhere([ctda(72, 7)]) == []
+
+
 def test_lines_lost_behind_a_hello_greeting_are_ranked_by_quest(tmp_path):
     """The Amata case as dialogue loss: the reply anyone may say counts against its quest."""
     source, scripts = greeting_game(tmp_path)
     ctx = quest_progression.QuestContext('Test.esm', source, scripts, built_greeting(False))
     [f] = dialogue_loss.speaker_findings(ctx, dialogue_loss.lost_lines(ctx))
     assert f.key == 'dialogue|Test.esm|anyone|TestQ' and 'lost 1 dialogue lines' in f.summary
+
+
+def test_a_greeting_reply_behind_a_hello_is_never_shown(tmp_path):
+    """The Amata case as greeting replies: flagged behind a Hello, clear from a Blocking branch.
+
+    See: docs/commentary/tools_preflight.md#greeting-replies
+    """
+    source, scripts = greeting_game(tmp_path)
+    ctx = quest_progression.QuestContext('Test.esm', source, scripts, built_greeting(False))
+    [f] = greeting_replies.audit(ctx)
+    assert f.key == 'dialogue|Test.esm|greeting-replies|none|TestQ'
+    assert f.detail == ('anyone: 00003000 -> TestReply',)
+    ctx = quest_progression.QuestContext('Test.esm', source, scripts, built_greeting(True))
+    assert greeting_replies.audit(ctx) == []
 
 
 def test_two_hello_topics_in_one_quest_are_flagged():
@@ -373,3 +397,56 @@ def test_a_reference_property_needs_a_persistent_placed_reference():
     assert reference_problem(index, 2, 'X_Spawn', extends)[0] == 'a reference that is not persistent'
     assert reference_problem(index, 3, 'X_Spawn', extends) is None
     assert reference_problem(index, 1, 'MiscObject', extends) is None
+
+
+def test_a_polyfill_setstage_counts_as_a_converted_setter():
+    """The upstream form for a script-less quest sets its stage too."""
+    script = parse_script('X', 'Function F()\n  TES4Polyfill.SetStage(CG03Test, 9)\nEndFunction\n', True)
+    assert [(c.function, c.quest_expr, c.stage) for c in script.calls] == [('f', 'cg03test', 9)]
+
+
+def in_faction(faction):
+    """A GetInFaction(faction) == 0 CTDA."""
+    return struct.pack('<B3xfHHIIII', 0, 0.0, 71, 0, faction, 0, 0, 0xFFFFFFFF)
+
+
+def run_once_plugin(watched):
+    """A run-once package an NPC holds, with an alias script watching it when `watched`."""
+    pack, faction = 0x300, 0x310
+    records = [rec('FACT', faction, [('EDID', zs('TES4RunOnce_P'))]),
+               rec('PACK', pack, [('EDID', zs('P')), ('CTDA', in_faction(faction))]),
+               rec('PACK', 0x301, [('EDID', zs('Unheld')), ('CTDA', in_faction(faction))]),
+               rec('NPC_', 0x10, [('EDID', zs('Dad')), ('PKID', struct.pack('<I', pack))])]
+    if watched:
+        records.append(rec('QUST', 0x100, [('EDID', zs('Q')), ('VMAD', struct.pack('<II', pack, faction)),
+                                           ('ALST', struct.pack('<I', 0)), ('ALID', zs('Dad')),
+                                           ('ALPC', struct.pack('<I', pack)), ('ALED', b'')]))
+    return PluginIndex(records)
+
+
+def test_a_held_run_once_package_needs_an_alias_script_watching_it():
+    """Nothing adds the faction to an actor whose package no alias script sees; an unheld package is skipped."""
+    [f] = package_ai.run_once_findings('G', run_once_plugin(False), package_ai.users(run_once_plugin(False))[0])
+    assert f.key == 'packages|G|run-once|P' and f.detail == ('Dad',)
+    index = run_once_plugin(True)
+    assert package_ai.run_once_findings('G', index, package_ai.users(index)[0]) == []
+
+
+def test_a_scene_copy_plays_only_from_a_shared_info_or_custom_original():
+    """A copy of a Goodbye original never plays; Shared Info and custom originals do."""
+    topics = [rec('DIAL', 0x200 + i, [('EDID', zs(sub)), ('SNAM', sub.encode())])
+              for i, sub in enumerate(('SCEN', 'GBYE', 'IDAT', 'CUST'))]
+    lines = [rec('INFO', 0x310 + i, [], 0x201 + i) for i in range(3)]
+    copies = [rec('INFO', 0x300 + i, [('DNAM', struct.pack('<I', 0x310 + i))], 0x200) for i in range(3)]
+    index = PluginIndex(topics + lines + copies)
+    [f] = dialogue_rules.scene_original_findings('G', index, ConvertedDialogue(index))
+    assert f.key == 'dialogue|G|scene-original|GBYE' and f.detail == ('00000300 -> 00000310',)
+
+
+def test_a_say_once_reply_tree_collects_the_stages_below_it():
+    """A stage set two replies deep counts; the line's own stage does not."""
+    line = SourceInfo(1, 0x10, 0, [], [0x11], [])
+    replies = {0x11: [SourceInfo(2, 0x11, 0, [], [0x12], [])], 0x12: [SourceInfo(3, 0x12, 0, [], [], [])],
+               0x10: [line]}
+    own = {1: {('Q', 5)}, 3: {('Q', 23)}}
+    assert dialogue_rules.tree_stages(line, replies, own) == {('Q', 23)}

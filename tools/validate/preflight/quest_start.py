@@ -7,13 +7,16 @@ StartQuest sites ride the quest progression graph as the pseudo-stage START.
 A Skyrim quest whose required alias cannot fill never starts, and says
 nothing. An optional alias that never fills silently drops its packages.
 
+A Fallout stage's log text is designer notes the Pip-Boy never showed; built
+as journal text (CNAM), it lists a control quest in the journal.
+
 See: docs/commentary/tools_preflight.md#quest-start
 """
 
 from collections import defaultdict
 
 from tools.validate.preflight.findings import Finding
-from tools.validate.preflight.plugin_index import first, u32
+from tools.validate.preflight.plugin_index import every, first, u32
 from tools.validate.preflight.quest_progression import graphs, site_lines
 from tools.validate.preflight.quest_source import START
 
@@ -131,6 +134,16 @@ def alias_findings(game: str, index) -> list:
     return out
 
 
+def journal_findings(ctx) -> list:
+    """One error per Fallout quest whose stages carry journal text (CNAM)."""
+    if not ctx.source.fallout:
+        return []
+    return [Finding('start', f'start|{ctx.game}|journal|{ctx.index.edid(q.form_id)}', 'error',
+                    f'{ctx.index.edid(q.form_id)} shows Fallout stage notes as journal text, '
+                    'so it is listed in the journal')
+            for q in ctx.index.by_type['QUST'] if every(q, 'CNAM')]
+
+
 def audit(ctx) -> list:
-    """The quest start and alias fill findings for one game."""
-    return start_findings(ctx) + alias_findings(ctx.game, ctx.index)
+    """The quest start, alias fill and Fallout journal findings for one game."""
+    return start_findings(ctx) + alias_findings(ctx.game, ctx.index) + journal_findings(ctx)
