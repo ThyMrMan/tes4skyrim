@@ -1494,11 +1494,10 @@ class TestSoundDescriptorSlotCoverage:
     def test_every_xedit_sndr_slot_is_covered(self):
         """Guards against a record type being added with an unpatched slot.
 
-        MSTT and TACT type SNAM as [SNDR] too, but are deliberately absent: no
-        MSTT or TACT we write can carry a placeholder. MSTT exists only as
-        convert_STAT's havok retype and TES4 STAT has no sound field at all
-        (0 SNAM keys across Oblivion's 6,014 and Nehrim's 7,205 STATs); TACT is
-        synthesized only by speaker_activators, which writes VNAM, never SNAM.
+        MSTT types SNAM as [SNDR] too, but is deliberately absent: it exists
+        only as convert_STAT's havok retype and TES4 STAT has no sound field
+        (0 SNAM keys across Oblivion's 6,014 and Nehrim's 7,205 STATs). TACT's
+        SNAM holds a FO3/FNV talking activator's looping SOUN (convert_TACT).
         """
         from tes5_import.record_types.items import _SNDR_SLOTS
         assert _SNDR_SLOTS == {
@@ -1506,18 +1505,17 @@ class TestSoundDescriptorSlotCoverage:
             'CONT': (b'SNAM', b'QNAM'),
             'DOOR': (b'SNAM', b'ANAM', b'BNAM'),
             'LIGH': (b'SNAM',),
+            'TACT': (b'SNAM',),
         }
 
     def test_tact_vnam_is_never_treated_as_a_sound_slot(self):
         """VNAM is [SNDR] on ACTI but [VTYP] on TACT (xEdit 3324 vs 3348).
 
-        A TACT entry here would rewrite every speaker activator's voice type
-        into a sound descriptor and mute the speak-as lines, so TACT must stay
-        out of the table entirely -- listing it with only SNAM is not enough of
-        a guard, because the next slot added would sit beside ACTI's VNAM.
+        Patching it would rewrite every talking activator's voice type into a
+        sound descriptor and mute its lines, so TACT lists SNAM alone.
         """
         from tes5_import.record_types.items import _SNDR_SLOTS
-        assert 'TACT' not in _SNDR_SLOTS
+        assert _SNDR_SLOTS['TACT'] == (b'SNAM',)
         assert 'MSTT' not in _SNDR_SLOTS
 
     def test_speaker_activator_vnam_survives_the_patch(self):
@@ -7988,6 +7986,23 @@ class TestFalloutReferenceOnlyRecords:
         flags, ptype, gravity, speed = struct.unpack_from('<HHff', data)
         assert (flags & 1, ptype, gravity, speed) == (0, 1, 0.0, 23680.0)
         assert struct.unpack_from('<f', data, 32)[0] == 2.5
+
+    def test_alt_trigger_needs_an_explosion(self):
+        """Alt. Trigger survives on an exploding projectile only (FO3's 10mm round carries it bare)."""
+        from tes5_import.record_types.projectile_falloutnv import convert_PROJ
+        rec = {'FormID': '0010000D', 'RecordFlags': '0', 'EditorID': 'P',
+               'DATA.Flags': '140', 'DATA.Type': '1', 'DATA.AltTriggerProximity': '1.0'}
+        bare = struct.unpack_from('<H', _find_subrecord(convert_PROJ(rec), b'DATA'))[0]
+        boom = struct.unpack_from('<H', _find_subrecord(
+            convert_PROJ({**rec, 'DATA.Explosion': '00012345'}), b'DATA'))[0]
+        assert (bare & 0x04, boom & 0x04) == (0, 0x04)
+
+    def test_projectile_is_never_a_tracer(self):
+        """FO3's 10mm round carries tracer chance 1.0; the TES5 PROJ writes 0 (a tracer hits no actor)."""
+        from tes5_import.record_types.projectile_falloutnv import convert_PROJ
+        rec = {'FormID': '0010000D', 'RecordFlags': '0', 'EditorID': 'P',
+               'DATA.Flags': '140', 'DATA.Type': '1', 'DATA.TracerChance': '1.0'}
+        assert struct.unpack_from('<f', _find_subrecord(convert_PROJ(rec), b'DATA'), 24)[0] == 0.0
 
     def test_impact_keeps_its_decal_when_authored(self):
         """IPCT with DODT + TXST writes both and clears No Decal Data."""

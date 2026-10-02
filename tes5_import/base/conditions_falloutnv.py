@@ -59,8 +59,11 @@ FALLOUT_AV_TO_TES5 = {
     67: 73, 68: 74, 69: 75, 70: 76, 71: 77,   # Variable06-10
 }
 
+#: Variable01, 02, 05 and 10: free on NPCs (the dialogue helpers write the first three on the player only).
+_KEPT_VARIABLES = frozenset({62, 63, 66, 71})
+
 #: Fallout values the fork's conditions leave unread. See: docs/fork/character.md#condition-actor-values
-FORK_DROPPED_ACTOR_VALUES = frozenset({15, 18, 33, 34, 37, 38, 41, 45, *range(62, 72)})
+FORK_DROPPED_ACTOR_VALUES = frozenset({15, 18, 33, 34, 37, 38, 41, 45, *range(62, 72)}) - _KEPT_VARIABLES
 
 #: FALLOUT_AV_TO_TES5 without the fork's dropped values: what converted conditions read.
 FORK_FALLOUT_AV = {av: tes5 for av, tes5 in FALLOUT_AV_TO_TES5.items() if av not in FORK_DROPPED_ACTOR_VALUES}

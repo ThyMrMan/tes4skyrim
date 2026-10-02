@@ -65,6 +65,11 @@ from ..record_types.common import (
 from ..base.conditions import (convert_ctda_list_with_strings,
                                order_condition_groups)
 from ..base.tes5_reader import subrecords
+from ..packages.conversations_falloutnv import while_scene_plays
+from ..packages.force_greet_gates import while_package_runs
+from .say_once import say_once_flags
+from .talking_as_falloutnv import talking_as
+from .player_alias_quest import player_alias_quest
 
 _PLAYER_FORMID = 0x14
 _PLAYER_BASE_FID = 0x07     # NPC_ Player — see text_reader.PLAYER_BASE_FID
@@ -605,13 +610,14 @@ def convert_INFO(rec: dict, *, injected_ctdas: bytes = b'',
                  xref=None, reveal_props: dict = None,
                  service_menu: str = '', bark_dial_fids: set = None,
                  menu_topic_fids=(), script_vars: dict = None,
-                 speaker: bytes = b'', follow_up: int = 0) -> bytes:
+                 speaker: bytes = b'', follow_up: int = 0,
+                 own_stages: frozenset = frozenset()) -> bytes:
     """INFO record: EDID [VMAD] ENAM CNAM [TCLT...] [TRDT NAM1 NAM2 NAM3]* CTDAs [RNAM] [ANAM ONAM].
 
-    RNAM is the FO3/FNV prompt; follow_up, its follow-up topic. reveal_props:
-    AddTopic globals its End fragment sets. service_menu: the menu its
-    fragment opens. bark_dial_fids / menu_topic_fids: the bark TCLT filter's
-    inputs. speaker: a speak-as line's packed ANAM/ONAM.
+    RNAM is the FO3/FNV prompt; follow_up its follow-up topic. reveal_props:
+    AddTopic globals its End fragment sets. service_menu: the menu it opens.
+    bark_dial_fids, menu_topic_fids: the bark TCLT filter's inputs. speaker:
+    a speak-as line's ANAM/ONAM. own_stages: the stages its scripts set.
 
     See: docs/commentary/tes5_import_dialogue.md#info-tclt-choice-filter
     See: docs/commentary/tes5_import_dialogue.md#fallout-follow-ups
@@ -628,7 +634,7 @@ def convert_INFO(rec: dict, *, injected_ctdas: bytes = b'',
     if follow_up:
         subs += pack_formid_subrecord('TCLT', follow_up)
     subs += _info_responses(rec)
-    subs += _info_conditions(rec, injected_ctdas, script_vars)
+    subs += _info_conditions(rec, injected_ctdas, script_vars, own_stages)
     prompt = shown_text(get_str(rec, 'Prompt'))
     if prompt:
         subs += pack_string_subrecord('RNAM', prompt)
@@ -690,7 +696,7 @@ def _info_enam(rec: dict, bark_dial_fids, follow_up: int = 0) -> bytes:
         reset = reset_ticks(rec)
     elif bark_dial_fids is not None and not (tes4_flags & 0x04):
         reset = _BARK_RESET_TICKS
-    flags = tes4_flags & _ENAM_COMPATIBLE_MASK | (_INVISIBLE_CONTINUE if follow_up else 0)
+    flags = say_once_flags(rec, tes4_flags & _ENAM_COMPATIBLE_MASK) | (_INVISIBLE_CONTINUE if follow_up else 0)
     return pack_subrecord('ENAM', struct.pack('<HH', flags, reset))
 
 
@@ -741,15 +747,16 @@ def _info_responses(rec: dict) -> bytes:
 
 
 def _info_conditions(rec: dict, injected_ctdas: bytes,
-                     script_vars) -> bytes:
+                     script_vars, own_stages: frozenset = frozenset()) -> bytes:
     """The injected gates plus the translated TES4 CTDAs, cheapest OR group first.
 
-    Each CTDA keeps its CIS2 (the Papyrus variable name of a converted
-    GetScriptVariable/GetQuestVariable read).  A Say-driven parent topic
-    retargets or drops its RunOn=Target conditions per SAY_TOPIC_DISPOSITIONS;
-    an engine-fired one drops only its identity tests.
+    Each CTDA keeps its CIS2. A Say-driven topic retargets or drops RunOn=Target
+    tests; an engine-fired one only identity tests. A ForceGreet package test
+    asks its conditions but `own_stages`.
 
     See: docs/commentary/tes5_import_conditions.md#condition-order
+    See: docs/commentary/tes5_import_dialogue.md#force-greet-package-gate
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
     """
     kind, say_ref = SAY_TOPIC_DISPOSITIONS.get(
         get_formid(rec, 'ParentDIAL') & 0xFFFFFF, ('', None))
@@ -760,6 +767,8 @@ def _info_conditions(rec: dict, injected_ctdas: bytes,
             drop_identity_target=kind == 'target'):
         pairs.append((ctda, pack_string_subrecord('CIS2', cis2) if cis2
                       else b''))
+    pairs = while_scene_plays(talking_as(while_package_runs(pairs, _packed_condition_pairs, own_stages)),
+                              get_formid(rec, 'FormID'))
     return b''.join(pack_subrecord('CTDA', ctda) + extra
                     for ctda, extra in order_condition_groups(pairs))
 
@@ -879,6 +888,12 @@ def collect_tclt_target_fids(by_type: dict) -> set:
 # THIS quest's greeting rather than a single global one.
 GREET_TOPIC_BY_QUEST: dict = {}
 
+#: Owner quest FormID -> the Blocking topic of its greeting's leading lines.
+LEAD_TOPIC_BY_QUEST: dict = {}
+
+#: Owner quest FormID -> speaker FormIDs its leading greeting lines name (0: a line naming none).
+LEAD_SPEAKERS_BY_QUEST: dict = {}
+
 def _index_race_voices(by_type: dict) -> tuple:
     """(RACE fid24 -> per-gender voice race, RACE fid24 -> the plugin's EditorID).
 
@@ -985,7 +1000,6 @@ def make_player_script_quest(writer, master_index=None) -> int:
 
     See: docs/commentary/tes5_import_dialogue.md#script-driven-type-1-topics
     """
-    from script_convert.pipeline import build_vmad_quest_fragments
     from ..base.object_scripts import get_player_alias_scripts
 
     scripts = get_player_alias_scripts()
@@ -1000,28 +1014,7 @@ def make_player_script_quest(writer, master_index=None) -> int:
             return existing
 
     fid = writer.derive_formid('SYNTH_QUST', edid)
-    alias_id = 0
-    # Skyrim subrecord order is EDID VMAD FULL DNAM — unanimous across all 912
-    # vanilla QUSTs that carry a VMAD.
-    q = pack_string_subrecord('EDID', edid)
-    q += pack_subrecord('VMAD', build_vmad_quest_fragments(
-        edid, [], None, None,
-        alias_scripts=[(alias_id, scripts)], quest_fid=fid))
-    q += pack_string_subrecord('FULL', 'TES4 Player Scripts')
-    # Flags 0x0011 = StartGameEnabled + StartsEnabled; priority 0.
-    q += pack_subrecord('DNAM', struct.pack('<HBBII', 0x0011, 0, 0, 0, 0))
-    q += pack_subrecord('NEXT', b'')
-    q += pack_uint32_subrecord('ANAM', alias_id + 1)   # Next Alias ID
-    # The PlayerRef alias itself.  Same shape convert_QUST writes for forced-ref
-    # aliases; PlayerRef always fills, but Optional (0x0002) keeps a fill
-    # failure from taking the whole quest down with it.
-    q += pack_uint32_subrecord('ALST', alias_id)
-    q += pack_string_subrecord('ALID', 'Player')
-    q += pack_uint32_subrecord('FNAM', 0x00000292)
-    q += pack_formid_subrecord('ALFR', 0x00000014)
-    q += pack_formid_subrecord('VTCK', 0)
-    q += pack_subrecord('ALED', b'')
-    writer.add_record('QUST', pack_record('QUST', fid, 0, q))
+    player_alias_quest(writer, fid, edid, 'TES4 Player Scripts', scripts)
     names = ', '.join(s for s, _ in scripts)
     print(f"    player-base scripts hosted on {edid} alias 'Player': {names}")
     return fid

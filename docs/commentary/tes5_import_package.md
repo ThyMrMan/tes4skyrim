@@ -918,6 +918,112 @@ minutes. Tests: `tests/test_packages.py`
 (`test_travel_to_furniture_sits_in_it`,
 `test_sit_target_waits_until_conditioned_out`).
 
+### <a id="seated-chat"></a>A topicless chat held at a chair sits in it (built 2026-09-30, untested in game)
+
+**Code:** `types_falloutnv.pick_dialogue`, `converter.travel_seat`.
+
+FO3's Butch chats with Paul and Wally from his chair: `CG02ButchTalkToWally`
+and `CG02ButchTalkToPaul` are Dialogue packages (Conversation, no topic) whose
+location is `CG02ButchChairREF`, cycling with `CG02ButchSit` through the
+`TSWally`/`TSPaul` variables their OnBegin scripts set. No line names Paul or
+Wally as listener, so the source talk said nothing authored. Converted to
+Skyrim's `Say` (a Travel to the location, then the topic, here HELLO), each
+switch stood him up, walked him to the chair and had him say a generic Skyrim
+Hello; the play-test recorder shows a stand and sit every 2 to 15 s through
+the party. A topicless NPC-to-NPC Dialogue package whose location is a
+furniture reference is now `SitTarget` on it, as a Travel ending at furniture
+is ([above](#travel-to-furniture)); its conditions and OnBegin script still
+drive the cycle.
+
+### <a id="fallout-object-types"></a>FO3/FNV object types read in their own numbering (built 2026-09-30, untested in game)
+
+**Code:** `types_falloutnv.tes4_object_type`, used by `object_criteria_kind`,
+`build_location` (type 5) and `build_target` (type 2).
+
+A package's object-type target or location is an enum that differs between
+the games (xEdit `wbObjectTypeEnum`): FO3/FNV drop TES4's Apparatus (2) and
+Soul Gems (17), reorder the weapon kinds, and add Actors: Any (29). The
+converter read FO3/FNV values with TES4's table, so FO3 Furniture (11) was
+TES4 Flora and FO3 Food (18) TES4 Keys. CG03's classroom packages ("find any
+furniture within 350 of the class marker") became Sandbox with eating,
+conversation and wandering on: in the 2026-09-30 play-test students ate at
+their desks, and at the G.O.A.T. they stood up and wandered off, some stuck
+pathing. Each FO3/FNV value is now translated to the TES4 value of the same
+kind first, so those packages sit in a chair (Skyrim's Sit template with a
+furniture criteria).
+
+### <a id="greet-at-place"></a>A force greet waits at its package's place (built 2026-10-01, untested in game)
+
+**Code:** `types_falloutnv._greet_at_place`, `trigger_location`;
+`tes4_export/record_types/package_falloutnv.py` `_trigger_location_lines`.
+
+A FO3/FNV Dialogue package to the player can carry two locations: `PLDT`,
+where the actor waits, and `PLD2`, the area the player must enter before the
+actor greets (GECK: Wait Location and Trigger Location). CG03's
+`CG03MrBrotchDialoguePlayer` waits at `CG03MrBrotchMarker` and triggers
+within 250 of it. Butch's force greet waits at his alias and triggers within
+900 of a marker. With only the template's defaults Brotch went looking for
+the player and was found outside Dad's office (2026-10-01 play-test).
+
+The export now writes `PLD2.Type/Location/Radius` (384 FO3, 210 FNV
+packages). The converted ForceGreet takes `PLDT` as its NPC wait location
+(template slot 1) and `PLD2` as its target trigger location (slot 2).
+Vanilla's C03Skjor and MG03Faralda fill the slots in that order. A first
+build had them swapped, so the player had to stand on the wait marker and
+neither Butch nor Brotch ever greeted. A package without `PLD2` sets no
+trigger, and the actor walks to the player as FO3's does.
+
+### <a id="say-to-reach"></a>A SayTo the player waits for its trigger location (built 2026-10-01, untested in game)
+
+**Code:** `types_falloutnv.say_to_reach`, added by `converter._guards`.
+
+A FO3/FNV SayTo aimed at the player speaks once the player enters its
+trigger location (`PLD2`), then walks within `PTDT.Count` to say it.
+Skyrim's `Say` has no trigger and speaks as soon as it runs. CG04's
+`CG04Security02Ambush` (Officer Kendall) said "There she is! Hold it right
+there!" two seconds into the escape, through the walls. That line sets CG04
+12, which enabled the radroaches outside the door and ended Amata's wake-up
+package early.
+
+The package now carries the trigger as a condition:
+
+- `PLD2` type 0 (a reference): `GetDistance(<reference>) <= radius`, run on
+  the player. Kendall's is `0002D4C4` within 500.
+- `PLD2` types 2 and 3: `GetDistance(player) <= radius`, run on the actor.
+- otherwise, no condition.
+
+The Say location is the player, within `PTDT.Count`, so the actor walks
+over before speaking. A first build gated on 1000 units plus line of sight.
+The line of sight test failed at Kendall's post, so his package was skipped
+and he fell through to the next one.
+
+### <a id="detected-target"></a>An empty GetDetected target is the player (built 2026-10-01, untested in game)
+
+**Code:** `types_falloutnv.detected_target`, used by `converter._source_conditions`.
+
+FO3/FNV packages ask `GetDetected` (function 45) with an empty reference to
+mean "has detected the player". Gomez's force greet in Vault 101 is one.
+Converted as written, the condition asked about no reference and never
+passed, so he never greeted. An empty `GetDetected` parameter now becomes
+the player (`00000014`), in 5 FO3 and 3 FNV packages.
+
+### <a id="run-on-target"></a>A Run On Target condition runs on the package's target (built 2026-10-01, untested in game)
+
+**Code:** `packages/converter.py` `_condition_target`, `_source_conditions`.
+
+FO3/FNV packages ask Run On Target conditions of their own target: Lucas
+Simms' `MS11LucasForceGreet` asks `GetInWorldspace` of the player it greets,
+Gomez's force greet asks `IsInCombat` of the player. Skyrim.esm has none: of
+its 4,699 package CTDAs, 4,273 run on the subject, 238 on a reference and
+none on Target, so a Target condition on a package found nothing and failed,
+and the force greet never ran (Lucas walked up, said his hello and went on to
+patrol; 2026-10-01 play-test). A package whose target is one reference (PTDT
+type 0, or the player as Object ID + the player's base) now runs those
+conditions on that reference (Run On Reference), as `convert_ctda` already
+does for a say topic's listener; identity tests (`GetIsID`) on it drop. A
+package with no single target keeps them as before. 56 FO3 and 13 FNV
+packages carry one.
+
 ## <a id="fallout-package-types"></a>FO3/FNV package types 12-16
 
 **Code:** `tes5_import/packages/types_falloutnv.py`, `record_types/world.py`
@@ -1015,3 +1121,118 @@ A script's `AddScriptPackage` on a BASE still goes to its first placement.
 Quests that gained aliases renumber existing ones, so a save made midway
 through one may hold a stale alias fill. Test:
 `tests/test_packages.py::test_every_placed_copy_gets_its_quest_package`.
+
+## Quest-only actors hold in place
+<a id="quest-only-actors-hold-in-place"></a>
+
+**Code:** `default_package_list` in `packages/actor_wiring.py`
+
+When none of an actor's packages is valid, Oblivion leaves it standing where it
+is (UESP: Kiara "never moves because she has no AI packages"; the Blackwood
+Company guards "stand in place when not engaged in combat"). Skyrim instead runs
+the NPC's Default Package List (`DPLT`), and every converted NPC carried
+vanilla's `DefaultMasterPackageList`, which sandboxes. A sandboxing actor is
+placed at a sandbox spot when its cell loads, so an actor authored to stand on
+one spot turned up somewhere else each time.
+
+Nehrim's nightmare shows it. `Celebro02`'s only packages are MQ00's
+(`MQ00Cel02ZumTroll` and the `AddScriptPackage`d `MQ00CalebroPackage04`, both
+`GetStage MQ00 == 20`), so before stage 20 he had nothing valid. In game he
+loaded 257 units to the left of his placement, once in the entrance doorway,
+instead of in front of the player where the scene expects him.
+
+An NPC whose every authored package is quest-owned (it reaches the actor through
+a quest alias, so the author gave it AI only for quest moments) now carries
+vanilla's `DefaultHoldPositionCurrentLoc64List` (Skyrim.esm `000A6853`, holding
+`DefaultHoldPositionCurrentLoc64`: HoldPosition, "near package start location",
+radius 64) instead. It holds wherever the actor is when the fallback takes
+over, so it neither pulls back an actor a script `MoveTo`'d nor lets one wander.
+Other NPCs keep `DefaultMasterPackageList`. Creatures are unchanged, since their
+PKID always ends in vanilla's always-valid `DefaultMasterPackageCreature`.
+
+## Run-once quest packages end when they complete (built 2026-09-30, untested in game)
+<a id="run-once-quest-packages"></a>
+
+**Code:** `packages/run_once.py`, `packages/run_once_plan.py`,
+`static_scripts/TES4_StagePackageAlias.psc` (`OnPackageEnd`)
+
+Once Per Day made a source actor leave an unscheduled package as soon as it
+completed, so the next valid package on its list ran. FO3's CG02 depends on it:
+at stage 35 Dad's `CG02DadToIntercom` (Travel to `CG02OverseerSpeechMarker`,
+radius 50) comes before `CG02DadTalkToJonasOnIntercom` (Dialogue to the
+intercom), both `GetStage CG02 >= 35`. `convert_flags` drops Once Per Day from
+quest packages, since Skyrim's daily latch can already be spent on a
+persistent actor (CharacterGen's Renault). So Dad reached the marker by the
+booths and held there, and the intercom talk never ran. Skyrim has no
+condition for "this package completed".
+
+Each unscheduled (`PSDT.Time == -1`) quest-owned package with source Once Per
+Day, other than a force greet or a package whose OnChange stage already ends it
+([run-once fold](script_convert.md#run-once-package-change)), gets a hidden
+faction `TES4RunOnce_<package>` and the condition `GetInFaction(<it>) == 0`.
+The package's alias script lists its packages and factions
+(`RunOncePackages` / `RunOnceFactions`); on `OnPackageEnd` (the CK wiki: "when
+the actor finishes a package") it adds the actor to that package's faction
+and re-checks, so the next package takes over. Scheduled packages (Bruma's
+daily worship) keep the old behavior.
+
+A FO3/FNV Patrol whose `PKPT` is not Repeatable walks its route once and gives
+way; Skyrim's Patrol template reads `repeatable = false` but re-runs a package
+that is still valid after it completes, so FO3's `CG04PatrolHannon`
+(`CG04Security01StartPatrol`, stages CG04 33 to 200) walked his route over and
+over instead of stopping at the vault door. Such a patrol is marked run-once
+the same way.
+
+## <a id="locked-door-gates"></a>FO3/FNV packages wait behind a locked door (2026-09-30, untested in game)
+
+**Code:** `tes5_import/packages/door_gates_falloutnv.py` (`plan_door_gates`,
+`door_gate`), planned before PACK converts.
+
+Fallout's AI stops at a locked door it holds no key for, and quests use that to
+hold actors back. CG04 stage 145 unlocks `Vault101ExitDoor` "so guards can come
+in". Skyrim's AI walks up to such a door, sticks, and its failsafe warp moves it
+past. The engine registers a movement handler named "FailSafe Warp" (string at
+SkyrimSE 1.6.1170 `0x18b4120`). In the 2026-09-30 play-test, guards 07 and 08
+started `CG04GuardsToEntrance` at stage 140 and completed it 17–18 s later, on
+the far side of the locked door, without activating any door.
+
+So a package waits on `GetLocked == 0` (function 5, run on the door
+reference) for each door it would have to cross when all of the following
+hold:
+- its destination is a placed reference (PLDT type 0);
+- every actor holding it (an ACHR whose base lists it) is placed in the
+  destination's cell;
+- every navmesh route from each such actor to the destination crosses a
+  locked door that actor can't open (no key in its inventory, and it doesn't
+  own the door, itself or by faction).
+
+While the door is locked, the actor runs its next package; once a script
+unlocks the door, it goes.
+
+**Finding a door's triangles.** A load door has an NVDP door link, and
+Door-flagged triangles (`0x400`) exist only for linked doors. An in-cell door
+like `Vault101ExitDoor` has neither: the navmesh runs straight under it (its
+cell's only Door-flagged triangles are the 3 linked doors'). So a door also
+covers every triangle whose centroid lies inside its footprint. The footprint
+is the base's OBND, turned by the reference's Z rotation and widened by
+32 units, and taken symmetrically so the rotation's sign doesn't matter. For
+the exit door that's triangles 58 and 102. Shutting them leaves the guards no
+route, and opening them gives a 20-triangle route.
+
+The routes are breadth-first over the cell's NAVMs, joined by their edge links.
+An actor's start is its placed position; the triangle used is the one whose
+centroid is nearest the point.
+
+Gated packages, FO3 (16):
+- CG04's three guard packages (`CG04GuardsToEntrance`, `CG04PatrolEntrance`,
+  `CG04GuardEntrance`) and Tom Holden's death run;
+- CG02's five target-range packages for Dad and Jonas. The door is unlocked by
+  a CG02 stage (`CG02TargetRangeDoorNEW.unlock`), as Fallout ordered it;
+- MQ08's guards and Sid;
+- MS09's Robert;
+- Moriarty's sleep package.
+
+Not judged:
+- packages whose holders start in another cell;
+- alias and template holders;
+- destinations that are not a placed reference.

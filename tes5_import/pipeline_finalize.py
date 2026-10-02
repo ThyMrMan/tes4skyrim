@@ -40,6 +40,7 @@ from .base.object_scripts import write_udf_host_quests
 from .overrides.manifest import write_manifest
 from .overrides.nested import (build_nested_overrides)
 from .dialogue.arrest import morrowind_arrest_topic
+from .packages.actor_wiring import package_speakers
 from .dialogue.groups import build_dialog_groups
 from .runtime_sidecars import sweep_stale_sidecars
 from .base.owned_records import (
@@ -115,7 +116,8 @@ def _patch_sounds(st, export_dir: str = '') -> None:
     from .record_types.sound import master_sound_descriptor
     bound = []
     for _sig, _label in (('ACTI', 'activators'), ('CONT', 'containers'),
-                         ('DOOR', 'doors'), ('LIGH', 'lights')):
+                         ('DOOR', 'doors'), ('LIGH', 'lights'),
+                         ('TACT', 'talking activators')):
         _n = patch_sound_descriptor_slots(
             st.writer, _sig, _own_souns,
             lambda soun: master_sound_descriptor(master_index, soun))
@@ -156,7 +158,8 @@ def _patch_late_bindings(st, export_dir: str) -> None:
     """Bind everything that could only be resolved once all records existed.
 
     ForceGreet topics, the player-alias quest, actor and weather sounds, the
-    sound-descriptor slots, and the creature voice/footstep/body-part chains.
+    sound-descriptor slots, the creature voice/footstep/body-part chains, and
+    the terminals' message pages and scripts.
     Each patches already-written bytes rather than reordering a phase.
 
     See: docs/commentary/tes5_import_pipeline.md#patch-pass-runs-last
@@ -168,11 +171,18 @@ def _patch_late_bindings(st, export_dir: str) -> None:
     if n_udf:
         print(f"  OBSE function scripts hosted on quests: {n_udf}")
     from .packages.converter import patch_forcegreet_topics
-    n_fg = patch_forcegreet_topics(st.writer)
+    n_fg = patch_forcegreet_topics(st.writer, package_speakers(st.by_type))
     if n_fg:
         print(f"  ForceGreet packages bound to a greeting topic: {n_fg}")
     _patch_sounds(st, export_dir)
     _patch_creature_chains(st, export_dir)
+    from .record_types.terminal_falloutnv import build_terminals
+    n_term = build_terminals(st.by_type, st.writer, st.xref, st._script_vars)
+    if n_term:
+        print(f"  Terminals: {n_term} menu terminal(s) bound to their scripts")
+    from .dialogue.dialogue_pause_falloutnv import build_dialogue_pause
+    if build_dialogue_pause(st.writer):
+        print("  Dialogue pause: TES4DialoguePauseQuest freezes other actors while the player talks")
 
 
 def _patch_creature_chains(st, export_dir: str) -> None:
@@ -291,10 +301,11 @@ def _write_voice_map(output_path: str, voice_map: dict):
         return
     map_path = output_path + '.voicemap.txt'
     with open(map_path, 'w', encoding='utf-8') as f:
-        f.write('# InfoFormID(low24,hex)=prefix[\\tVTYP1,VTYP2] '
+        f.write('# InfoFormID(low24,hex)=prefix[\\tVTYP1,VTYP2[\\tLENT1,LENT2]] '
                 '(questEDID_topicEDID; optional tab-separated target voice-type '
                 'folders for NPC-specific lines whose speaker VTYP differs from '
-                'the Oblivion source race folder)\n')
+                'the Oblivion source race folder; then talking-activator folders '
+                'each take is also copied to)\n')
         for fid in sorted(voice_map):
             f.write(f'{fid:06X}={voice_map[fid]}\n')
     print(f"  Wrote {map_path} ({len(voice_map)} voice filename prefixes)")

@@ -15,12 +15,14 @@ from ..base.constants import (
 from ..base.locations import WORLD_NAMES
 from ..base.equivalents import TES4_MARKER_FORMID_TO_SKYRIM
 from .world_falloutnv import (marker_substitute, parent_use_flags, requires_key_level,
-                              tes5_world_flags, trigger_layer, world_map_offset)
+                              tes5_world_flags, trigger_layer, world_map_offset,
+                              activate_parent_subrecords)
 from .world_morrowind import is_tes3_source, lock_is_exit_only, tes3_refr_flags
 from .vendor_stock_morrowind import stock_owner
 from .items import get_base_origin_shift
 from ..actors.starts_dead import STARTS_DEAD_FLAG, starts_dead
 from ..packages.patrol_falloutnv import patrol_subrecords, patrol_vmad
+from .two_state_falloutnv import open_by_default_vmad
 from ..base.text_reader import remap_formid
 from .common import (
     TES4_DEFAULT_MUSIC_ENUM,
@@ -980,7 +982,7 @@ def _refr_head(rec: dict) -> bytes:
     edid = get_str(rec, 'EditorID')
     if edid:
         subs += pack_string_subrecord('EDID', edid)
-    subs += patrol_vmad(rec)
+    subs += patrol_vmad(rec) or open_by_default_vmad(rec)
     name_raw = int(rec.get('NAME', '0') or '0', 16)
     name_fid = _refr_base_formid(rec, name_raw)
     if name_raw == 0x10 and get_str(rec, 'MapMarker') != '1':
@@ -994,6 +996,13 @@ def _refr_head(rec: dict) -> bytes:
     if primitive:
         subs += pack_subrecord('XPRM', bytes.fromhex(primitive)) + trigger_layer(rec)
     return subs
+
+
+def _scale_and_parents(rec: dict) -> tuple:
+    """(XSCL when the scale is not 1, then the activate parents; the scale DATA uses)."""
+    scale = get_float(rec, 'XSCL.Scale')
+    subs = pack_float_subrecord('XSCL', scale) if scale and scale != 1.0 else b''
+    return subs + activate_parent_subrecords(rec), scale
 
 
 def convert_REFR(rec: dict) -> bytes:
@@ -1043,10 +1052,8 @@ def convert_REFR(rec: dict) -> bytes:
     if xown:
         subs += pack_formid_subrecord('XOWN', xown)
 
-    # Scale (XSCL)
-    scale = get_float(rec, 'XSCL.Scale')
-    if scale and scale != 1.0:
-        subs += pack_float_subrecord('XSCL', scale)
+    scale_subs, scale = _scale_and_parents(rec)
+    subs += scale_subs
 
     # XTRG does NOT exist in TES5 — skip it entirely
 
@@ -1109,9 +1116,7 @@ def convert_ACHR(rec: dict) -> bytes:
         subs += pack_subrecord('XESP', struct.pack('<II', xesp_ref, xesp_flags))
     subs += linked_ref_subrecord(rec)
 
-    scale = get_float(rec, 'XSCL.Scale')
-    if scale and scale != 1.0:
-        subs += pack_float_subrecord('XSCL', scale)
+    subs += _scale_and_parents(rec)[0]
 
     px = get_float(rec, 'PosX')
     py = get_float(rec, 'PosY')

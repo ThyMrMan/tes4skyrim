@@ -48,7 +48,7 @@ _TRAIT_KEYS = ('RNAM.Race', 'VTCK.Voice', 'CNAM.Class', 'ZNAM.CombatStyle',
 
 #: Inherited with Stats: level, the ACBS scaling band and the DATA attributes.
 _STAT_KEYS = ('ACBS.Level', 'ACBS.CalcMin', 'ACBS.CalcMax', 'ACBS.Fatigue',
-              'ACBS.SpeedMultiplier', 'DATA.Health', 'DATA.AttackDamage',
+              'ACBS.SpeedMultiplier', 'DATA.Health', 'DATA.BaseHealth', 'DATA.AttackDamage',
               'DATA.Strength', 'DATA.Perception', 'DATA.Endurance',
               'DATA.Charisma', 'DATA.Intelligence', 'DATA.Agility',
               'DATA.Luck')
@@ -74,8 +74,8 @@ _ARRAY_CATEGORIES = (
 )
 
 
-#: Highest legal TES5 tier: wbAggressionEnum is 0-3, wbConfidenceEnum 0-4.
-_MAX_AGGRESSION, _MAX_CONFIDENCE = 3, 4
+#: Highest legal TES5 tier: wbAggressionEnum is 0-3, wbConfidenceEnum 0-4, wbAssistanceEnum 0-2.
+_MAX_AGGRESSION, _MAX_CONFIDENCE, _MAX_ASSISTANCE = 3, 4, 2
 
 
 def aidt_tiers(rec: dict) -> tuple:
@@ -85,6 +85,42 @@ def aidt_tiers(rec: dict) -> tuple:
     """
     return (min(get_int(rec, 'AIDT.Aggression'), _MAX_AGGRESSION),
             min(get_int(rec, 'AIDT.Confidence'), _MAX_CONFIDENCE))
+
+
+def assistance(rec: dict) -> int:
+    """FO3/FNV Assistance (helps nobody, allies, friends and allies), the TES5 enum.
+
+    See: docs/commentary/tes5_import_falloutnv_actors.md#assistance
+    """
+    return max(0, min(get_int(rec, 'AIDT.Assistance'), _MAX_ASSISTANCE))
+
+
+def aggro_radius(rec: dict) -> tuple:
+    """(Aggro Radius Behavior, radius) for TES5 AIDT, one radius for all three.
+
+    See: docs/commentary/tes5_import_falloutnv_actors.md#aggro-radius
+    """
+    if not get_int(rec, 'AIDT.AggroRadiusBehavior'):
+        return 0, 0
+    return 1, max(get_int(rec, 'AIDT.AggroRadius'), 0)
+
+
+#: FO3/FNV fAVDNPCHealthEnduranceMult and fAVDNPCHealthLevelMult (both games: 5.0).
+_HEALTH_PER_ENDURANCE = 5
+_HEALTH_PER_LEVEL = 5
+
+#: ACBS PC Level Mult: Level is then a multiplier of the player's.
+_PC_LEVEL_MULT = 0x80
+
+
+def npc_health(rec: dict) -> int:
+    """A FO3/FNV NPC's hit points: Base Health + Endurance x 5 + (Level - 1) x 5.
+
+    See: docs/commentary/tes5_import_falloutnv_actors.md#npc-health
+    """
+    level = 1 if get_int(rec, 'ACBS.Flags') & _PC_LEVEL_MULT else get_int(rec, 'ACBS.Level', 1)
+    return (get_int(rec, 'DATA.BaseHealth', 50) + get_int(rec, 'DATA.Endurance') * _HEALTH_PER_ENDURANCE
+            + max(level - 1, 0) * _HEALTH_PER_LEVEL)
 
 
 #: Types a TPLT chain can pass through. FO3/FNV has LVLN as well as LVLC.

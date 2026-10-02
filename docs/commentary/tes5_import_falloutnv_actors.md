@@ -137,6 +137,47 @@ visibility predicates each subrecord declares in `wbDefinitionsFNV.pas:6830`
 (NPC_) — that is what the CK hides when a bit is set, so it is exactly the set
 the engine takes from the template.
 
+## <a id="aggro-radius"></a>The aggro radius carries over (built 2026-10-01, untested in game)
+
+**Code:** `actors_falloutnv.aggro_radius`, used by `actor_common.build_aidt`.
+
+FO3/FNV's AI data has an Aggro Radius Behavior flag and one radius: an actor
+with it attacks whoever comes inside, whatever its Aggression. FO3's base
+radroach (`CrRadroach`) is Unaggressive (0) with the flag on and a 256-unit
+radius, which is how radroaches attack the player in FO3. The converter wrote
+Skyrim's flag off and its three radii 0, so Unaggressive creatures never
+started a fight with the player (radroaches in FO3, the same in FNV; reported
+2026-10-01). Skyrim's Aggro Radius Behavior (CK wiki, AI Data Tab) attacks a
+Neutral or Enemy that enters the Attack radius, after a warning in the Warn
+and Warn/Attack radii; the FO3/FNV radius now fills all three, so the actor
+attacks on entry as the source did.
+
+## <a id="npc-health"></a>NPC hit points follow FO3's formula (built 2026-10-01, untested in game)
+
+**Code:** `actors_falloutnv.npc_health`, used by `npc.source_health`.
+
+FO3/FNV computes an NPC's hit points from its Base Health, Endurance and
+level: `Base Health + Endurance x fAVDNPCHealthEnduranceMult + (Level - 1) x
+fAVDNPCHealthLevelMult`, both settings 5.0 in FO3 and FNV. The player's
+version uses the same shape with 20 and 10 (the wiki's `90 + Endurance x 20
++ Level x 10`, base 100); the NPC level term starting at level 1 follows
+that shape and is not read from the exe. A PC Level Mult NPC takes no level
+term, since Skyrim adds its own. The result goes through the same offset
+solver as TES4's `DATA.Health`
+([health offset](tes5_import_actors.md#health-offset)), and a template's
+Stats category passes `DATA.BaseHealth` along with the rest.
+
+## <a id="assistance"></a>Assistance is already a tier (built 2026-10-01, untested in game)
+
+**Code:** `actors_falloutnv.assistance`, used by `actor_common.build_aidt`.
+
+FO3/FNV stores Assistance in the TES5 enum: helps nobody, helps allies,
+helps friends and allies. The importer derived it from Responsibility as
+for TES4 (helps allies at 30 or more), so most Fallout NPCs helped allies
+whatever they were authored with. Allen and Gloria Mack (both 0) joined the
+security officers' fight with the player in the Atrium (2026-10-01
+play-test). The authored value now carries over.
+
 ## <a id="aggression-is-already-a-tier"></a>Aggression is already a tier
 
 `build_aidt` in `record_types/actor_common.py` maps TES4's **0-100** scalar

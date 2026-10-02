@@ -186,6 +186,25 @@ def _build_shell(shell_fid: int, lvln_fid: int, race_fid: int,
     return pack_record('NPC_', shell_fid, 0, subs)
 
 
+def pack_voice_npc(fid: int, edid: str, name: str, vtyp_fid: int, race_fid: int) -> bytes:
+    """An unplaced unique NPC_ that only lends its voice type, as vanilla's MG04Augur does for the Augur.
+
+    The shell's required fields with no template: a Speaker (ANAM) names it.
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+    """
+    subs = pack_string_subrecord('EDID', edid) + pack_obnd(-12, -12, 0, 12, 12, 60)
+    subs += pack_subrecord('ACBS', struct.pack('<IhhhHHHhHhH', 0x20, 0, 0, 1, 0, 0, 100, 0, 0, 0, 0))
+    subs += pack_formid_subrecord('VTCK', vtyp_fid) + pack_formid_subrecord('RNAM', race_fid)
+    subs += pack_subrecord('AIDT', _SHELL_AIDT) + pack_formid_subrecord('CNAM', _CLAS_DEFAULT)
+    subs += pack_string_subrecord('FULL', name) if name else b''
+    subs += pack_subrecord('DATA', b'') + pack_subrecord('DNAM', _shell_dnam())
+    subs += pack_subrecord('NAM5', struct.pack('<H', 0xFF)) + pack_subrecord('NAM6', struct.pack('<f', 1.0))
+    subs += pack_subrecord('NAM7', struct.pack('<f', 1.0))
+    subs += pack_subrecord('NAM8', struct.pack('<I', _NAM8_SOUND_LEVEL))
+    subs += pack_subrecord('QNAM', struct.pack('<fff', 0.0, 0.0, 0.0))
+    return pack_record('NPC_', fid, 0, subs)
+
+
 def build_leveled_actor_shells(by_type: dict, writer) -> int:
     """Retarget placed leveled creatures onto shell NPC_ records.
 

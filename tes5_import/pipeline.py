@@ -52,8 +52,15 @@ from .actors.combat_style import create_combat_styles
 from .actors.confidence import create_confidence_records
 from script_convert.constants import FORCE_FLEE_QUEST, FORCE_GREET_QUEST
 from .packages.force_flee import write_force_flee_quest
+from .packages.force_greet_gates import note_script_forced
 from script_convert.cross_ref import hosted_script_type, index_record_details
 from .dialogue.converter import build_npc_to_vtyp_map
+from script_convert.constants import TALKING_LISTS_PROPERTY
+from .dialogue.talking_as_falloutnv import TALKING_LIST
+from .dialogue.talking_lists_falloutnv import build_talking_lists
+from .dialogue.conversation_scenes_falloutnv import plan_conversations
+from .packages.door_gates_falloutnv import plan_door_gates
+from .packages.run_once_plan import plan_run_once
 from .dialogue.force_greets import dial_index, write_force_greet_quest
 from .dialogue.morrowind_sidecar import is_tes3_export
 from .dialogue.say_topics import (FORCE_GREET_SLOTS, build_force_flee_slots,
@@ -307,7 +314,8 @@ def _prescan_special_records(by_type: dict, ctx, writer, export_dir: str, _step_
 def _prescan_npc_voice_map(by_type: dict, ctx, writer, num_new_masters: int, _step_done):
     """Build and register {NPC FormID -> VTYP FormID}; returns the map.
 
-    Also scans speak-as topics and builds their voiced TACT+REFR
+    Also voices FO3/FNV talking activators with their talking-as lists, and
+    scans speak-as topics and builds their voiced TACT+REFR
     stand-ins.  The MASTERS' races and actors are fed in: a dependent
     plugin's actors overwhelmingly use them, and without them voice
     routing resolves to a folder that does not exist.
@@ -325,6 +333,10 @@ def _prescan_npc_voice_map(by_type: dict, ctx, writer, num_new_masters: int, _st
                                         ctx.master_export if ctx else None)
     from .record_types.actor_common import set_npc_voice_map
     set_npc_voice_map(npc_to_vtyp)
+    talking_lists = build_talking_lists(by_type, writer, npc_to_vtyp)
+    if talking_lists:
+        WELL_KNOWN_PROPERTIES[TALKING_LISTS_PROPERTY] = talking_lists
+    print(f"  Talking activators speaking as actors: {len(TALKING_LIST)} actor list(s)")
 
     from .dialogue.speak_as import scan_speak_as_topics
     from .base.conditions import set_speak_as_topics
@@ -859,6 +871,7 @@ def _prescan_package_plan(by_type: dict, ctx, writer, fid_to_edid: dict, _step_d
                                                       _master_export)
     print(f"  Script-forced packages (AddScriptPackage) bound to an alias: "
           f"{len(_script_assigned)}")
+    note_script_forced(_script_assigned)
     pack_plan.build(by_type,
                     {get_formid(r, 'FormID') for r in by_type.get('QUST', [])},
                     _sv_owner, _master_export, _script_assigned)
@@ -887,8 +900,16 @@ def _prescan_package_plan(by_type: dict, ctx, writer, fid_to_edid: dict, _step_d
         print(f"  Hunt chains: {len(_chains)} Find-at-actor-base packages -> "
               f"{sum(len(v) for v in _chains.values())} Follow links")
     set_quest_packages(pack_plan.owner_quest.keys())
+    _plan_package_rules(by_type, writer, pack_plan)
     _step_done('package plan')
     return (pack_plan, pack_ctx, _script_vars)
+
+
+def _plan_package_rules(by_type: dict, writer, pack_plan) -> None:
+    """Plan conversation scenes, run-once packages and locked-door waits."""
+    print(f"  Conversation scenes planned: {plan_conversations(by_type, writer, pack_plan)}")
+    print(f"  Run-once quest packages: {plan_run_once(by_type, writer, pack_plan)}")
+    print(f"  Packages waiting behind a locked door: {plan_door_gates(by_type)}")
 
 
 def _prescan_leveled_actors(by_type: dict, ctx, writer, _step_done):
@@ -1200,6 +1221,10 @@ def _run_prescans(st: ImportState, all_records: list, num_new_masters: int,
     n_patrol = build_patrol_vmads(by_type, st.pack_ctx.pack_runner_refs, st.xref)
     if n_patrol:
         print(f"  Patrol markers: {n_patrol} scripted marker(s) bound to their patrols")
+    from .record_types.two_state_falloutnv import attach_two_state_activators
+    n_two = attach_two_state_activators(by_type, export_dir)
+    if n_two:
+        print(f"  Two-state activators: {n_two} bound to TES4_TwoStateActivator")
     _prescan_leveled_actors(by_type, ctx, writer, _step_done)
     _prescan_outfits_hair_skin(by_type, ctx, export_dir, writer)
 

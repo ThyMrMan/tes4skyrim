@@ -68,10 +68,14 @@ def _topic_input(key: str, dials: dict) -> tuple:
 
 def pool_package(edid: str, fid: int, alias_id: int, quest_fid: int,
                  inputs: Inputs, pkdt: bytes) -> bytes:
-    """One pool slot's PACK: EDID VMAD PKDT PSDT QNAM PKCU <inputs> markers."""
-    subs = pack_string_subrecord('EDID', edid)
-    subs += pack_subrecord('VMAD', build_vmad_package_fragment(
-        DONE_SCRIPT, {'Slot': ('int', alias_id)}))
+    """One pool slot's PACK, its VMAD emptying the slot's alias once done."""
+    return template_package(edid, fid, quest_fid, inputs, pkdt, pack_subrecord('VMAD', build_vmad_package_fragment(
+        DONE_SCRIPT, {'Slot': ('int', alias_id)})))
+
+
+def template_package(edid: str, fid: int, quest_fid: int, inputs: Inputs, pkdt: bytes, vmad: bytes = b'') -> bytes:
+    """A generated PACK: EDID VMAD PKDT PSDT QNAM PKCU <inputs> markers."""
+    subs = pack_string_subrecord('EDID', edid) + vmad
     subs += pack_subrecord('PKDT', pkdt)
     subs += pack_subrecord('PSDT', ANY_TIME_PSDT)
     subs += pack_formid_subrecord('QNAM', quest_fid)

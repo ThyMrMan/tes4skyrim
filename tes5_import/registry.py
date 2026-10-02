@@ -55,6 +55,7 @@ def _init_dispatch() -> None:
     from .record_types.message_falloutnv import convert_MESG
     from .record_types.perk_falloutnv import convert_PERK
     from .record_types.note_falloutnv import convert_NOTE
+    from .record_types.talking_activator_falloutnv import convert_TACT
     from .record_types.projectile_falloutnv import convert_PROJ
     from .record_types.impact_falloutnv import (convert_ADDN, convert_EXPL,
                                                 convert_IPCT, convert_IPDS)
@@ -103,6 +104,7 @@ def _init_dispatch() -> None:
         'MESG': convert_MESG,
         'PERK': convert_PERK,
         'NOTE': convert_NOTE,
+        'TACT': convert_TACT,
         'PROJ': convert_PROJ,
         'IPCT': convert_IPCT,
         'IPDS': convert_IPDS,

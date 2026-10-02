@@ -11,12 +11,27 @@ See: docs/commentary/tes5_import_package.md#fallout-package-types
 import struct
 
 from ..base.text_reader import PLAYER_REF_FID, get_formid, get_int
+from ..base.writer import pack_subrecord
+from .conversations_falloutnv import conversation_inputs
 from .templates import GUARD_POST, PATROL, SAY, USE_WEAPON, Inputs
+from ..record_types.world_falloutnv import is_fallout_source
 
 FNV_PATROL, FNV_GUARD, FNV_DIALOGUE, FNV_USE_WEAPON = 13, 14, 15, 16
 
 #: PLDT type 0, "near reference": a patrol that names its first marker.
 _NEAR_REFERENCE = 0
+
+#: GetDetected, one number in every game.
+_FUNC_GET_DETECTED = 45
+
+#: TES5 GetDistance; the CTDA "<=" operator bits; run on Reference.
+_FUNC_GET_DISTANCE, _OP_AT_MOST, _RUN_ON_REFERENCE = 1, 0xA0, 2
+
+#: Trigger Location types the reach test reads: near a reference, near the current or the editor location.
+_TRIGGER_TESTS = (0, 2, 3)
+
+#: PLDT types whose value is a FormID: near reference, in cell, object ID.
+_REFERENCE_LOCATIONS = (0, 1, 4)
 
 #: PTDA type 3, "linked reference": the actor's own XLKR, a patrol's start otherwise.
 _LINKED_REF_TARGET = (3, 0, 0)
@@ -29,6 +44,21 @@ _ALWAYS_HIT, _NO_DAMAGE, _CROUCH, _HOLD_FIRE = 1 << 0, 1 << 8, 1 << 16, 1 << 24
 
 #: PKW3 FireRate 1 = Volley Fire; FireCount 0 = Number of Bursts (1 = Repeat Fire).
 _VOLLEY, _NUMBER_OF_BURSTS = 1, 0
+
+
+#: FO3/FNV package object type -> the TES4 value of the same kind (xEdit wbObjectTypeEnum in both files).
+_TO_TES4_OBJECT_TYPE = {
+    0: 0, 1: 1, **{v: v + 1 for v in range(2, 16)}, 16: 18, 17: 19, 18: 20, 19: 21, 20: 22,
+    21: 25, 22: 24, 23: 23, 24: 26, 25: 27, 26: 28, 27: 29, 29: 15,
+}
+
+
+def tes4_object_type(value: int) -> int:
+    """A package object-type value in TES4 numbering (FO3/FNV translated).
+
+    See: docs/commentary/tes5_import_package.md#fallout-object-types
+    """
+    return _TO_TES4_OBJECT_TYPE.get(int(value), 0) if is_fallout_source() else int(value)
 
 
 def _conv():
@@ -81,15 +111,95 @@ def is_player_conversation(rec: dict) -> bool:
             and get_formid(rec, 'PTDT.Target') == PLAYER_REF_FID)
 
 
+def detected_target(rec: dict) -> dict:
+    """`rec` with each empty-reference GetDetected aimed at its target, the player, as FO3/FNV read it.
+
+    See: docs/commentary/tes5_import_package.md#detected-target
+    """
+    if get_formid(rec, 'PTDT.Target') != PLAYER_REF_FID:
+        return rec
+    out = dict(rec)
+    for i in range(get_int(rec, 'ConditionCount', 0)):
+        raw = bytes.fromhex(rec.get(f'Condition[{i}].Raw') or '')
+        if len(raw) >= 16 and struct.unpack_from('<HHI', raw, 8) == (_FUNC_GET_DETECTED, 0, 0):
+            out[f'Condition[{i}].Raw'] = (raw[:12] + struct.pack('<I', PLAYER_REF_FID) + raw[16:]).hex()
+    return out
+
+
+def _says_to_player(rec: dict) -> bool:
+    """Whether a package is a FO3/FNV Dialogue SayTo aimed at the player."""
+    return (get_int(rec, 'PKDT.Type', -1) == FNV_DIALOGUE and rec.get('PKDD.Type') == 'SayTo'
+            and get_formid(rec, 'PTDT.Target') == PLAYER_REF_FID)
+
+
+def say_to_reach(rec: dict) -> bytes:
+    """For a SayTo to the player with a Trigger Location (PLD2): the player is inside it, else b''.
+
+    A placed trigger reference is measured from the player; a trigger near the
+    speaker's own location from the speaker.
+    See: docs/commentary/tes5_import_package.md#say-to-reach
+    """
+    ltype = get_int(rec, 'PLD2.Type', -1)
+    if not _says_to_player(rec) or ltype not in _TRIGGER_TESTS:
+        return b''
+    radius = float(get_int(rec, 'PLD2.Radius', 0))
+    if ltype == _NEAR_REFERENCE:
+        test = (get_formid(rec, 'PLD2.Location'), _RUN_ON_REFERENCE, PLAYER_REF_FID)
+    else:
+        test = (PLAYER_REF_FID, 0, 0)
+    ref, run_on, on = test
+    return pack_subrecord('CTDA', struct.pack('<B3xfHHIIIIi', _OP_AT_MOST, radius, _FUNC_GET_DISTANCE, 0,
+                                              ref, 0, run_on, on, -1))
+
+
+def _greet_at_place(p, inputs: Inputs) -> Inputs:
+    """A force greet waiting at the package's location until the player enters its Trigger Location (PLD2).
+
+    See: docs/commentary/tes5_import_package.md#greet-at-place
+    """
+    if p.rec.get('PLDT.Type') is not None:
+        inputs.set('wait_location', p.loc)
+    if p.rec.get('PLD2.Type') is not None:
+        inputs.set('trigger_location', trigger_location(p.rec))
+    return inputs
+
+
+def trigger_location(rec: dict) -> bytes:
+    """A FO3/FNV Dialogue package's Trigger Location (PLD2) as a TES5 PLDT."""
+    trigger = {k.replace('PLD2.', 'PLDT.'): v for k, v in rec.items() if k.startswith('PLD2.')}
+    return _conv().build_location(get_int(trigger, 'PLDT.Type', -1), _location_value(trigger),
+                                  get_int(trigger, 'PLDT.Radius', 0))
+
+
+def _location_value(rec: dict) -> int:
+    """A PLDT value: a written FormID for reference types, else the raw number."""
+    if get_int(rec, 'PLDT.Type', -1) in _REFERENCE_LOCATIONS:
+        return get_formid(rec, 'PLDT.Location')
+    return get_int(rec, 'PLDT.Location', 0)
+
+
 def pick_dialogue(p) -> Inputs:
-    """Dialogue: a force greet on the player, else Say the topic to the target."""
+    """Dialogue: a force greet on the player, a hold for a scene-played conversation, else Say to the target.
+
+    A topicless one held at a chair sits in it, as the source talked seated; a SayTo
+    the player walks to within its activate distance of the player to speak.
+    See: docs/commentary/tes5_import_package.md#seated-chat
+    """
     if is_player_conversation(p.rec):
-        return _conv().force_greet_inputs(dialogue_topic(p.rec),
-                                       get_int(p.rec, 'PTDT.Count', 0))
+        return _greet_at_place(p, _conv().force_greet_inputs(dialogue_topic(p.rec),
+                                                            get_int(p.rec, 'PTDT.Count', 0)))
+    held = conversation_inputs(p.pack_fid)
+    if held is not None:
+        return held
+    seat = None if dialogue_topic(p.rec) else _conv().travel_seat(p)
+    if seat is not None:
+        return _conv().sit_inputs(seat)
     i = Inputs(SAY)
     i.set('topic', dialogue_topic(p.rec) or (1, struct.unpack('<I', b'HELO')[0]))
     i.set('target', p.tgt)
-    if p.rec.get('PLDT.Type'):
+    if _says_to_player(p.rec):
+        i.set('location', (_NEAR_REFERENCE, PLAYER_REF_FID, get_int(p.rec, 'PTDT.Count', 0)))
+    elif p.rec.get('PLDT.Type'):
         i.set('location', p.loc)
     return i
 

@@ -44,12 +44,12 @@ _OWNED_GLOBALS = (
     ('TES4ControlsDisabled', 's'),
 )
 
-def emit_global(writer: PluginWriter, edid: str, type_char: str) -> int:
-    """Write one GlobalVariable, register it by name, and return its FormID."""
+def emit_global(writer: PluginWriter, edid: str, type_char: str, value: float = 0.0) -> int:
+    """Write one GlobalVariable holding `value`, register it by name, and return its FormID."""
     fid = writer.derive_formid('GLOB', edid)
     subs = pack_string_subrecord('EDID', edid)
     subs += pack_subrecord('FNAM', struct.pack('<B', ord(type_char)))
-    subs += pack_subrecord('FLTV', struct.pack('<f', 0.0))
+    subs += pack_subrecord('FLTV', struct.pack('<f', value))
     writer.add_record('GLOB', pack_record('GLOB', fid, 0, subs))
     WELL_KNOWN_PROPERTIES[edid] = fid
     return fid

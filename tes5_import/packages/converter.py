@@ -57,9 +57,15 @@ from .templates import (
 )
 from ..base.conditions import FUNC_GET_STAGE_DONE, convert_ctda_list_with_strings
 from .interrupt_morrowind import morrowind_interrupt
+from .conversations_falloutnv import conversation_flags, conversation_guard, conversation_vmad, count_guard
 from .fragments_falloutnv import package_vmad
 from .scripts_falloutnv import change_stages, folds_change, section_refs
-from .types_falloutnv import FALLOUT_PICK_BY_TYPE, is_player_conversation
+from .types_falloutnv import (FALLOUT_PICK_BY_TYPE, detected_target, is_player_conversation, say_to_reach,
+                              tes4_object_type)
+from .force_greet_gates import gate_for
+from .door_gates_falloutnv import door_gate
+from .run_once import run_once_guard
+from ..dialogue.converter import GREET_TOPIC_BY_QUEST, LEAD_SPEAKERS_BY_QUEST, LEAD_TOPIC_BY_QUEST
 from ..base.text_reader import (get_formid, get_int, get_str, remap_formid,
                           PLAYER_REF_FID, PLAYER_BASE_FID)
 
@@ -341,6 +347,7 @@ def object_criteria_kind(t_type: int, value: int, sig: str = '') -> str:
             return 'furniture'
         return ''
     if t_type == 2:
+        value = tes4_object_type(value)
         if value in TES4_OBJTYPE_ACTORS:
             return 'actor'
         if value in TES4_OBJTYPE_ITEMS:
@@ -370,35 +377,20 @@ def build_location(loc_type: int, value: int, radius: int) -> bytes:
     if loc_type < 0 or loc_type > 7:
         return null_location()
     if loc_type == 5:
-        value = TES4_TO_TES5_OBJECT_TYPE.get(int(value), 0)
+        value = TES4_TO_TES5_OBJECT_TYPE.get(tes4_object_type(value), 0)
     return struct.pack('<iIi', loc_type, value & 0xFFFFFFFF, radius)
 
 
 def build_target(t_type: int, target: int) -> bytes:
-    """TES4 PTDT -> TES5 PTDA.  Types 0 (specific ref), 1 (object id) and
-    2 (object type) map 1:1.
+    """TES4 PTDT -> TES5 PTDA: specific ref (0), object id (1) or object type (2, the raw source enum, translated).
 
-    The third field is NOT TES4's Count.  xEdit names it 'Count / Distance'
-    (wbDefinitionsTES5.pas ~8665) and for a Specific-Reference target the
-    engine reads it as the DISTANCE the actor must be within to act on the
-    target -- so TES4's usage Count lands in a slot that means something else
-    entirely.  CGRenoteOpenSecretDoor carries PTDT.Count=1, which became
-    "activate this switch only from within 1 unit": Renault was handed the
-    package (log shows her taking 1A04D84D for a single frame at dist=120),
-    could not satisfy it, and the engine dropped her straight back to
-    CGRenoteWalkToMarkerB (GetStage >= 15, still true at 18) -- so she stood
-    at the switch forever and the secret door never opened.
-
-    Skyrim never uses the field: ALL 3,740 PTDA records in Skyrim.esm +
-    Dawnguard + Dragonborn + HearthFires + Update have it at 0, across every
-    target type (0/1/2/3/4/6).  There is nothing to translate, so write 0.
+    The third field is Distance, not TES4's Count, and every vanilla PTDA writes 0 there.
+    See: docs/reference/package_ai_contracts.md#ptda-distance
     """
     if t_type < 0 or t_type > 2:
         return null_target()
     if t_type == 2:
-        # An object TYPE, not a FormID: the TES4 enum value, translated (the
-        # caller passes the raw TES4 value — see resolve_target).
-        target = TES4_TO_TES5_OBJECT_TYPE.get(int(target), 0)
+        target = TES4_TO_TES5_OBJECT_TYPE.get(tes4_object_type(target), 0)
     return struct.pack('<iIi', t_type, target & 0xFFFFFFFF, 0)
 
 
@@ -908,7 +900,7 @@ def _sandbox(loc, **flags) -> Inputs:
     return i
 
 
-def _travel_seat(p: _Pick):
+def travel_seat(p: _Pick):
     """The PTDA target a Travel ends seated at, or None.
 
     A Travel to a specific furniture reference uses it on arrival in the
@@ -924,13 +916,18 @@ def _travel_seat(p: _Pick):
     return build_alias_target(alias) if alias is not None else build_target(0, ref)
 
 
+def sit_inputs(target: bytes) -> Inputs:
+    """SitTarget on `target` (a packed PTDA)."""
+    i = Inputs(SIT_TARGET)
+    i.set('target', target)
+    return i
+
+
 def _pick_travel(p: _Pick) -> Inputs:
     """Travel: exact, except that one ending at furniture sits in it."""
-    seat = _travel_seat(p)
+    seat = travel_seat(p)
     if seat is not None:
-        i = Inputs(SIT_TARGET)
-        i.set('target', seat)
-        return i
+        return sit_inputs(seat)
     i = Inputs(TRAVEL)
     i.set('location', p.loc)
     if p.use_horse:
@@ -1079,9 +1076,7 @@ def _use_item_at_ref(p: _Pick) -> Inputs:
         return i
     sig = p.ctx.base_sig_of(get_formid(p.rec, 'PTDT.Target'))
     if not sig or sig in FURNITURE_SIGS:
-        i = Inputs(SIT_TARGET)
-        i.set('target', p.tgt)
-        return i
+        return sit_inputs(p.tgt)
     return None
 
 
@@ -1144,9 +1139,7 @@ def _find_seek_ref(p: _Pick, target: int, t_type: int) -> Inputs:
 def _find_by_ref_sig(p: _Pick, target: int, ref_sig: str) -> Inputs:
     """Route a Find at a specific reference by what that reference IS."""
     if ref_sig in FURNITURE_SIGS:
-        i = Inputs(SIT_TARGET)
-        i.set('target', p.tgt)
-        return i
+        return sit_inputs(p.tgt)
     if ref_sig in ITEM_SIGS:
         i = Inputs(ACQUIRE)
         i.set('location', _authored_or_search_ground(
@@ -1231,7 +1224,7 @@ def _choose(rec: dict, ctx: PackContext, pack_fid: int) -> Inputs:
 # Entry point
 # ---------------------------------------------------------------------------
 
-def _is_force_greet(rec: dict, ptype: int) -> bool:
+def is_force_greet(rec: dict, ptype: int) -> bool:
     """Whether a package walks over to the player so dialogue can fire.
 
     See: docs/commentary/tes5_import_package.md#fallout-package-types
@@ -1243,10 +1236,11 @@ def _is_force_greet(rec: dict, ptype: int) -> bool:
 def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
     """TES4 PACK -> TES5 PACK (a Type-18 template instance).
 
-    TES5 subrecord order:
-        EDID PKDT PSDT CTDA* QNAM PKCU
-        <Package Data: ANAM/CNAM/PLDT/PTDA ...  UNAM* XNAM>
-        POBA INAM PDTO   POEA INAM PDTO   POCA INAM PDTO
+    A scripted one-shot (a force greet, operating a switch) takes vanilla's
+    speed and interrupts (MS05InductionForcegreet, CWEscapeCitySceneActivateDoor),
+    keeping the source's Must Complete / Once Per Day. The source conditions are
+    the gate, a GetScriptVariable read as GetVMScriptVariable plus its CIS2.
+    Order: EDID VMAD PKDT PSDT CTDA* QNAM PKCU <inputs> UNAM* XNAM POBA/POEA/POCA.
     """
     ctx = ctx or PackContext()
     pack_fid = get_formid(rec, 'FormID')
@@ -1255,25 +1249,20 @@ def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
     edid = get_str(rec, 'EditorID')
     if edid:
         subs += pack_string_subrecord('EDID', edid)
-    subs += package_vmad(rec, ctx.xref)
+    subs += conversation_vmad(pack_fid) or package_vmad(rec, ctx.xref)
 
     ptype = get_int(rec, 'PKDT.Type', -1)
-    is_forcegreet = _is_force_greet(rec, ptype)
+    is_forcegreet = is_force_greet(rec, ptype)
     hostile = not (is_forcegreet or _approaches_ref(rec, ptype))
     flags, speed = convert_flags(get_int(rec, 'PKDT.Flags'), ptype, hostile,
                                  quest_gated=ctx.quest_of(pack_fid) is not None)
-    # A scripted one-shot (force-greet, or "go operate that switch") must run
-    # at vanilla's pace and with vanilla's interrupt authorisation, or the actor
-    # dawdles / can never break off to do the thing.  Both were measured from
-    # real instances: MS05InductionForcegreet and CWEscapeCitySceneActivateDoor.
+    flags = conversation_flags(pack_fid, flags, T5_MUST_COMPLETE)
     is_activate = _operate_target(rec, ctx)
     if is_forcegreet:
         subs += pack_subrecord('PKDT', build_pkdt(_forcegreet_flags(rec, flags),
                                                   SPEED_RUN,
                                                   FORCEGREET_INTERRUPT))
     elif is_activate:
-        # Keep the TES4 flags (Must Complete / Once Per Day are real), but take
-        # vanilla's speed and interrupts.
         subs += pack_subrecord('PKDT', build_pkdt(flags, SPEED_RUN,
                                                   interrupt=0xFFFF))
     else:
@@ -1281,12 +1270,10 @@ def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
             flags, speed, morrowind_interrupt(rec, DEFAULT_INTERRUPT)))
     subs += pack_subrecord('PSDT', build_psdt(rec))
 
-    # Conditions carry the activation logic and ARE the package's gate.  A
-    # GetScriptVariable condition becomes GetVMScriptVariable + a CIS2 naming
-    # the Papyrus property — see dialog_conditions; the legacy function is dead
-    # in Skyrim, so without this the package could never fire.
-    subs += _source_conditions(rec, ctx)
-    subs += _run_once_guard(rec, ctx)
+    conditions = _source_conditions(rec, ctx)
+    if is_forcegreet:
+        gate_for(pack_fid, conditions)
+    subs += conditions + _guards(rec, ctx, pack_fid)
 
     owner = ctx.quest_of(pack_fid)
     if owner:
@@ -1317,6 +1304,17 @@ def convert_PACK(rec: dict, ctx: PackContext = None) -> bytes:
 # pack fid -> owning quest fid, for packages whose ForceGreet Topic input still
 # holds the 0 placeholder. Drained by patch_forcegreet_topics.
 _FORCEGREET_PENDING: dict = {}
+
+
+def greet_topic_for(pack_fid: int, quest: int, speakers_of: dict) -> int:
+    """The topic a ForceGreet opens: its quest's leading-line Blocking topic when that names its speaker, else Hello.
+
+    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
+    """
+    lead = LEAD_SPEAKERS_BY_QUEST.get(quest, set())
+    if quest in LEAD_TOPIC_BY_QUEST and (0 in lead or lead & speakers_of.get(pack_fid, set())):
+        return LEAD_TOPIC_BY_QUEST[quest]
+    return GREET_TOPIC_BY_QUEST.get(quest, 0)
 
 
 # --- Hunt = Find at an actor BASE with several placements ------------------
@@ -1389,13 +1387,32 @@ CTDA_GET_DISABLED = 35       # GetDisabled
 CTDA_GET_DEAD = 46           # GetDead
 
 
+def _condition_target(rec: dict) -> 'int | None':
+    """The package's own target as a TES5 reference, for its Run On Target conditions.
+
+    See: docs/commentary/tes5_import_package.md#run-on-target
+    """
+    if _targets_player(rec):
+        return PLAYER_REF_FID
+    target = get_formid(rec, 'PTDT.Target')
+    return remap_formid(target) if target and get_int(rec, 'PTDT.Type', -1) == 0 else None
+
+
 def _source_conditions(rec: dict, ctx: PackContext) -> bytes:
+    """The package's own CTDAs; Run On Target ones point at its target reference."""
     out = b''
-    for ctda, cis2 in convert_ctda_list_with_strings(rec, ctx.script_vars):
+    for ctda, cis2 in convert_ctda_list_with_strings(detected_target(rec), ctx.script_vars,
+                                                     run_on_target_ref=_condition_target(rec)):
         out += pack_subrecord('CTDA', ctda)
         if cis2:
             out += pack_string_subrecord('CIS2', cis2)
     return out
+
+
+def _guards(rec: dict, ctx: PackContext, pack_fid: int) -> bytes:
+    """The gates the converter adds after the source conditions."""
+    return (_run_once_guard(rec, ctx) + run_once_guard(pack_fid) + conversation_guard(pack_fid)
+            + _source_conditions(count_guard(pack_fid) or {}, ctx) + door_gate(pack_fid) + say_to_reach(rec))
 
 
 def _run_once_guard(rec: dict, ctx: PackContext) -> bytes:
@@ -1511,14 +1528,14 @@ def _condition_quest(rec: dict) -> int:
 _FORCEGREET_TOPIC_SLOT = 0
 
 
-def patch_forcegreet_topics(writer) -> int:
-    """Bind each ForceGreet package's Topic input to its quest's GREETING.
+def patch_forcegreet_topics(writer, speakers_of: dict = None) -> int:
+    """Bind each ForceGreet package's Topic input to its quest's greeting (`greet_topic_for`).
 
     Skyrim opens a forced conversation by naming a DIAL in the package's Topic
     data input (PDTO). Those topics are built per quest in Phase 5, after PACK
     is written, so conversion leaves a 0 placeholder and this fills it in.
+    `speakers_of` maps a package to the actors that list it.
     """
-    from ..dialogue.converter import GREET_TOPIC_BY_QUEST
     if not _FORCEGREET_PENDING or not GREET_TOPIC_BY_QUEST:
         return 0
     records = writer._top_groups.get('PACK') or []
@@ -1530,7 +1547,7 @@ def patch_forcegreet_topics(writer) -> int:
         quest = _FORCEGREET_PENDING.get(fid)
         if quest is None:
             continue
-        topic = GREET_TOPIC_BY_QUEST.get(quest)
+        topic = greet_topic_for(fid, quest, speakers_of or {})
         if not topic:
             continue
         # First PDTO in the data-input block: 6-byte header then (type, fid).

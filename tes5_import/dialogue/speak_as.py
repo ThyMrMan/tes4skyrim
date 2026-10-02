@@ -70,9 +70,10 @@ import struct
 
 from ..base.text_reader import get_formid, get_str
 from ..base.writer import (pack_record, pack_subrecord, pack_string_subrecord,
-                     pack_formid_subrecord, pack_obnd, pack_float_subrecord,
-                     pack_uint16_subrecord, pack_uint32_subrecord)
+                     pack_formid_subrecord, pack_obnd, pack_uint32_subrecord)
+from .scenes import dialogue_action, pack_scene
 from .quest import quest_aliases
+from .talking_as_falloutnv import talker_speaker
 from ..base.conditions import read_getisid_fids
 
 #: Marker mesh + MODT of vanilla's Night Mother TACT (Skyrim.esm 00022440).
@@ -152,6 +153,35 @@ def scan_speak_as_topics(by_type: dict) -> set:
             found.add(fid)
     return found
 
+#: `<ref>.Say` or `<ref>.SayTo` and the rest of its line.
+_TALKER_SAY_RE = re.compile(r"([A-Za-z]\w*)[ \t]*\.[ \t]*(SayTo|Say)\b([^\r\n;]*)", re.IGNORECASE)
+
+
+def _talkers(by_type: dict) -> dict:
+    """Placed reference EditorID -> its FO3/FNV talking activator's EditorID, lower."""
+    tacts = {r.get('FormID', '').upper(): (get_str(r, 'EditorID') or '').lower() for r in by_type.get('TACT', [])}
+    return {(get_str(r, 'EditorID') or '').lower(): tacts[r.get('NAME', '').upper()]
+            for r in by_type.get('REFR', []) if get_str(r, 'EditorID') and r.get('NAME', '').upper() in tacts}
+
+
+def scan_talker_calls(by_type: dict) -> list:
+    """(emitter, talking activator, topic, False) for each Say/SayTo a placed TACT speaks in its own voice.
+
+    A Say naming a speak-as voice is `scan_speak_as_calls`' instead.
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+    """
+    dials = set(_dial_fids(by_type))
+    talkers = _talkers(by_type)
+    found = set()
+    for body in _bodies(by_type):
+        for emitter, verb, rest in _TALKER_SAY_RE.findall(body):
+            tokens = rest.replace(',', ' ').split()[verb.lower() == 'sayto':]
+            if (emitter.lower() in talkers and tokens and tokens[0].lower() in dials
+                    and all(t.lstrip('-').replace('.', '').isdigit() for t in tokens[1:])):
+                found.add((emitter.lower(), talkers[emitter.lower()], tokens[0].lower(), False))
+    return sorted(found)
+
+
 _TACT_MODL = 'Markers\\Marker_LinkMarker.nif'
 _TACT_MODT = bytes.fromhex('020000000000000000000000')
 
@@ -205,17 +235,20 @@ def scene_property_name(emitter: str, voice: str, topic: str) -> str:
 
 
 def speaker_subrecords(info_rec: dict, offset: int) -> bytes:
-    """ANAM Speaker (and ONAM `SOMDialogue2D`) for an INFO of a speak-as topic, else b''.
+    """ANAM Speaker (and ONAM `SOMDialogue2D`) for an INFO of a speak-as topic or a talking activator's line.
 
     The speaker is the NPC the INFO's own GetIsID names -- which line belongs
-    to whom -- else the voice its call sites name.
+    to whom -- else the voice its call sites name; a FO3/FNV talking
+    activator's line names its voice NPC.
     See: docs/commentary/tes5_import_dialogue.md#speaker-activator-construction
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
     """
     entry = _TOPIC_VOICES.get(get_formid(info_rec, 'ParentDIAL') & 0x00FFFFFF)
-    if not entry:
-        return b''
-    voices, at_player = entry
     own = read_getisid_fids(info_rec, offset=offset, positive_only=True)
+    if not entry:
+        talker = talker_speaker(own)
+        return pack_formid_subrecord('ANAM', talker) if talker else b''
+    voices, at_player = entry
     speaker = min(own) if own else min(voices)
     out = pack_formid_subrecord('ANAM', speaker)
     if at_player:
@@ -256,8 +289,9 @@ def _pack_tact(fid: int, edid: str, vtyp_fid: int, name: str) -> bytes:
 
 def build_speaker_activators(by_type: dict, writer, npc_to_vtyp: dict,
                              offset: int) -> int:
-    """Mint a TACT + placed REFR for every (emitter, speak-as voice) pair.
+    """Mint a TACT + placed REFR for every (emitter, speak-as voice) pair, and every call site's scene.
 
+    A FO3/FNV talking activator speaks its own Say from its own placement.
     Mutates ``by_type``: appends the new REFRs so the CELL/WRLD builders place
     them.  Must run BEFORE those builders, like the leveled-actor shells.
     Returns the number of speakers built.
@@ -265,39 +299,32 @@ def build_speaker_activators(by_type: dict, writer, npc_to_vtyp: dict,
     See: docs/commentary/tes5_import_dialogue.md#speaker-activator-construction
     """
     calls = scan_speak_as_calls(by_type)
-    pairs = sorted({(e, v) for e, v, _t, _h in calls})
-    if not pairs:
-        return 0
-
-    refr_by_edid = {}
-    for rec in by_type.get('REFR', []):
-        e = (get_str(rec, 'EditorID') or '').lower()
-        if e:
-            refr_by_edid.setdefault(e, rec)
-    npc_by_edid = {}
-    for sig in ('NPC_', 'CREA'):
-        for rec in by_type.get(sig, []):
-            e = (get_str(rec, 'EditorID') or '').lower()
-            if e:
-                npc_by_edid.setdefault(e, rec)
-
+    refr_by_edid = _by_edid(by_type, ('REFR',))
+    npc_by_edid = _by_edid(by_type, ('NPC_', 'CREA'))
     new_refrs = []
-    for emitter, voice in pairs:
-        src = refr_by_edid.get(emitter)
-        npc = npc_by_edid.get(voice)
-        if src is None or npc is None:
-            continue
-        vtyp = npc_to_vtyp.get(get_formid(npc, 'FormID'))
-        if not vtyp:
-            continue
-        clone = _mint_speaker(writer, emitter, voice, src, npc, vtyp, offset)
-        new_refrs.append(clone)
-
+    for emitter, voice in sorted({(e, v) for e, v, _t, _h in calls}):
+        src, npc = refr_by_edid.get(emitter), npc_by_edid.get(voice)
+        vtyp = npc_to_vtyp.get(get_formid(npc, 'FormID')) if npc is not None else 0
+        if src is not None and vtyp:
+            new_refrs.append(_mint_speaker(writer, emitter, voice, src, npc, vtyp, offset))
     if new_refrs:
         by_type.setdefault('REFR', []).extend(new_refrs)
     _record_topic_voices(calls, npc_by_edid, _dial_fids(by_type))
-    _build_scenes(by_type, writer, calls)
+    talkers = scan_talker_calls(by_type)
+    for emitter, tact, _t, _h in talkers:
+        _SPEAKER_REFS[(emitter, tact)] = get_formid(refr_by_edid[emitter], 'FormID')
+    _build_scenes(by_type, writer, calls + talkers)
     return len(new_refrs)
+
+
+def _by_edid(by_type: dict, sigs: tuple) -> dict:
+    """EditorID (lower) -> the first record of `sigs` carrying it."""
+    out = {}
+    for sig in sigs:
+        for rec in by_type.get(sig, []):
+            out.setdefault((get_str(rec, 'EditorID') or '').lower(), rec)
+    out.pop('', None)
+    return out
 
 
 def _build_scenes(by_type: dict, writer, calls: list) -> int:
@@ -318,9 +345,9 @@ def _build_scenes(by_type: dict, writer, calls: list) -> int:
     writer.add_record('QUST', _pack_scene_quest(quest_fid, alias_by_fid, names))
     for e, v, t in sites:
         fid = writer.derive_formid('SPEAK_AS_SCEN', f'{e}|{v}|{t}')
-        writer.add_record('SCEN', _pack_scene(
-            fid, f'TES4SpeakAs_{e}_{v}_{t}', quest_fid,
-            alias_by_fid[_SPEAKER_REFS[(e, v)]], dial_fids[t]))
+        alias = alias_by_fid[_SPEAKER_REFS[(e, v)]]
+        writer.add_record('SCEN', pack_scene(fid, f'TES4SpeakAs_{e}_{v}_{t}', quest_fid, [alias], 1,
+                                             [dialogue_action(1, alias, 0, dial_fids[t])]))
         _SCENES[(e, v, t)] = fid
     return len(sites)
 
@@ -334,36 +361,6 @@ def _pack_scene_quest(fid: int, alias_by_fid: dict, names: dict) -> bytes:
     q += pack_uint32_subrecord('ANAM', len(alias_by_fid))
     q += quest_aliases(alias_by_fid, {}, names)
     return pack_record('QUST', fid, 0, q)
-
-
-def _pack_scene(fid: int, edid: str, quest_fid: int, alias_id: int,
-                topic_fid: int) -> bytes:
-    """One scene in vanilla DA11NamiraScene's exact layout.
-
-    One phase, the speaker alias as its only actor, and one dialogue action
-    that speaks the topic.
-    """
-    phase = (pack_subrecord('HNAM', b'') + pack_string_subrecord('NAM0', '')
-             + pack_subrecord('NEXT', b'') + pack_subrecord('NEXT', b'')
-             + pack_uint32_subrecord('WNAM', 200) + pack_subrecord('HNAM', b''))
-    actor = (pack_uint32_subrecord('ALID', alias_id)
-             + pack_uint32_subrecord('LNAM', 0)
-             + pack_uint32_subrecord('DNAM', 0x1A))
-    action = (pack_uint16_subrecord('ANAM', 0) + pack_string_subrecord('NAM0', '')
-              + pack_uint32_subrecord('ALID', alias_id)
-              + pack_uint32_subrecord('INAM', 1)
-              + pack_uint32_subrecord('SNAM', 0) + pack_uint32_subrecord('ENAM', 0)
-              + pack_formid_subrecord('DATA', topic_fid)
-              + pack_subrecord('HTID', struct.pack('<i', -1))
-              + pack_float_subrecord('DMAX', 10.0)
-              + pack_float_subrecord('DMIN', 1.0)
-              + pack_uint32_subrecord('DEMO', 0) + pack_uint32_subrecord('DEVA', 0)
-              + pack_subrecord('ANAM', b''))
-    subs = (pack_string_subrecord('EDID', edid) + pack_uint32_subrecord('FNAM', 4)
-            + phase + actor + action + pack_formid_subrecord('PNAM', quest_fid)
-            + pack_uint32_subrecord('INAM', 1)
-            + pack_subrecord('VNAM', struct.pack('<4I', 3, 3, 3, 3)))
-    return pack_record('SCEN', fid, 0, subs)
 
 
 def _mint_speaker(writer, emitter: str, voice: str, src: dict, npc: dict,
