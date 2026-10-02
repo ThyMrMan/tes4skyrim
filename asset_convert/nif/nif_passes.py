@@ -301,13 +301,14 @@ def fix_controller_flags(data):
     return fixed
 
 
-def collect_sequence_names(data):
+def collect_sequence_names(data, extra=()):
     """NiControllerSequence names a script can reach via PlayAnimation().
 
     These become both the behaviour-graph state names and the events that
     select them.  Order is the manager's own, deduplicated, so the generated
     graph is byte-reproducible.  Empty when the mesh has no controller
-    manager: a static mesh must not get a BGED.
+    manager: a static mesh must not get a BGED.  `extra` adds lowercase names
+    (an activator's Open/Close).
     See: docs/commentary/asset_convert_nif.md#which-sequences-earn-a-graph
     """
     names = []
@@ -326,7 +327,7 @@ def collect_sequence_names(data):
                 if not name or name in seen or not seq.num_controlled_blocks:
                     continue
                 if (name not in (AUTOPLAY_SEQUENCE, AUTOLOOP_SEQUENCE) and
-                        name.lower() not in SCRIPT_DRIVEN_SEQUENCES):
+                        name.lower() not in SCRIPT_DRIVEN_SEQUENCES and name.lower() not in extra):
                     continue
                 seen.add(name)
                 names.append(name)

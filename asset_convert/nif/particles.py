@@ -293,16 +293,23 @@ _PSYS_ALPHA_FLAGS = 0x100d
 #: Smallest particle pool Skyrim will allocate into.
 _PSYS_MIN_POOL = 75
 
+#: BSStripPSysData's own fields past NiPSysData (max point count, caps, Z prepass), kept as authored.
+_STRIP_FIELDS = ('unknown_short_5', 'unknown_byte_6', 'unknown_int_7', 'unknown_float_8')
+
 
 def _fresh_psys_data(node):
-    """Replace the NiPSysData, keeping only the pool size.
+    """Replace the NiPSysData, keeping only the pool size and, for strips, the strip fields.
 
     UV2=11 and UV2=83 disagree on the binary layout, so the block is rebuilt
-    rather than converted. See: docs/commentary/asset_convert_nif.md#psys-shader-values
+    rather than converted; a strip system's data stays a BSStripPSysData.
+    See: docs/commentary/asset_convert_nif.md#psys-shader-values
     """
     if node.data is None:
         return
-    fresh = NifFormat.NiPSysData()
+    strip = isinstance(node.data, NifFormat.BSStripPSysData)
+    fresh = NifFormat.BSStripPSysData() if strip else NifFormat.NiPSysData()
+    for field in _STRIP_FIELDS if strip else ():
+        setattr(fresh, field, getattr(node.data, field))
     fresh.bs_max_vertices = max(node.data.num_vertices, _PSYS_MIN_POOL)
     fresh.has_vertices = True
     fresh.has_normals = False

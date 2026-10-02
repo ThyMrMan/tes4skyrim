@@ -386,3 +386,22 @@ def repair_inverted_floors(tris, visual_tris=None, groups=None,
     if faces and _render_states_a_floor(faces):
         flip = _render_flips(tris, faces)
     return _rewound(tris, flip)
+
+
+def two_sided_floors(tris, materials, visual_tris):
+    """`(tris, materials)` plus a reversed copy of each face only the floor rule decided (FO3/FNV).
+
+    A face with no render twin under a walkable skin is turned up, but FO3/FNV
+    collide both sides: a slab placed upside down is then stood on from its
+    underside, so that face is kept from both sides.
+    See: docs/commentary/asset_convert_falloutnv.md#upside-down-slabs
+    """
+    faces = _render_faces(visual_tris)
+    if not faces:
+        return tris, materials
+    twins = _twin_index(faces)
+    extra = [i for i, t in enumerate(tris) if any(face_normal(t))
+             and _twin_says_inverted(t, face_normal(t), twins) is None
+             and _floor_says_inverted(t, face_normal(t), faces) is not None]
+    return (list(tris) + [(tris[i][0], tris[i][2], tris[i][1]) for i in extra],
+            list(materials) + [materials[i] for i in extra])

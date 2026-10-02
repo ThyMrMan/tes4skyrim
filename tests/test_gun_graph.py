@@ -104,6 +104,23 @@ class TestMachines:
         assert any('iGunShots >= iGunClipSize' in c for c in conds)
         assert any('iGunAuto == 1' in c for c in conds)
 
+    def test_pitch_blend_raises_the_shot_once(self):
+        """Only one clip of an attack's pitch blend carries the shot, kept running at zero weight."""
+        m = _manifest()
+        m['clips'] += [_entry('2hrattackleftup', 0.7, hits=[0.04]),
+                       _entry('2hrattackleftdown', 0.5, hits=[0.03])]
+        m['classes'] = {c['stem']: classify_stem(c['stem']) for c in m['clips']}
+        gb = _builder(GunClips(m))
+        xml = gb.render(fire_machine(gb, '2hr'))
+        left = [g for g in gb.generators if g['stem'].startswith('2hrattackleft')]
+        assert {g['stem'] for g in left} == {'2hrattackleft', '2hrattackleftup', '2hrattackleftdown'}
+        carriers = {g['stem'] for g in left if any(e == 'arrowRelease' for _t, e in g['events'])}
+        assert carriers == {'2hrattackleft'}
+        root = ET.fromstring(xml)
+        flags = {param_text(o, 'flags') for o in root.find('hksection')
+                 if o.get('class') == 'hkbBlenderGenerator' and 'attackleft' in param_text(o, 'name')}
+        assert flags == {'25'}
+
     def test_reload_chain_and_end_events(self):
         """A start clip chains into its loop; every reload ends with its event."""
         gb = _builder(GunClips(_manifest()))

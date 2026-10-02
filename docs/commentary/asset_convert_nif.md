@@ -318,6 +318,25 @@ serializer always emits an empty inline pool with
 Every vanilla Skyrim particle system also carries a `BSPSysLODModifier`
 (**498/498** census), without which the system culls at all distances.
 
+<a id="strip-particles"></a>**Strip particle systems keep a BSStripPSysData
+(2026-09-30).** A FO3/FNV `BSStripParticleSystem` (Megaton's water spray
+`FXWaterSpray01`, the flamer's `FlamerFlame01`, the fire ant's flame, Harold's
+heart: 9 meshes in each Fallout game, none in Oblivion) needs its data block to
+be a `BSStripPSysData`. There were two faults:
+- `_fresh_psys_data` rebuilt every system's data as a plain `NiPSysData`. The
+  game then ran `BSStripPSysData` code on it and wrote through a float 1.0 read
+  as a pointer (`0x3F800000`). That was the crash entering Megaton:
+  `BSStripPSysData::Func39` at SkyrimSE+0DF8711.
+- The hand-rolled Skyrim `NiPSysData` writer (Patch 4 in
+  `pyffi_monkey_patch.py`) never wrote the strip block's own 11 bytes after
+  the 70-byte prefix it inherits.
+
+The data is now rebuilt as a `BSStripPSysData` with the authored strip fields
+(max point count: 9 for the spray, 4 for the flamer), and
+`_install_skyrim_strip_psysdata` writes and reads those 11 bytes after the
+prefix, in the source's byte order (a short, then 9 bytes, all zero in every
+Fallout strip mesh).
+
 ### <a id="billboard-axis-fix"></a>Billboards ship as authored — both engines run the same billboard math
 
 A pure-geometry billboard keeps its authored rotation and mode; no axis
@@ -993,6 +1012,19 @@ Four rules decide what qualifies:
   succeed on a dead sequence.
 - **No controller manager means no names at all.** A static mesh needs no graph
   and must not get a BGED.
+
+<a id="activator-open-close"></a>
+**An activator-only mesh keeps Open/Close (built 2026-10-01, untested in game)**
+(`asset_convert/nif/two_state_falloutnv.py`). FO3/FNV activators that open
+and close (the Overseer's desk `VRmOverseerDesk01.NIF`, the vault gear door
+`VGearDoor01.NIF`, `GenElecSwitch01.NIF`) are driven by
+`TES4_TwoStateActivator`'s `PlayAnimation("Open")`, and the rule above kept
+their only sequences out of the graph, so no graph was written and nothing
+moved (2026-10-01 play-test: the tunnel terminal's "Open Overseer's Tunnel"
+and the vault door). A FO3/FNV mesh that an ACTI places and no DOOR does
+keeps Open and Close as graph states; a mesh any door uses stays as it was.
+The model lists come from the export's `ACTI.txt` and `DOOR.txt`, found from
+the mesh's own path.
 
 ## Post-walk animation passes
 <a id="post-walk-animation-passes"></a>

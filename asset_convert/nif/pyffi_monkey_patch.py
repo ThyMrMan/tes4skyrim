@@ -129,6 +129,7 @@ def _apply_nifformat_patches(NifFormat):
     # Patch 4: hand-rolled NiPSysData layout for Skyrim (BSStream 83)
     # ------------------------------------------------------------------
     _install_skyrim_psysdata_serializer(NifFormat)
+    _install_skyrim_strip_psysdata(NifFormat)
 
     # ------------------------------------------------------------------
     # Patch 5-7: early-Oblivion (10.0.1.x / 10.1.0.106) layout support
@@ -946,6 +947,46 @@ def _install_skyrim_psysdata_serializer(NifFormat):
     PSysData.get_size = get_size
     PSysData.write = write
     PSysData.read = read
+
+
+#: BSStripPSysData's fields after its NiPSysData part, as pyffi names them, and their packing (11 bytes).
+_STRIP_LAYOUT = (('unknown_short_5', '<h'), ('unknown_byte_6', '<B'), ('unknown_int_7', '<i'),
+                 ('unknown_float_8', '<f'))
+
+
+def _install_skyrim_strip_psysdata(NifFormat):
+    """Give BSStripPSysData its strip fields after the hand-rolled NiPSysData prefix it inherits.
+
+    Without them a strip system's data block ends 11 bytes short and the game
+    writes through a float read as a pointer (Megaton's FXWaterSpray01).
+    See: docs/commentary/asset_convert_nif.md#strip-particles
+    """
+    import struct as _struct
+    strip = NifFormat.BSStripPSysData
+    base_size, base_write, base_read = strip.get_size, strip.write, strip.read
+
+    def skyrim(data):
+        """Whether `data` is a Skyrim NIF, the only one the prefix is hand-rolled for."""
+        return getattr(data, 'version', 0) == _SKYRIM_VER and getattr(data, 'user_version_2', 0) >= _SKYRIM_BSVER
+
+    def get_size(self, data=None):
+        """The prefix, plus the strip fields in a Skyrim NIF."""
+        extra = sum(_struct.calcsize(fmt) for _n, fmt in _STRIP_LAYOUT) if skyrim(data) else 0
+        return base_size(self, data=data) + extra
+
+    def write(self, stream, data=None):
+        """Write the prefix, then the strip fields in a Skyrim NIF."""
+        base_write(self, stream, data=data)
+        for name, fmt in _STRIP_LAYOUT if skyrim(data) else ():
+            stream.write(_struct.pack(fmt, getattr(self, name)))
+
+    def read(self, stream, data=None):
+        """Read the prefix, then the strip fields in a Skyrim NIF."""
+        base_read(self, stream, data=data)
+        for name, fmt in _STRIP_LAYOUT if skyrim(data) else ():
+            setattr(self, name, _struct.unpack(fmt, stream.read(_struct.calcsize(fmt)))[0])
+
+    strip.get_size, strip.write, strip.read = get_size, write, read
 
 
 # ---------------------------------------------------------------------------

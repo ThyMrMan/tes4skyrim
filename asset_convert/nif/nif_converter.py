@@ -98,6 +98,7 @@ from asset_convert.havok.hkx_animobject import (VANILLA_AUTOPLAY_BGED,
                                                 generate_animobject_project)
 from asset_convert.nif.addon_nodes_falloutnv import remap_addon_nodes
 from asset_convert.nif.gun_parts_falloutnv import add_gun_part_sequences
+from asset_convert.nif.two_state_falloutnv import OPEN_CLOSE, activator_only
 from asset_convert.nif.particles import (convert_particle_system,
                                         skyrimize_billboard,
                                         wrap_in_billboard)
@@ -247,7 +248,7 @@ def _convert_furniture_markers(markers, root):
         dst.offset.y = seat['y']
         dst.offset.z = seat['z'] + shift  # re-origined coords (floor = 0)
         dst.heading = seat['heading']
-        dst.animation_type = 2 if seat['sleep'] else 1
+        dst.animation_type = seat['anim']
         ep = dst.entry_properties
         ep.front = 1 if seat['entry_flags'] & _ENTRY_FRONT else 0
         ep.behind = 1 if seat['entry_flags'] & _ENTRY_BEHIND else 0
@@ -1313,15 +1314,16 @@ def _build_height_maps(stats, dst_path):
             parallax.build_height_map(job['src'], out)
 
 
-def _build_animobject_graph(data, stats, result, dst_path):
+def _build_animobject_graph(data, stats, result, dst_path, src_path=''):
     """Give an animated object the behaviour graph PlayAnimation needs.
 
     Runs AFTER the conversion so stripped sequences cannot become dead states,
     and before the write so the BGED ships in the file. A gun's part
-    sequences never earn one: FalloutRuntime starts them itself.
+    sequences never earn one: FalloutRuntime starts them itself. A FO3/FNV
+    activator-only mesh keeps Open/Close.
     See: docs/commentary/asset_convert_nif.md#animated-object-graphs
     """
-    seq_names = collect_sequence_names(data)
+    seq_names = collect_sequence_names(data, OPEN_CLOSE if is_fallout_source() and activator_only(src_path) else ())
     if not seq_names:
         return
     stripped = strip_empty_text_keys(data)
@@ -1374,7 +1376,7 @@ def _run_post_passes(data, stats, result, src_path, dst_path, textures_only):
         parts = add_gun_part_sequences(data, src_path) if is_fallout_source() else []
         if parts:
             stats['gun_part_sequences'] = len(parts)
-        _build_animobject_graph(data, stats, result, dst_path)
+        _build_animobject_graph(data, stats, result, dst_path, src_path)
     _add_tangent_space(data)
 
 
