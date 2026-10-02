@@ -57,7 +57,7 @@ def landscape_texture_path(icon_path: str) -> str:
     return prefix_path(icon_path)
 
 
-def _common_header_subs(rec: dict, need_obnd: bool = True, need_full: bool = True,
+def common_header_subs(rec: dict, need_obnd: bool = True, need_full: bool = True,
                         obnd_sig: str = '', obnd_override: tuple = None) -> bytes:
     """Build common leading subrecords: EDID, VMAD, OBND, FULL.
 
@@ -197,7 +197,7 @@ def _simple_object(rec: dict, sig: str, has_full: bool = True,
 
     Produces: EDID + OBND + FULL + MODL + extra_subs.
     """
-    subs = _common_header_subs(rec, need_full=has_full, obnd_sig=sig)
+    subs = common_header_subs(rec, need_full=has_full, obnd_sig=sig)
     if has_model:
         path = get_str(rec, 'Model.MODL')
         if path:

@@ -111,10 +111,10 @@ def convert_PROJ(rec: dict, writer=None) -> bytes:
 
     TES5 DATA (92 bytes, wbDefinitionsTES5): 0 flags u16, 2 type u16,
     4 gravity, 8 speed, 12 range, 16 light, 20 muzzle flash light, 24 tracer
-    chance, 28/32 alt-trigger proximity/timer, 36 explosion, 40 sound,
+    chance (0: a tracer hits no actor), 28/32 alt-trigger proximity/timer, 36 explosion, 40 sound,
     44 muzzle flash duration, 48 fade, 52 impact force, 72 collision radius,
     80 relaunch interval.
-    See: docs/commentary/tes4_export_falloutnv.md#formlists
+    See: docs/commentary/tes4_export_falloutnv.md#no-tracers
     """
     subs = pack_string_subrecord('EDID', get_str(rec, 'EditorID'))
     subs += pack_obnd(*(get_int(rec, f'OBND.{k}') for k in
@@ -130,13 +130,14 @@ def convert_PROJ(rec: dict, writer=None) -> bytes:
     ptype = get_int(rec, 'DATA.Type', 1)
     if ptype == _FNV_TYPE_CONTINUOUS_BEAM:
         ptype = 0x04
+
     data = bytearray(92)
     struct.pack_into('<HH', data, 0, fnv_flags & _SHARED_FLAGS, ptype)
     struct.pack_into('<fff', data, 4, gravity,
                      get_float(rec, 'DATA.Speed', 3600.0),
                      max(get_float(rec, 'DATA.Range'), 60000.0))
     struct.pack_into('<II', data, 16, get_formid(rec, 'DATA.Light'), 0)
-    struct.pack_into('<fff', data, 24, get_float(rec, 'DATA.TracerChance'),
+    struct.pack_into('<fff', data, 24, 0.0,
                      get_float(rec, 'DATA.AltTriggerProximity'),
                      get_float(rec, 'DATA.AltTriggerTimer'))
     struct.pack_into('<II', data, 36, get_formid(rec, 'DATA.Explosion'),

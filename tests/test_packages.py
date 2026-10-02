@@ -641,6 +641,22 @@ def test_hunt_chain_runs_ahead_of_its_source_on_alias_and_pkid_lists():
         set_package_chains({})
 
 
+def test_quest_only_actor_holds_in_place():
+    """An NPC whose every package is quest-owned stands where it is; others keep the sandbox list.
+
+    See: docs/commentary/tes5_import_package.md#quest-only-actors-hold-in-place
+    """
+    from tes5_import.packages.actor_wiring import (DPLT_HOLD_LIST, DPLT_NPC_LIST,
+                                                   default_package_list, set_quest_packages)
+    set_quest_packages({0x011EF2D5, 0x010011DD})
+    try:
+        assert default_package_list([0x011EF2D5], DPLT_NPC_LIST) == DPLT_HOLD_LIST == 0x000A6853
+        assert default_package_list([0x011EF2D5, 0x01000D95], DPLT_NPC_LIST) == DPLT_NPC_LIST
+        assert default_package_list([], DPLT_NPC_LIST) == DPLT_NPC_LIST
+    finally:
+        set_quest_packages(())
+
+
 class TestFalloutPackageTypes:
     """FO3/FNV Patrol, Guard, Dialogue and Use Weapon get their Skyrim templates.
 

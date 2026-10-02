@@ -13,7 +13,8 @@ import os
 
 #: Plugin file name (lowercase) -> [(site, key)] derived before any generator runs.
 CLAIMS = {
-    'falloutnv.esm': [('MGEF_DELIVERY', (0x1015170, 0, 0, 0))],
+    'falloutnv.esm': [('MGEF_DELIVERY', (0x1015170, 0, 0, 0)),
+                      ('FOLLOWUP_RESUME_DLBR', 'TES4FollowUpResume_000F43F2')],
 }
 
 

@@ -5246,9 +5246,9 @@ class TestFalloutBipedSlotsAreNotOblivions:
             assert _convert_biped_flags(1 << bit) == fnv
 
     def test_upper_body_also_covers_feet(self):
-        """FNV's one body mesh runs to the toes; Oblivion's Upper Body does not."""
+        """FNV's one body mesh is a whole outfit, feet and lower body too; Oblivion's Upper Body is not."""
         world_falloutnv.register_fallout_source({'TERM': [1]})
-        assert _convert_biped_flags(1 << 2) == (1 << 2) | (1 << 7)
+        assert _convert_biped_flags(1 << 2) == (1 << 2) | (1 << 7) | (1 << 19)
         world_falloutnv._IS_FALLOUT_SOURCE.clear()
         assert _convert_biped_flags(1 << 2) == (1 << 2)
 

@@ -114,26 +114,108 @@ game, see the `oblivion-dialog-system`, `skyrim-dialog-system`, and
   6 carry a TCLT and none Invisible Continue, while vanilla's 712 Blocking
   branches (said instead of Hello when dialogue starts, force greets
   included) hold 85 Invisible Continue lines. In game, Doc said "Here. These
-  are yours." and stopped, so the door stayed locked. A quest's GREETING group
-  holding a line with follow-ups is therefore written as a Blocking `CUST`
-  topic (same FormID and EditorID, so voice paths and the force greet's PDTO
-  are unchanged; lines keep their order, so the first passing one still wins).
-- <a id="greeting-choices-block"></a>**A greeting that offers replies opens
-  as Blocking too (2026-09-28, unconfirmed in game)** (`groups.greets_with_choices`).
-  In FO3's birthday party, Amata's force greet opens CG02's GREETING topic and
-  says "Happy birthday! We really surprised you, didn't we?" (`000319BD`),
-  whose three Choices lead to her present (`setstage CG02 21`). The flight
-  recorder shows the line end and, 8 ms later, a second line from the same
-  Hello topic: "Go on, mingle!" (`000784E0`, Goodbye). The force greet said
-  its line, then the menu opened with an ordinary Hello, and the Goodbye
-  closed the talk before any reply showed. Stage 21 never came, and neither
-  did stage 34, which needs every present. Vanilla never force-greets a Hello
-  topic: its 712 Blocking branches are what it says when dialogue starts, and
-  they carry choices. So a quest's GREETING group is written as the Blocking
-  `CUST` topic above whenever one of its lines keeps a reply link
-  (`info_tclt`, the same filter the INFO writer uses), not only when one has
-  follow-ups. A greeting whose links all lead to menu topics keeps no TCLT
-  and stays a Hello.
+  are yours." and stopped, so the door stayed locked. Such a line is therefore
+  said from a Blocking topic ([below](#greeting-choices-block)).
+- <a id="greeting-choices-block"></a>**A greeting that leads on is said from a
+  Blocking topic, every spoken greeting a shared copy (confirmed in game
+  2026-09-29)** (`greeting_choices.shared_greetings`). A line leads on when it
+  has follow-ups or keeps a reply link (`info_tclt`, the filter the INFO
+  writer uses). In FO3's birthday party, Amata's force greet says "Happy
+  birthday! We really surprised you, didn't we?" (`000319BD`), whose three
+  Choices lead to her present (`setstage CG02 21`). The design below played
+  it through, replies and all, after five failed layouts.
+  - **Layout, per quest GREETING group with a leading line**, as vanilla
+    shares lines:
+    - an unreachable Shared Info topic (DIAL category Misc, subtype 84, SNAM
+      `IDAT`) keeps the group's FormID and EditorID and holds every original,
+      so voice paths hold (the engine resolves a shared INFO's voice by its
+      original's topic and FormID, `[info+0x28]` at `0x1403e5d8d` in 1.6.1170;
+      vanilla files 3,384 of its 3,411 cross-topic shared lines that way);
+    - `<GREETING>_Hello`, the Hello topic, holds shared copies of the lines
+      that do not lead on;
+    - `<GREETING>_Lead`, a Blocking `CUST` topic, holds shared copies of the
+      leading lines, each led by `IsInDialogueWithPlayer == 1`.
+    Every line is spoken from exactly one place, so none replays.
+  - **Only the leading lines are Blocking.** A Blocking line with no link ends
+    the talk (Skyrim does not fall back to the topic list), so a whole-group
+    Blocking topic (the 2026-09-28 build) closed plain greetings and Old Lady
+    Palmer's and Stanley's reply greetings (`00030A19`, `000319B9`), whose
+    replies are Top-Level topics the bark filter unlinks.
+  - **Originals stay valid and live in `IDAT`.** Switching an original off
+    (`GetStage < 0`) made every copy of it misplay: a lost first response, a
+    click to advance, a force greet falling to the Goodbye, a copy that never
+    ended and hung the game. The CK's validator names the rule ("passes for
+    voice type ... but the shared info ... from which it draws its response
+    data does not"), and vanilla keeps all 3,411 shared originals in `IDAT`
+    topics. An original left valid in the Hello topic instead replayed once
+    its Say Once copy was spent (FNV's Doc Mitchell restarted his word test).
+  - **`IsInDialogueWithPlayer` on the Blocking copies.** The CK wiki's Dialogue
+    Branch page: a valid Blocking line is also the NPC's Hello "unless the
+    info is conditioned only to be valid in the dialogue menu, such as with
+    IsInDialogueWithPlayer". Without it Amata's line started as she walked up
+    and started again about 3.5 s later, when the force greet opened the
+    menu (`fAIForceGreetingTimer` is 3.0), cutting off "Your dad was afraid"
+    and closing on a Goodbye. Vanilla asks it on 146 of 1,797 Blocking start
+    lines and 29 of 620 force-greet lines.
+  - **Each force greet opens the topic for its own speaker**
+    (`packages.converter.greet_topic_for`): `_Lead` when its actors (NPC_/CREA
+    AIPackage lists) are among the speakers the leading lines name, else the
+    Hello topic, since a ForceGreet with nothing to say leaves the actor
+    standing
+    ([package contracts](../reference/package_ai_contracts.md#force-greet-is-a-package-not-a-papyrus-call)).
+    Copies of the other lines gated on `GetIsCurrentPackage(<force greet>)`
+    (an earlier layout) made the engine say them one after another after
+    Amata's line instead of her replies.
+  - A greeting whose links all lead to menu topics keeps no TCLT and stays a
+    Hello, its replies listed as Top-Level topics.
+  - Ruled out along the way: response numbering (the voice path takes TRDT's
+    response number, `byte [response+0x10]`), multi-part and shared lines in
+    force greets (vanilla has both), and Must Complete on the package (no
+    effect; the package never changed between the two starts).
+- <a id="force-greet-package-gate"></a>**A line's test on its ForceGreet
+  package becomes the package's own conditions (confirmed in game
+  2026-09-29)** (`packages/force_greet_gates.py`). Butch's cake greeting
+  (`00030A1E`, 8 sweetroll replies) asks
+  `GetIsCurrentPackage(CG02ButchFindPlayer)`. In FO3 that Dialogue package
+  stays current through the talk and retries until CG02 reaches 30 or 35. In
+  game, his force greet was cut off at once by his Goodbye (the switched-off
+  original [above](#greeting-choices-block), not the player's talk with
+  Stanley that had closed 170 ms before, as first read), and two later
+  activations said nothing. A Skyrim ForceGreet ends when its conversation
+  starts and retires for the day, so the test held only at the instant he
+  greeted. Vanilla asks the same test
+  (27 INFOs name a ForceGreet package), but always beside a greeting the
+  player can reopen. So a lone subject `GetIsCurrentPackage(<ForceGreet>) ==
+  1` on a dialogue line is replaced by that package's converted conditions
+  (CG02 stages 16 and 20 done, 30 and 35 not). The line stays available for
+  as long as the package would run, whether the package or the player opens
+  the talk. A test inside an OR chain is left alone, and so is a test on a
+  package a script forces on with `AddScriptPackage` (FO3's
+  `FollowersRL3GreetPlayer`, whose only condition is a 3000-unit distance) or
+  one with no conditions (Oblivion's `SEJastiraNanusForceGreetPlayer`): for
+  those, the script says when the package runs, not its conditions. Measured
+  scope: 16 FO3 lines, 0 FNV, 17 Oblivion.
+- <a id="say-once-reply-trees"></a>**A Say Once line whose replies set a stage
+  lasts until the stage is set (built 2026-09-30, untested in game)**
+  (`say_once.py`). Skyrim lets the player leave a talk mid-reply. FO3
+  Stanley's "How do you like that there Pip-Boy" (`000784DC`, Say Once) opens
+  4 choices whose second-level replies `setstage CG02 23` (his present). In
+  game the player left during the replies; on return the spent line gave way
+  to "You let me know if that Pip-Boy ever gives you any trouble" (`00031D3F`,
+  Goodbye), which closed the talk, so stage 23 was out of reach. A Say Once
+  line with Choices now drops Say Once and asks `GetStageDone(quest, stage) ==
+  0` for every stage set by an INFO in its reply tree (Choice links followed
+  breadth first, 8 levels). The line's own result script is not counted: a line
+  that sets its stage as it ends must outlive its own fragment
+  ([force-greet gate](#force-greet-package-gate)). Only lines in player
+  dialogue topics (DIAL type 0) qualify, and only when the line's own script
+  is safe to run again (`set`, `if`/`else`/`endif`, `setstage`,
+  `setobjective*`). The first build re-armed every such line: 21 FO3, 40 FNV
+  and 7 Oblivion lines would have paid again on each return (MS06's caps
+  bonus, FNV XP rewards, Mr. House's platinum-chip payout, Oblivion item
+  rewards), and NPC-to-NPC and FNV radio lines were caught too. Measured
+  scope after both limits: 131 FO3, 287 FNV and 159 Oblivion lines, none
+  with a side effect.
 - <a id="fallout-speech-challenges"></a>**FO3/FNV speech challenges can fail
   (2026-09-28, unconfirmed in game)** (`speech_challenges_falloutnv.py`).
   A challenge line is an INFO with DATA flag 0x80 (xEdit "Speech Challenge")
@@ -1490,6 +1572,181 @@ not degraded -- get the traceback before theorising.
 - **Order matters:** it appends REFRs to `by_type`, so it must run BEFORE the
   CELL/WRLD builders place them — like the leveled-actor shells.
 
+### <a id="fallout-talking-activators"></a>Fallout talking activators (built 2026-09-29, untested in game)
+
+**Code:** `tes5_import/record_types/talking_activator_falloutnv.py`,
+`tes5_import/dialogue/talking_as_falloutnv.py` and `talking_lists_falloutnv.py`, `speak_as.scan_talker_calls`,
+`script_convert` `settalkingactivatoractor` and `_talker_says`,
+`TES4Polyfill.SetTalkingActivatorActor`.
+
+FO3/FNV intercoms, loudspeakers, radios and Harold's tree are TACTs (49 in
+Fallout3.esm, 87 in FalloutNV.esm). They were exported without their voice type
+(`VNAM`), looping sound (`SNAM`) or FNV radio template (`INAM`), and imported as
+plain voiceless ACTIs, so none could speak. The quest audit's census counted 26
+quest-advancing FO3 lines lost that way: CG02 (Jonas on the diner intercom),
+MQ05 (Dad's broadcast), MQ09 (Autumn's and Eden's intercoms), MQ11 (Li at
+Purity control), the Citadel's Liberty Prime voice, and Harold.
+
+- **The record.** A Skyrim TACT in vanilla's order (`EDID VMAD OBND FULL MODL
+  PNAM SNAM FNAM VNAM`), keeping model and script. `VNAM` is the source voice
+  type's written VTYP (`FALLOUT_VTYP_BY_SOURCE`); `SNAM` goes through the
+  sound-descriptor patch. Only Random Anim Start survives of the record flags.
+  Every voiced TACT is also entered in `npc_to_vtyp`, so its own lines
+  (`GetIsID(<TACT>)`) get its voice gate and voice folder like any speaker's.
+- **Its own lines** are said the vanilla way (Skyrim.esm's Augur, `001093D0`):
+  the line keeps `GetIsID(<TACT>)`, and its Speaker (`ANAM`) is an unplaced
+  voice NPC carrying the TACT's voice (`TES4VoiceOf_<TACT>`, as vanilla's
+  `MG04Augur` has `VTCK` = the Augur's `VNAM`). A script `ref.Say`/`SayTo` on a
+  placed TACT is spoken by a one-action speak-as scene whose alias is that
+  placement, because a plain `Say` on a non-actor never retires its line
+  ([speak-as](#speaker-activator-construction)). These topics are NOT speak-as
+  topics: MQ09's `MQ09AutumnPresConv` is said by the intercom and by Colonel
+  Autumn, and a speak-as topic drops every speaker GetIsID.
+- **Speaking as an actor** (`[talker.]SetTalkingActivatorActor <actor>`): the
+  source engine lets the TACT pass the actor's GetIsID. Skyrim keeps
+  `IsTalkingActivatorActor` as a condition and `SetTalkingActivatorActor` as a
+  console command only, so Papyrus cannot set it. Instead each actor a talker
+  speaks as gets a FLST holding its own base (`TES4TalkingAs_<actor>`, all in
+  `TES4TalkingAsLists`); the polyfill takes the talker's base out of every list
+  and puts it in the one holding the actor's base, and every `GetIsID(<actor>)
+  == 1` on a line is OR'd with `IsInList(<that list>)`, keeping its run-on
+  (Dad's lines said TO Jonas pass when the intercom is Jonas). `IsInList` tests
+  the reference's BASE (CK wiki), so every placement of a talker base speaks as
+  the actor at once. 7 pairs in FO3, 12 in FNV, one actor per talker except
+  Tenpenny's intercom and House's control panel.
+- **Voice for a talker speaking as an actor.** The talker's own voice type joins
+  the actor's lines' `GetIsVoiceType` gate, and the voice map gains a third
+  field, the lent folders: each take from one of the line's own folders is also
+  copied to the talker's (`audio_converter.voice_entry`). About 500 FO3 and
+  1,100 FNV lines are copied.
+- **Scripts.** `object_scripts.SCRIPTABLE_TYPES` lacked TACT, so no talking
+  activator carried its script (CG02's quest property `CG02DinerIntercomREF`,
+  typed as the intercom's script, logged "is not the right type" on every
+  load). And `script_convert` promoted a script to `Actor` on a bare
+  Actor-only call even when a known host is not an actor (`assemble._hosted_off_actors`):
+  the MQ09 intercom script's bare `Look Player` (it rides on a TACT and a
+  creature) and `FFER05LootBoxSCRIPT` were logged "Unable to bind ... base
+  types do not match". 8 scripts changed (3 FO3, 5 FNV, 0 Oblivion).
+- **Not covered:** a talker named only by a variable, and an actor argument
+  that is not a placed reference, stay unpaired. NPC-to-talker conversations
+  (CG02's Dialogue package) are [scenes](#fallout-conversation-scenes).
+
+### <a id="fallout-conversation-scenes"></a>Fallout conversation packages as scenes (built 2026-09-30, untested in game)
+
+**Code:** `tes5_import/dialogue/conversation_scenes_falloutnv.py` (plan, walk,
+build), `packages/conversations_falloutnv.py` (the package side),
+`dialogue/scenes.py` (the SCEN packer, shared with speak-as),
+`script_convert/static_scripts/TES4_ConversationStart.psc`.
+
+A FO3/FNV Dialogue package set to Conversation walks its actor to the target
+and runs an NPC-to-NPC conversation (GECK wiki, Dialogue Package): the
+package's topic, then each line's Choice topic, speakers alternating by the
+line's NextSpeaker, until no line follows. The package stays current until the
+conversation ends (Must Complete). It had been converted to Skyrim's Say
+template, which travels to its location, says one topic and ends: CG02's
+intercom conversation (Dad "Jonas?" sets 36, Jonas through the intercom "Hey
+doc", Dad's Goodbye "Thanks. I'll send him right down." sets 38) never ran and
+the tutorial stopped at stage 35. A Say package also stands a seated actor up,
+which is why Butch leaves his chair (his chat packages have no topic, so they
+are not planned here).
+
+- **Planned before packages convert** (`plan_conversations`): a Conversation
+  package aimed at a reference other than the player, with its own topic (not
+  GREETING/HELLO), no source scripts, owned by a quest through the package
+  plan, with one runner and a target that gets an alias. The chain is walked
+  statically; a line's speaker is checked against the role's identities (the
+  speaker's base; the target's base plus every actor a talking activator base
+  speaks as). A step keeps only the lines linked from the previous topic when
+  it has any (GECK Conversation Tab: a Goodbye info names the topic it follows
+  in Link From); without that, CG02's last step took 36 generic Goodbye lines
+  and Dad's generic goodbye beat "I'll send him right down". A chain that
+  branches (two Choice topics) or loops is not planned. A step's topic is keyed
+  on the package, the previous topic, the topic and the role, since a chain
+  can return to its first topic (MQ05, CG03). Of the candidates (a topic set),
+  Fallout3.esm plans 9 and skips 30 (no linear chain), 23 (no quest cast) and
+  13 (the package has scripts); FalloutNV.esm skips 32 (no cast) and 1.
+- **The package** becomes HoldPosition where the speaker stands, without Must
+  Complete, and its OnBegin fragment (`TES4_ConversationStart`, the scene as
+  its one property) starts the scene unless it is already playing.
+- **The scene** (on the package's quest, casting the speaker's and target's
+  aliases) follows vanilla's FreeformKarthwastenAScene: phase 0 runs a Travel
+  package to within the package's activate distance of the target, so the
+  lines wait for arrival as the source did; the same package spans the
+  dialogue phases to keep the speaker there (289 vanilla scenes run a package
+  across their dialogue phases); one phase per line, the speaker head-tracking
+  the other alias. Actor behavior 0x1A pauses the scene if the player talks to
+  one of them.
+- **Each step's lines** are shared copies in a Scene topic of the quest, so the
+  voice and the line's result fragment (the stage sets) carry over. Listener
+  tests (a run-on-target GetIsID or talking-as IsInList) are dropped: a scene
+  line is said to no one. A line a talking activator says names the actor it
+  speaks as for Speaker (`ANAM`), the speak-as rule for a non-actor in a scene.
+- **The originals pass while their scene plays**
+  (`conversations_falloutnv.while_scene_plays`). A shared copy plays only
+  while its original passes ([greeting choices](#greeting-choices-block)).
+  In game the intercom scene said "Jonas?" (its original, in the
+  Say-driven `CG02IntercomConv`, had no listener test) and Jonas's "Hey doc",
+  then ended with no line at step 3: the originals of "Thanks. I'll send him
+  right down." sit in the shared GOODBYE topic and still asked `GetIsID(target)
+  == CG02Jonas OR IsInList(target, TES4TalkingAs_CG02Jonas)`, which no scene
+  target meets. Stage 38 never came, Dad's package restarted the scene, and
+  "Jonas?" looped every ~7 s. Each listener OR group on a line a planned scene
+  copies now also ends `OR IsScenePlaying(<that scene>) == 1`, so the original
+  stays shut to the player's own talks with Dad but passes during the scene.
+  That alone did not play step 3 (two runs, same loop), while the other 66
+  scene lines, whose originals sit in `CUST` topics, played. Vanilla holds
+  every scene line's original in a Shared Info topic (727 of 727 shared lines
+  in Skyrim.esm's 9,204 scene INFOs; 5 carry Goodbye, 8 test the target). So
+  a non-greeting bark group (here CG02's GOODBYE) holding a line a scene copies
+  is laid out as greetings are (`greeting_choices.scene_held`): the originals
+  stay in an `IDAT` topic keeping the group's FormID and EditorID, and the
+  group's lines are said from shared copies in `<group>_Said`.
+- **A played conversation is not replayed** (`conversation_guard`). With step
+  3 playing, stage 38 was set, and then Dad said "Jonas?" and his goodbye every
+  ~4 s until the player spoke to him. The source package only asks
+  `GetStage CG02 >= 35`; in FO3 his higher `CG02DadTellPlayerTimeToGo`
+  (`>= 36`) outranked it for good, but converted that is a force greet, which
+  Skyrim retires once its talk starts, so the conversation package won again
+  and restarted the scene. A scene-played package now also asks
+  `GetStageDone == 0` for the stages its last stage-setting step sets
+  (CG02 38).
+
+### <a id="counted-loops"></a>A conversation topic that links to itself steps a counter (built 2026-09-30, untested in game)
+
+FO3's `CG03DadTalktoJonas` says topic `CG03DadConversation`, whose seven
+lines all link back to it; each asks `GetQuestVariable(CG03, dadjonasVAR) ==
+n` and adds 1 to it (Dad "Morning, Jonas." at 0, Jonas "Morning, Doc. How's
+things?" at 1, ... Dad "Sounds good" at 6). The walk took that for a loop,
+planned nothing, and the package fell back to `Say`: in the 2026-09-30
+play-test Dad said "Morning, Jonas." once, as the player opened his office
+door, and the talk stopped. The walk now follows such a topic as a counter
+(`_on_count`, reading the gate with `script_convert.conversation_sequence.equality_gate`):
+its first step starts at the lowest gated value, each repeat of the topic
+adds one, a step keeps only the lines gated on the current value, and the
+chain ends when none is. A counted step's topic key adds the value, so the
+seven steps get seven topics while earlier scenes keep their FormIDs.
+
+A scene's cast aliases are also filled by its start fragment when empty
+(`TES4_ConversationStart.TES4Cast`, from the alias IDs and references the
+package VMAD names): a quest running in a save made before its scene existed
+never fills the new aliases, and the 2026-09-30 play-test on an older save
+skipped Jonas's intercom line for that reason.
+
+### <a id="conversation-place"></a>A conversation with a place waits there for its listener (built 2026-10-01, untested in game)
+
+A FO3/FNV conversation package that names a placed reference as its location
+holds its speaker there until the listener comes within the package's
+distance. CG03's `CG03DadTalktoJonas` names Dad's chair, distance 800; the
+scene's first phase walked Dad to Jonas, who was out greeting the player, so
+Dad left his office and talked to nobody (2026-10-01 play-test). The scene's
+speaker package now sits in the place when it is furniture (else travels
+there), and phase 0 ends on `GetDistance(<listener>) <= distance` run on the
+speaker's alias, as vanilla's `CWSiegeDefenderStartingScene` ends its first
+phase on a quest-alias GetDistance. A counted conversation's package also asks
+its counter to be below the value after its last line
+(`conversations_falloutnv.count_guard`), so a spent talk stops restarting its
+scene: Dad's restarted every half second after his talk with Jonas.
+
 ## <a id="adopting-a-masters-synthesized-records"></a>Adopting a master's synthesized records
 
 **Code:** `tes5_import/import_main.py` (`_adopt_master_special_records`),
@@ -2057,6 +2314,16 @@ audience (NQDBeggars does: GetInFaction(Beggars), so its conditionless beggar
 lines must stay quest-scoped, NOT be narrowed to whichever NPCs a sibling
 happens to name).
 
+<a id="greetings-only-open-a-talk"></a>**A GREETING line is said only as a talk
+opens (built 2026-09-30, untested in game).** Every INFO of a source GREETING
+group carries `IsInDialogueWithPlayer == 1`, which the CK wiki names as the way
+to keep a line valid only in the dialogue menu; vanilla does it on 267 of its
+5,287 Hello INFOs. FO3's Dad said four of his CG02 greetings over and over as
+the player stood near him ("5382FC" four times in 10 s), the
+[Problem 1](#problem-1-greeting-lines-are) symptom: the source said GREETING
+only when the player opened the talk. HELLO-sourced lines still bark. The
+Blocking copies of leading lines inherit the gate from their originals.
+
 ### <a id="bark-pnam-stays-default"></a>PNAM stays at the vanilla 50.0
 
 Quest arbitration rides on QUST.DNAM.Priority (see `compute_quest_priorities`),
@@ -2076,3 +2343,102 @@ under a ForceGreet-subtype topic, the channel Skyrim's pursuing guard opens
 (vanilla `DGCrimeForcegreetTopic`, SNAM `PFGT`). Each copy is a shared INFO
 (`DNAM` = the converted greeting): vanilla carries 3,411 DNAM INFOs and none of
 them has TRDT or NAM1. Copies carry no replay lockout.
+
+## <a id="fallout-dialogue-pause"></a>FO3/FNV dialogue pauses the world (2026-09-30, untested in game)
+
+**Code:**
+- `script_convert/static_scripts/TES4_DialoguePause.psc`;
+- `tes5_import/dialogue/dialogue_pause_falloutnv.py`;
+- `tes5_import/dialogue/player_alias_quest.py`.
+
+Fallout's dialogue is menu mode: the world is paused, and nobody moves or
+fights until the talk closes. Skyrim's dialogue runs in real time. In the
+2026-09-30 FO3 play-test, two scenes broke because of this:
+- Amata's farewell greeting sets CG04 145 in its end script, before the
+  replies. That stage makes guards 07 and 08 aggressive, and they attacked
+  2 seconds later, mid-conversation (flight recorder 19:09:18 to 19:09:20).
+- Officer Kendall walked in during Amata's wake-up conversation and attacked.
+
+Stopping combat alone wouldn't do: hostiles would still walk up during the
+talk and attack the moment it closed. So a FO3/FNV plugin gets
+`TES4DialoguePauseQuest`, whose PlayerRef alias runs `TES4_DialoguePause`:
+- When the Dialogue Menu opens, the script finds the speaker (the actor in
+  the player's cell with `IsInDialogueWithPlayer`). The pause applies only if
+  that reference or its base is from this plugin, so another game's dialogue
+  in an all-worlds load order keeps running. Then every other living actor in
+  the cell has its AI turned off (`EnableAI(false)`). It retries three times,
+  0.1 s apart, while no speaker shows yet.
+- When the menu closes, every actor it froze gets its AI back. It also
+  thaws them at load, if a save caught them frozen. An actor whose AI was
+  already off isn't touched.
+- The freeze walks the cell over several frames, so a short conversation can
+  close before it finishes: the close's thaw then found nothing, and the
+  freeze went on to stop everyone until the next conversation. Officer
+  Kendall stood unresponsive after Amata's gun handover until the player spoke
+  to him (2026-10-01 play-test). The freeze now records its list before
+  disabling anyone and thaws at once if the menu has already closed.
+- `TES4DialoguePause` (GLOB, 1 as built) is the per-game switch; 0 lets the
+  world run on.
+- An actor running a force greet (current package on Skyrim's `ForceGreet`
+  template, `0003C1C4`, read with SKSE `Package.GetTemplate`) is not frozen,
+  so it can still open its own talk (play-test 2026-09-30, below).
+- The speaker is restrained while the menu is open (`SetRestrained`: it stays
+  put but still thinks and talks). Papyrus has no IsRestrained, but converted
+  scripts restrain with `SetDontMove`, so none of this plugin's actors is
+  restrained already. In
+  the 2026-10-01 play-test Lucas Simms's package changed 3.5 s into the talk
+  and he walked off mid-line.
+
+The quest and switch are written last in the import (`pipeline_finalize`), so
+their new FormIDs can't displace another generated record's.
+
+Limits:
+- Only the player's own cell is scanned (SKSE `Cell.GetNumRefs(62)`). In an
+  exterior, an actor in a neighbouring loaded cell keeps moving.
+- Frozen actors stop mid-stride, as Fallout's pause froze them.
+- Scripts, timers and physics keep running.
+
+### <a id="greeting-order"></a>Greetings keep their source order across Hello and Blocking (built 2026-09-30, untested in game)
+
+**Code:** `tes5_import/dialogue/greeting_order.py`, called from
+`greeting_choices._copies`.
+
+FO3, FNV and Oblivion say the first valid GREETING line in topic order.
+Skyrim says any valid Blocking line before a Hello line, so the
+[greeting layout](#greeting-choices-block) let a leading line beat a plain line
+listed above it. In the 2026-09-30 FO3 play-test the radroach died and CG02
+reached 70, but Dad's "Good work! That's one less Radroach" (`0001F9C6`, a
+Goodbye, `setstage CG02 80`) never played: "Something wrong? That Radroach is
+still over there" (`0001F9C7`, valid from stage 55, with choices) won each
+click, and the quest stopped at 70. For each leading line, each plain line
+above it that one speaker can say (their positive GetIsID sets meet, or
+either names none) now wins as it did:
+- a Goodbye plain line is said from the Blocking topic, in its place (its copy
+  keeps its FormID): an unlinked Blocking line ends the talk, as a Goodbye
+  does;
+- any other plain line stays in Hello, and each copy said from Blocking below
+  it (leading or a moved Goodbye) first asks that the plain line fails: its
+  conditions negated into one OR group, less those the copy asks itself. A
+  moved Goodbye needs this too, or it would beat the Hello lines above it.
+A plain line that is Say Once or Random, or whose conditions hold an OR, has
+no testable negation and is counted as left unordered.
+
+### <a id="force-greet-menu-stage"></a>A force greet's line sets its package's stage only in the menu (built 2026-09-30, untested in game)
+
+**Code:** `script_convert/force_greet_lines.py`, used by
+`pipeline._info_psc`.
+
+In the 2026-09-30 FO3 play-test two force greets started the instant another
+talk closed (Amata 100 ms after Butch's Goodbye, Dad 9 ms after Jonas's), and
+each said its greeting before any menu opened, despite the
+`IsInDialogueWithPlayer` gate. Amata's line ("Butch is such an idiot",
+`000319BB`) sets CG02 32 as it ends, and her Dialogue package
+`CG02AmataFindPlayer` asks that 32 is not done, so the package ended and the
+menu, opening about 3 s later (`fAIForceGreetingTimer`), fell to her Goodbye.
+An INFO naming its package (`GetIsCurrentPackage(<package>) == 1`, on the
+subject) whose conditions wait on a stage the INFO sets now runs its End
+script inside `If UI.IsMenuOpen("Dialogue Menu")`: an early bark leaves the
+package running, and the line said again in the menu sets the stage as the
+source did, replies or not. Measured: 5 FO3 INFOs (CG02's Amata and Butch
+greetings), 0 FNV, 0 Oblivion. The freeze also now spares force greeters
+([dialogue pause](#fallout-dialogue-pause)).

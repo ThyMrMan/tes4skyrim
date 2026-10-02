@@ -2129,6 +2129,15 @@ Identity and voice conditions are deliberately excluded: the response topic
 already carries its own `GetIsID`, and only the missing TIMING gate is inherited.
 An always-available greeting has no timing conditions and yields an empty list.
 
+<a id="own-stage-gates"></a>**A gate the revealer's own script ends is not
+inherited** (built 2026-10-01, untested in game). Amata's Vault-door greeting
+(CG04, `GetStageDone CG04 145 == 0`) sets stage 145 in its own end script,
+so its three choices, which inherited that gate, were already closed when
+the line ended: the dialogue closed and her generic goodbye played instead.
+`quest_state_ctdas` now leaves out a stage gate that a `setstage` in the
+revealer's own result scripts makes false; gates it leaves true
+(`GetStage CG04 >= 140`) stay.
+
 ### <a id="authored-objectives"></a>Authored objectives (FO3/FNV)
 
 **Code:** `tes5_import/dialogue/quest_falloutnv.py`, called from `convert_QUST`.
@@ -2149,3 +2158,16 @@ matter how many objectives its scripts display.
 Target conditions go through `convert_ctda_list_with_strings` so a
 `GetQuestVariable` gate (160 of FNV's 1,229 target conditions) becomes the
 `GetVMQuestVariable` read with its CIS2 name, rather than a dropped marker.
+
+## FO3/FNV stage log text is not journal text (2026-09-30, untested in game)
+<a id="fallout-stage-log-text"></a>
+
+**Code:** `dialogue/quest.py` `_stage_log_entry`, `_quest_has_journal`
+
+FO3/FNV's Pip-Boy lists quests by their objectives; a stage's Log Entry text
+never displays, and authors used it for notes. FO3 `CG03Test` ("G.O.A.T. script
+quest") holds one stage per skill with notes like "Check if barter skill (skill
+1) is now one of the 3 highest skills?"; written as Skyrim `CNAM` journal text,
+the G.O.A.T. put that helper quest in the journal for good. For a Fallout
+source a stage entry keeps its QSDT and conditions but no `CNAM`, and log text
+no longer makes a quest's DNAM type visible: only authored objectives do.

@@ -10,7 +10,7 @@ from ..base.constants import LOD_SIZE_THRESHOLD
 from ..base.mesh_bounds import get_mesh_physics_flags
 from .common import (
     VENDOR_KYWD,
-    _common_header_subs,
+    common_header_subs,
     prefix_path,
     _resolve_obnd,
     _simple_object,
@@ -46,7 +46,7 @@ def convert_STAT(rec: dict) -> bytes:
     max_dim = max(x2 - x1, y2 - y1, z2 - z1)
     if max_dim >= LOD_SIZE_THRESHOLD:
         flags |= 0x8000       # Has Distant LOD — SSELodGen will build LOD for this object
-    subs = _common_header_subs(rec, need_full=False, obnd_override=bounds)
+    subs = common_header_subs(rec, need_full=False, obnd_override=bounds)
     path = get_str(rec, 'Model.MODL')
     if path:
         subs += pack_string_subrecord('MODL', prefix_path(path))
@@ -185,6 +185,7 @@ def _door_model_sounds(rec: dict) -> dict:
 #   CONT  SNAM 'Sound - Open'      QNAM 'Sound - Close'
 #   DOOR  SNAM 'Sound - Open'      ANAM 'Sound - Close'   BNAM 'Sound - Loop'
 #   LIGH  SNAM 'Sound'
+#   TACT  SNAM 'Looping Sound'     (FO3/FNV talking activators)
 #
 # DOOR is confirmed against a real dump as well as the definition: Skyrim.esm's
 # WRDragonSideDoor01 has SNAM 0005AFC9, the SNDR DRSWoodImperialDouble01OpenSD.
@@ -192,13 +193,12 @@ def _door_model_sounds(rec: dict) -> dict:
 # sconce and brazier — so although vanilla sounds only 3 lights, the slot is
 # live on hundreds of placed refs in a converted interior.
 #
-# MSTT and TACT also type SNAM as [SNDR], but neither is listed: no MSTT or
-# TACT we write can ever hold a placeholder, so an entry would only ever scan
-# and never patch.  MSTT exists solely as convert_STAT's havok retype, and TES4
-# STAT has no sound field at all (0 SNAM keys across Oblivion's 6,014 and
-# Nehrim's 7,205 STATs); TACT is synthesized only by speaker_activators, which
-# writes VNAM and never SNAM.  Add one back only alongside a converter that
-# actually emits the slot.
+# MSTT also types SNAM as [SNDR] but is not listed: no MSTT we write can ever
+# hold a placeholder, so an entry would only ever scan and never patch.  MSTT
+# exists solely as convert_STAT's havok retype, and TES4 STAT has no sound
+# field at all (0 SNAM keys across Oblivion's 6,014 and Nehrim's 7,205 STATs).
+# TACT is listed for convert_TACT, which carries a Fallout talking
+# activator's looping SOUN; the speak-as TACTs write no SNAM.
 #
 # 🛑 VNAM IS NOT A SOUND SLOT ON EVERY RECORD.  It is [SNDR] on ACTI
 # ('Sound - Activation') but [VTYP] on TACT ('Voice Type') — xEdit
@@ -225,6 +225,7 @@ _SNDR_SLOTS = {
     'CONT': (b'SNAM', b'QNAM'),
     'DOOR': (b'SNAM', b'ANAM', b'BNAM'),
     'LIGH': (b'SNAM',),
+    'TACT': (b'SNAM',),
 }
 
 
@@ -343,6 +344,8 @@ def convert_FLOR(rec: dict) -> bytes:
 
 #: MODL path -> seat list (cluster_seats); MNAM bits 0-23 enable NIF marker 0-23.
 _FURN_SEATS: dict = {}
+#: Vanilla CounterLeanMarker's keywords: FurnitureSpecial, FurnitureCounterLeanMarker, RaceToScale.
+COUNTER_LEAN_KEYWORDS = (0x0006E9C7, 0x00088106, 0x000FD0E1)
 # Original TES4 base FormID (uppercase 8-hex string) -> origin shift for its
 # model.  The NIF converter re-origins marker-bearing models to the vanilla
 # floor-origin convention (the engine anchors seated actors to the REFR z),
@@ -477,16 +480,15 @@ def load_furniture_models(meshes_dir, by_type, ctx=None, quiet=False) -> int:
 
 
 def convert_FURN(rec: dict) -> bytes:
-    extra = b''
     tes4_flags = get_int(rec, 'MNAM.Flags')
+    modl = get_str(rec, 'Model.MODL')
+    seats = _FURN_SEATS.get(_furn_model_key(modl)) if modl else None
+    extra = pack_keywords(COUNTER_LEAN_KEYWORDS if any(s.get('counter_lean') for s in seats or ()) else ())
 
     # PNAM — 4 unknown bytes (empty placeholder, required by engine)
     extra += pack_subrecord('PNAM', b'\x00\x00\x00\x00')
     # FNAM — U16 flags (bit 1 = Ignored By Sandbox); pass 0
     extra += pack_subrecord('FNAM', struct.pack('<H', 0))
-
-    modl = get_str(rec, 'Model.MODL')
-    seats = _FURN_SEATS.get(_furn_model_key(modl)) if modl else None
 
     if seats == []:
         # NIF read successfully but has NO furniture markers: enabling any
@@ -508,7 +510,7 @@ def convert_FURN(rec: dict) -> bytes:
         # WBDT — workbench data: type None, skill -1 (vanilla standard)
         extra += pack_subrecord('WBDT', struct.pack('<Bb', 0, -1))
         # FNPR — one per NIF marker position, in position order:
-        # Type (1=Sit, 2=Sleep) + entry-point flags.  Only the entry
+        # Type (1=Sit, 2=Sleep, 4=Lean) + entry-point flags.  Only the entry
         # directions whose TES4 entry marker was enabled in this record's
         # bitmask are allowed; if the record enables none of a seat's
         # entries, allow all of them (seat unreachable otherwise).
@@ -519,8 +521,7 @@ def convert_FURN(rec: dict) -> bytes:
                     enabled |= flag
             if not enabled:
                 enabled = seat['entry_flags']
-            anim_type = 2 if seat['sleep'] else 1
-            extra += pack_subrecord('FNPR', struct.pack('<HH', anim_type, enabled))
+            extra += pack_subrecord('FNPR', struct.pack('<HH', seat['anim'], enabled))
     else:
         # Source NIF unavailable: conservative single seat, all entries.
         is_sleep = bool(tes4_flags & 0x80000000)

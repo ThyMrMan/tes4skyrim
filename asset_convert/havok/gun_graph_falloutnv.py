@@ -39,6 +39,8 @@ ZOOM_VAR = 'iGunZoom'
 ZOOM_BLEND_VAR = 'fGunZoom'
 #: hkbBlenderGenerator flags: sync + parametric, what every vanilla parametric blend carries.
 PARAMETRIC_BLEND = 17
+#: hkbBlenderGenerator FLAG_DONT_DEACTIVATE_CHILDREN_WITH_ZERO_WEIGHTS: the trigger clip runs at any pitch.
+KEEP_ZERO_WEIGHT = 8
 #: REAL variable: the automatic loop clip's playbackSpeed, weaponSpeedMult x loop duration.
 LOOP_SPEED_VAR = 'fGunLoopSpeed'
 #: Events the gun clips raise for their own machines.
@@ -401,18 +403,24 @@ class GunGraphBuilder(GraphBuilder):
         """Blend of (down, level, up) clips on the engine's AimPitchCurrent.
 
         A missing level clip leaves down/up whose midpoint is the level pose.
+        Only one clip carries `triggers`, kept running at zero weight: each
+        weighted clip raising them fired one pull twice.
+        See: docs/commentary/tes_runtime_guns.md#one-shot-per-pull
         """
         down, level, up = stems
+        carrier = level or down or up
         kids = []
         for stem, anchor in ((down, -1.2), (level, 0.0), (up, 1.2)):
             if stem:
-                kids.append((lambda s=stem, a=anchor: self.clip(
-                    f'{name}_{s}', s, looping, triggers=triggers,
+                kids.append((lambda s=stem: self.clip(
+                    f'{name}_{s}', s, looping,
+                    triggers=triggers if s == carrier else (),
                     speed_var=speed_var).ref, anchor))
         if len(kids) == 1:
-            return self.clip(name, next(s for s in stems if s), looping,
+            return self.clip(name, carrier, looping,
                              triggers=triggers, speed_var=speed_var)
-        return self._blender(name, kids, 'AimPitchCurrent', '0.000000', 17)
+        flags = PARAMETRIC_BLEND | (KEEP_ZERO_WEIGHT if triggers else 0)
+        return self._blender(name, kids, 'AimPitchCurrent', '0.000000', flags)
 
 
 # ---------------------------------------------------------------------------

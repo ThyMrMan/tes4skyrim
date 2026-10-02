@@ -5,6 +5,8 @@
 // ammo restriction, iron sights and gun parts ride on it (fire.cpp, zoom.cpp,
 // parts.cpp). Every sidecar is read from Data\SKSE\Plugins\FalloutRuntime\.
 //
+// The hit log (hits.cpp) writes one line per hit the player gives or takes.
+//
 // Limb severing (sever.cpp) is compiled but DORMANT: it has never worked in
 // game, so nothing here installs its hooks or its co-save.
 // See: docs/commentary/asset_convert_falloutnv.md#dismemberment
@@ -16,6 +18,7 @@
 #include "addresses.h"
 #include "engine.h"
 #include "guns.h"
+#include "hits.h"
 #include "log.h"
 #include "paths.h"
 #include "skse_abi.h"
@@ -99,6 +102,8 @@ __declspec(dllexport) bool SKSEPlugin_Load(const SKSEInterface* skse) {
     QueryInterfaces(skse);
     g_gunsInstalled = ResolveEngine() && InstallGuns();
     Log("hooks: gun routing %s", g_gunsInstalled ? "installed" : "NOT installed");
+    const bool hits = g_gunsInstalled && InstallHitLog();
+    Log("hooks: hit log %s", hits ? "installed" : "NOT installed");
     return true;
 }
 

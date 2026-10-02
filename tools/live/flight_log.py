@@ -32,7 +32,7 @@ from tools.script.papyrus_tail import documents_dir
 #: Event fields holding a reference id; `<field>_base` holds its base object.
 REF_FIELDS = ('speaker', 'actor', 'trigger', 'target', 'by', 'furniture', 'killer')
 #: Event fields holding a plain form id.
-FORM_FIELDS = ('quest', 'info', 'package', 'cell', 'item', 'from', 'to')
+FORM_FIELDS = ('quest', 'info', 'package', 'cell', 'item', 'from', 'to', 'source', 'projectile')
 #: Fields that are bookkeeping, not event content.
 HIDDEN = ('t', 'ms', 'ev', 'raw', 'forms')
 _COMPRESSED = 0x00040000

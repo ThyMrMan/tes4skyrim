@@ -15,6 +15,7 @@ See: docs/commentary/tools_preflight.md#dialogue-loss
 import re
 from collections import Counter, defaultdict
 
+from tools.validate.preflight import dialogue_rules, greeting_replies
 from tools.validate.preflight.findings import Finding
 from tools.validate.preflight.plugin_index import first, u32, zstring
 from tools.validate.preflight.quest_source import required_speakers, speakable
@@ -90,5 +91,6 @@ def speaker_findings(ctx, lost: list) -> list:
 
 
 def audit(ctx) -> list:
-    """The dialogue loss findings for one game."""
-    return speaker_findings(ctx, lost_lines(ctx)) + bark_findings(ctx.game, ctx.index)
+    """Lost lines, unshown greeting replies and engine-rule findings."""
+    return (speaker_findings(ctx, lost_lines(ctx)) + bark_findings(ctx.game, ctx.index)
+            + greeting_replies.audit(ctx) + dialogue_rules.audit(ctx))

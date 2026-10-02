@@ -556,6 +556,38 @@ PWAT, IDLM, ASPC) keeps model plus bounds; without it the 10,000+ REFRs those
 base is null and the engine faults promoting them into their location.
 `export_ACTIVATOR_BASE` (TERM, TACT) adds a display name and the script.
 
+<a id="terminals"></a>**Terminals** (`terminal_falloutnv.py`, `export_TERMINAL`).
+Until 2026-09-30 a TERM was only its activator fields, so none of Fallout 3's
+378 or New Vegas's 344 terminals could show a menu, and CG04's escape through
+the Overseer's terminal could not finish. The TERM body (xEdit
+`wbRecord(TERM)`) is now written too:
+- the welcome text (`DESC`);
+- the looping sound (`SNAM`);
+- the password note (`PNAM`);
+- `DNAM.Difficulty` (0 Very Easy to 4 Very Hard, 5 Requires Key),
+  `DNAM.Flags` (0x02 Unlocked) and `DNAM.Server`;
+- one `Item[i]` run per menu item: `Text` (ITXT), `Result` (RNAM), `Flags`
+  (ANAM: 0x01 Add Note, 0x02 Force Redraw), `Note` (INAM, the note it
+  displays), `SubMenu` (TNAM, another TERM), `Script` (SCTX), `SCRO[k]` and
+  `Condition[k].Raw`.
+
+An item opens on ITXT, or on an RNAM after an item that already has one,
+since ITXT is optional. A census of the masters:
+
+| | Terminals | Locked | Requires key | Over 9 items | Item scripts | Display notes | Sub-menus |
+|---|---|---|---|---|---|---|---|
+| Fallout3.esm | 378 | 147 | 11 | 10 | 371 | 659 | 101 |
+| FalloutNV.esm | 344 | 151 | 5 | 2 | 208 | 542 | 86 |
+
+Item scripts, display notes and sub-menus are counted per item.
+
+<a id="talking-activators"></a>`export_TALKING_ACTIVATOR` adds a TACT's own
+fields (xEdit `wbRecord(TACT)`): `SNAM` (looping sound), `VNAM` (voice type)
+and FNV's `INAM` (radio template). Without `VNAM` no intercom could be given a
+voice: 31 of Fallout3.esm's 49 TACTs and 57 of FalloutNV.esm's 87 carry one,
+every quest intercom among them
+([talking activators](tes5_import_dialogue.md#fallout-talking-activators)).
+
 <a id="notes-are-items"></a>**NOTE is an item, not an activator.** A Pip-Boy
 note (894 in FalloutNV.esm: text, image, sound or voice) was exported as an
 activator and imported as an ACTI, and the script converter read `GetHasNote`
@@ -711,6 +743,13 @@ Body+Forearms (BOD2 `0x14`), and Skyrim's own feet addon kept rendering over
 the outfit's boots (the Caravaneer Outfit, flags 4, as do 222 of the 380 FNV
 ARMO records). `biped_slot_tables` therefore adds 37-Feet to Upper Body for a
 Fallout source, and `ARMA_BODY_COVERAGE_EXTRA` then brings in Calves.
+
+For the same reason Upper Body also claims **49, the lower body**
+(2026-09-29). The [body-slot patch](asset_convert_armor.md#body-slot-layout)
+moves the vanilla skin's legs, underwear included, off 32 into a Legs addon on
+49, and it leaves the conversion's own armor alone. An outfit on 32 and 37
+alone therefore stopped hiding the legs, and male characters showed Skyrim's
+underwear through the vault jumpsuit.
 
 The mesh side keeps a single 32 partition for the whole outfit
 (`wearable_plan_falloutnv.FNV_BIPED_BIT_BODY_PART`): a partition renders
@@ -1133,3 +1172,59 @@ written as `Patrol.IdleTime`, `Patrol.Idle`, `Patrol.Script`,
 `Patrol.SCRO[i]` and `Patrol.Topic` by the same stream walk the package
 sections use, keyed on `XPPA`. The actors' linked references (`XLKR`), the
 chain a patrol walks, are written for ACHR and ACRE too.
+
+## <a id="activate-parents"></a>Activate parents (2026-09-30, untested in game)
+
+**Code:** `tes4_export/record_types/falloutnv.py` `_emit_activate_parents`;
+`tes5_import/record_types/world_falloutnv.py` `activate_parent_subrecords`,
+written by `convert_REFR` and `convert_ACHR` after the scale.
+
+A FO3/FNV reference can list Activate Parents: `XAPD` (a byte, Parent
+Activate Only) and one `XAPR` per parent (FormID, delay in seconds).
+Activating a parent also activates the child after its delay. That is how an
+unscripted switch works a door: CG04's wall panel `CG04SecretDoorREF` names the
+switch `CG04DoorSwitchREF` (`GenElecSwitch01`, no script) with a 0.5 s delay.
+The panel's own script ignores the player and opens for anything else. The
+exporter dropped both subrecords, so the switch did nothing. In the
+2026-09-30 play-test the player had to clip past the panel; the walkthrough in
+the official guide describes pressing that switch.
+
+Fallout 3 has 294 references with an `XAPR`. Skyrim has the same subrecords
+in the same layout (xEdit `wbDefinitionsTES5` REFR and ACHR: XAPD, then XAPR
+sorted by FormID), so they are exported as `XAPD.ParentActivateOnly` and
+`XAPR[i].Ref` / `XAPR[i].Delay`, and written back unchanged.
+
+Not verified: whether Skyrim hands a child the parent as `akActionRef`, as
+Fallout did. The panel's converted script opens only for a non-player
+activator.
+
+## <a id="npc-base-health"></a>NPC DATA is base health and S.P.E.C.I.A.L. (2026-10-01, untested in game)
+
+**Code:** `record_types/falloutnv.py` `_emit_npc_deltas`.
+
+A FO3/FNV NPC_ DATA is 11 bytes: Base Health (int32) and the seven
+S.P.E.C.I.A.L. values. TES4's NPC_ DATA is skills, so the shared exporter
+emitted nothing and every Fallout NPC imported at the default 50 health.
+Escape!'s Ellen DeLoria carries 300 (her MS16 copy 100) so she survives the
+radroaches until the player arrives; at 50 she died 13 seconds after they
+appeared (2026-10-01 play-test). The export now writes `DATA.BaseHealth`
+and `DATA.Strength` .. `DATA.Luck`; the importer turns them into hit points
+([NPC health](tes5_import_falloutnv_actors.md#npc-health)).
+
+## <a id="no-tracers"></a>A converted projectile is never a tracer (2026-10-01, confirmed in game)
+
+**Code:** `tes5_import/record_types/projectile_falloutnv.py` `convert_PROJ`.
+
+FO3 gives its 10mm round tracer chance 1.0, so every shot drew a tracer.
+In Skyrim a tracer round does not hit actors: in four shot-trace sessions
+(2026-10-01) no FO3 10mm round in flight hit Officer Kendall, Gomez, Lydia or
+a radroach, while it stopped on the walls behind them, launched straight down
+the first-person crosshair. Each other difference was ruled out in game, one
+at a time, by patching the built plugin: projectile type (Arrow instead of
+Missile), speed (3,600, vanilla arrow speed), the Alt. Trigger flag, and the
+model (Skyrim's `IronArrowFlight.nif`, which has a collision body). Skyrim's
+own `ArrowIronProjectile` fired through the same gun did hit, and so did the
+10mm round with only its tracer chance set to 0: 17 of 19 rounds hit an
+actor. The converter now writes tracer chance 0 on every PROJ (FNV's 9mm
+already had 0).
+

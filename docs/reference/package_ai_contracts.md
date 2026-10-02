@@ -53,7 +53,7 @@ compares the BASE form; PlayerRef's base is vanilla `0x00000007`, not the
 converted `0x01000007`). The blanket version broke 667 INFOs / 101 topics and
 stripped whole NPCs' topic lists.
 
-## PTDA slot 3 is Distance, not Count
+## <a id="ptda-distance"></a>PTDA slot 3 is Distance, not Count
 
 **TES4 `PTDT.Count` must NEVER be copied into TES5 `PTDA`'s third field.** That
 slot is "Count / **Distance**" (xEdit wbDefinitionsTES5.pas ~8665) and for a

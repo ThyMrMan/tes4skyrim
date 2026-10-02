@@ -11,7 +11,7 @@ def test_claimed_key_keeps_its_slot_against_a_later_collider():
     claims = claim_existing(writer, 'export/FalloutNV.esm')
     site, key = CLAIMS['falloutnv.esm'][0]
     claimed = writer.derive_formid(site, key)
-    assert claims == 1
+    assert claims == len(CLAIMS['falloutnv.esm'])
     assert writer.derive_formid('TEST_SITE', 'late') != claimed
 
 

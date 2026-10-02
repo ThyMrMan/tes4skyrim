@@ -13,10 +13,14 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from tools.validate.preflight.plugin_index import every, first, u32, zstring
-from tools.validate.preflight.quest_source import SETSTAGE, START, STARTQUEST, decode_condition, speakable
+from tools.validate.preflight.quest_source import (SETSTAGE, START, STARTQUEST, addressed_elsewhere,
+                                                   decode_condition, speakable)
 
 #: `X.TES4SetStage(Quest as Type, 5)` or a bare `TES4SetStage(Quest, 5)`.
 _TES4_SETSTAGE = re.compile(r'\bTES4SetStage\(\s*([\w.()]+)(?:\s+as\s+\w+)?\s*,\s*(-?\d+)\s*\)', re.I)
+
+#: `TES4Polyfill.SetStage(Quest, 5)`, the converted SetStage on a quest with no converted script.
+_POLYFILL_SETSTAGE = re.compile(r'\bTES4Polyfill\.SetStage\(\s*([\w.()]+)(?:\s+as\s+\w+)?\s*,\s*(-?\d+)\s*\)', re.I)
 
 #: `Quest.SetStage(5)`, including `GetOwningQuest().SetStage(5)`.
 _DOT_SETSTAGE = re.compile(r'([\w.()]+)\.SetStage\(\s*(-?\d+)\s*\)', re.I)
@@ -75,7 +79,8 @@ def strip_papyrus_comment(line: str) -> str:
 
 def _line_calls(code: str, function: str) -> list:
     """Every SetStage call on one uncommented line."""
-    calls = [Call(function, q.lower(), int(s)) for q, s in _TES4_SETSTAGE.findall(code)]
+    calls = [Call(function, q.lower(), int(s))
+             for pattern in (_TES4_SETSTAGE, _POLYFILL_SETSTAGE) for q, s in pattern.findall(code)]
     calls += [Call(function, q.lower(), int(s)) for q, s in _DOT_SETSTAGE.findall(code)]
     if not calls:
         calls += [Call(function, '', int(s)) for s in _BARE_SETSTAGE.findall(code)]
@@ -158,9 +163,13 @@ class ConvertedDialogue:
         """The decoded CTDAs of one built INFO."""
         return [decode_condition(data) for data in every(rec, 'CTDA')]
 
+    def said_to_npc(self, rec) -> list:
+        """NPCs a non-custom line must be said to, which Skyrim never does."""
+        return [] if self.subtype.get(rec.parent_dial) == 'CUST' else addressed_elsewhere(self.conditions(rec))
+
     def line_speakable(self, rec) -> bool:
-        """Whether a placed actor passes the line's GetIsID requirements."""
-        return speakable(self.conditions(rec), self.present)
+        """Whether a placed actor passes its GetIsID tests, to a valid listener."""
+        return speakable(self.conditions(rec), self.present) and not self.said_to_npc(rec)
 
     def _reachable(self) -> set:
         """Topics a player can reach: non-custom, open branch starts, named, or linked.
@@ -192,6 +201,11 @@ class ConvertedDialogue:
         if rec.parent_dial not in self.live:
             return (f'its topic {self.index.edid(rec.parent_dial) or hex(rec.parent_dial)} '
                     'is not reachable in Skyrim')
+        listeners = self.said_to_npc(rec)
+        if listeners:
+            names = ', '.join(self.index.edid(f) or f'{f:08X}' for f in listeners)
+            return (f'it is said to {names} from {self.index.edid(rec.parent_dial) or "a"} '
+                    f'{self.subtype.get(rec.parent_dial)} topic, which Skyrim says only to the player')
         if not self.line_speakable(rec):
             return 'no placed actor passes its GetIsID condition'
         return ''

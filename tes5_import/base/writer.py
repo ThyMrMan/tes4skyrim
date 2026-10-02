@@ -993,6 +993,17 @@ class PluginWriter:
         for blobs in self._top_groups.values():
             yield from (b for b in blobs if b[:4] != b'GRUP')
 
+    def patch_records(self, group_sig: str, patch) -> int:
+        """Replace each top-level `group_sig` record's bytes with `patch(bytes)`; returns how many changed."""
+        changed = 0
+        with self._lock:
+            blobs = self._top_groups.get(group_sig, [])
+            for i, blob in enumerate(blobs):
+                new = patch(blob) if blob[:4] != b'GRUP' else blob
+                changed += new != blob
+                blobs[i] = new
+        return changed
+
     def remove_records(self, unwanted) -> int:
         """Remove each top-level record for which `unwanted(bytes)` holds; returns the count."""
         removed = 0

@@ -208,8 +208,8 @@ FNV_BIPED_SLOT_MAP = {
 }
 
 
-#: FO3/FNV Upper Body also claims 37-Feet; each hand is its own bit, so Hands claims no right hand.
-_FNV_BODY_EXTRA = {2: [7], 3: []}
+#: FO3/FNV Upper Body is a whole outfit: also 37-Feet and 49-lower body; Hands claims no right hand.
+_FNV_BODY_EXTRA = {2: [7, 19], 3: []}
 
 
 def biped_slot_tables(oblivion_map: dict, oblivion_extra: dict) -> tuple:

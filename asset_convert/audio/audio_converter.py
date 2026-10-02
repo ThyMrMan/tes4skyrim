@@ -534,16 +534,24 @@ def load_voice_map(map_path) -> dict:
             if not line or line.startswith('#') or '=' not in line:
                 continue
             fid_hex, value = line.split('=', 1)
-            if '\t' in value:
-                prefix, vt = value.split('\t', 1)
-                vtyps = [v for v in vt.split(',') if v]
-            else:
-                prefix, vtyps = value, []
             try:
-                voice_map[int(fid_hex, 16) & 0xFFFFFF] = (prefix, vtyps)
+                voice_map[int(fid_hex, 16) & 0xFFFFFF] = voice_entry(value)
             except ValueError:
                 continue
     return voice_map
+
+
+def voice_entry(value) -> tuple:
+    """(prefix, [target VTYPs], [lent VTYPs]) from a voicemap value or an older prefix/pair.
+
+    A lent VTYP is a talking activator's folder: every take from one of the line's own folders is copied there too.
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+    """
+    if isinstance(value, tuple):
+        return value + ([],) * (3 - len(value))
+    prefix, *lists = value.split('\t')
+    vtyps, lent = ([v for v in field.split(',') if v] for field in (lists + ['', ''])[:2])
+    return prefix, vtyps, lent
 
 
 def find_voice_map(output_dir, source_name) -> 'dict | None':
@@ -643,15 +651,16 @@ def _voice_destination(m, voice_map, voice_type, lip_text, ffmpeg,
     The prefix comes from the CONVERTED records via *voice_map*, keyed on the
     24-bit InfoFormID; a transcript yields lip-synced .fuz, otherwise .xwm.
     Oblivion holds ONE take per VOICE, so a multi-speaker line emits only into
-    the VTYP this source folder speaks for -- all of them when none is its own.
+    the VTYP this source folder speaks for -- all of them when none is its own --
+    plus every lent (talking activator) VTYP.
 
     See: docs/commentary/asset_convert_audio.md#vnam-voice-routing
     """
     prefix, src_ext = m.group(1), m.group(4).lower()
     fid24 = int(m.group(2), 16) & 0xFFFFFF
-    targets = []
+    targets, lent = [], []
     if voice_map and voice_map.get(fid24) is not None:
-        prefix, targets = voice_map[fid24]
+        prefix, targets, lent = voice_map[fid24]
     text = None
     dst_ext = src_ext
     if ffmpeg and src_ext in ('mp3', 'ogg', 'wav'):
@@ -659,7 +668,8 @@ def _voice_destination(m, voice_map, voice_type, lip_text, ffmpeg,
             text = lip_text.get((fid24, int(m.group(3))))
         dst_ext = 'fuz' if text else 'xwm'
     dst_name = f'{prefix}_{fid24:08x}_{m.group(3)}.{dst_ext}'.lower()
-    return dst_name, [v for v in targets if v == voice_type] or targets, text
+    owned = [v for v in targets if v == voice_type] or targets
+    return dst_name, ((owned or [voice_type]) + lent if lent else owned), text
 
 
 def _voice_leaf_dirs(race_dir, fallout: bool) -> list:
@@ -859,8 +869,7 @@ def organize_voice_files(
     if isinstance(voice_map, (str, Path)):
         voice_map = load_voice_map(voice_map)
     if voice_map:
-        voice_map = {k: (v if isinstance(v, tuple) else (v, []))
-                     for k, v in voice_map.items()}
+        voice_map = {k: voice_entry(v) for k, v in voice_map.items()}
     if voice_map:
         print(f'  Voice map: {len(voice_map)} filename prefixes from importer')
     else:

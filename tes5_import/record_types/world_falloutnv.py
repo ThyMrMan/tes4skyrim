@@ -14,7 +14,7 @@ import struct
 
 from ..base.constants import TES4_REQUIRES_KEY
 from ..base.writer import pack_subrecord
-from .common import get_float, get_int
+from .common import get_float, get_formid, get_int
 
 _XMARKER = 0x0000003B
 _XMARKER_HEADING = 0x00000034
@@ -41,6 +41,23 @@ def register_trigger_bases(by_type: dict, master_export=None) -> None:
     _TRIGGER_BASES.clear()
     masters = [r for r in (master_export or {}).values() if r.get('Signature') == 'ACTI']
     _TRIGGER_BASES.update((r.get('FormID') or '').upper() for r in masters + by_type.get('ACTI', []))
+
+
+def activate_parent_subrecords(rec: dict) -> bytes:
+    """XAPD, then one XAPR per parent sorted by FormID; b'' for a reference with none.
+
+    FO3/FNV and Skyrim share the layout: activating a parent also activates
+    this reference after the delay (CG04's wall-panel switch opens its door).
+    See: docs/commentary/tes4_export_falloutnv.md#activate-parents
+    """
+    parents, i = [], 0
+    while rec.get(f'XAPR[{i}].Ref'):
+        parents.append((get_formid(rec, f'XAPR[{i}].Ref'), float(rec.get(f'XAPR[{i}].Delay') or 0)))
+        i += 1
+    if not parents:
+        return b''
+    out = pack_subrecord('XAPD', struct.pack('<B', int(rec.get('XAPD.ParentActivateOnly') or 0)))
+    return out + b''.join(pack_subrecord('XAPR', struct.pack('<If', fid, delay)) for fid, delay in sorted(parents))
 
 
 def trigger_layer(rec: dict) -> bytes:

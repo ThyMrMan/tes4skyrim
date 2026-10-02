@@ -618,6 +618,9 @@ PLACED_REF_SIGS = ('ACHR', 'ACRE', 'REFR')
 #: The importer's force-greet alias quest, which StartConversation's Quest property names.
 FORCE_GREET_QUEST = 'TES4ForceGreets'
 
+#: The importer's FLST of every actor's talking-as list, which SetTalkingActivatorActor's FormList property names.
+TALKING_LISTS_PROPERTY = 'TES4TalkingAsLists'
+
 #: The importer's flee alias quest, which ForceFlee's Quest property names.
 FORCE_FLEE_QUEST = 'TES4ForceFlees'
 
@@ -626,6 +629,9 @@ COMBAT_APPROACH_QUEST = 'TES4CombatApproaches'
 
 #: The static script on that quest that queues and carries out StartCombat and StopCombat.
 COMBAT_QUEUE_SCRIPT = 'TES4_CombatQueue'
+
+#: The static alias script that re-checks its actor's AI packages when its quest's stage is set.
+STAGE_PACKAGE_ALIAS_SCRIPT = 'TES4_StagePackageAlias'
 
 #: The importer's fall-damage spell, which ResetFallDamageTimer's Spell property names.
 FALL_DAMAGE_SPELL = 'TES4NoFallDamage'

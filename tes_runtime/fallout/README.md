@@ -52,8 +52,12 @@ switched on yet.
   [tes_runtime_guns.md](../../docs/commentary/tes_runtime_guns.md)
 - **HUD ammo counter** (`hud.cpp`): compiled; `InstallHud` is not called
   anywhere yet.
+- **Hit log** (`hits.cpp`): one `FalloutRuntime.log` line per hit the player
+  gives or takes, with the weapon, the damage and the health it cost.
+  [tes_runtime_guns.md](../../docs/commentary/tes_runtime_guns.md#hit-log)
 - **Limb severing** (`sever.cpp`): 🛑 **dormant**. It has never worked in game,
-  so it is compiled but nothing installs its hooks or its co-save. The importer
+  so it is compiled but nothing installs its hooks or its co-save. When enabled
+  it rides the hit log's ApplyHit hook. The importer
   still writes `<plugin>.bodyparts.json`.
   [asset_convert_falloutnv.md](../../docs/commentary/asset_convert_falloutnv.md#dismemberment)
 

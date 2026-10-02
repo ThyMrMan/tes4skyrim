@@ -876,6 +876,25 @@ Function EvaluatePackage(Actor akActor) Global
   akActor.EvaluatePackage()
 EndFunction
 
+; The mod event `akQuest`'s TES4_StagePackageAlias aliases listen on.
+String Function StageEventName(Quest akQuest) Global
+  Return "TES4StageSet" + akQuest.GetFormID()
+EndFunction
+
+; After a converted SetStage: every alias of `akQuest` carrying its packages
+; re-checks its actor, as Oblivion did on its own, each on its own thread.
+; See docs/commentary/script_convert.md#setstage-re-evaluates-alias-packages
+Function StageSet(Quest akQuest) Global
+  akQuest.SendModEvent(StageEventName(akQuest))
+EndFunction
+
+; TES4 SetStage on a quest with no converted script (one that has uses its TES4SetStage).
+Bool Function SetStage(Quest akQuest, Int aiStage) Global
+  Bool done = akQuest.SetStage(aiStage)
+  StageSet(akQuest)
+  Return done
+EndFunction
+
 ; TES4 `StartConversation Player [topic]`.  Papyrus cannot open dialogue, so the
 ; actor joins one alias of the topic's pool on the importer's TES4ForceGreets
 ; quest; that alias's ForceGreet package walks over and opens the topic.
@@ -1183,11 +1202,13 @@ EndFunction
 ;
 ;     Variable03  real time this speaker's last End fragment ran (grace stamp)
 ;     Variable04  running average of this speaker's End overhead (adaptive tail)
-;     Variable06  real time the current line began (diagnostics)
+;     Variable06  real time the current line began (with Variable09, the
+;                 lost-End deadline: SPEAK_DEADLINE_PAD seconds past the line)
 ;     Variable07  claim token while a SayLine is in progress for this speaker
 ;     Variable08  claim deadline (game time, days) - a stale claim expires
 ;     Variable09  length of the line now playing (0 = not speaking)
-;     Variable10  speaking deadline (game time) - a lost End fragment expires
+;   Variable01, 02, 05 and 10 stay free on NPCs: converted content gates on
+;   them (FO3's water beggars on Variable10).
 ;   and on the PLAYER, Variable05/06 = hi/lo halves of the FormID of the last
 ;   actor to speak a line inside the player's dialogue menu (PlayerIsInDialogue)
 ;   and Variable04 = the game-wide End-overhead average, and Variable07 =
@@ -1500,17 +1521,6 @@ Function LineBegan(ObjectReference akSpeakerRef, Float afLength) Global
   If until > gp.GetActorValue("Variable07")
     gp.SetActorValue("Variable07", until)
   EndIf
-  ; Speaking deadline: VERY generous.  It only exists so a LOST End (actor
-  ; killed or unloaded mid-line) cannot strand the speaker as busy forever;
-  ; a late one must always hold a re-Say off.  Measured 2026-08-16 under a
-  ; starved VM (start of CharacterGen): End fragments of 1-2s lines ran
-  ; 11-17s late, a 10s margin expired first, and the speaker's own poll
-  ; re-Said the line ("Yessir" twice).
-  Float bound = afLength
-  If bound <= 0.0
-    bound = 10.0
-  EndIf
-  a.SetActorValue("Variable10", Utility.GetCurrentGameTime() + _GameDays(bound + 30.0))
   a.SetActorValue("Variable06", Utility.GetCurrentRealTime())
   ; A line spoken IN THE PLAYER'S DIALOGUE MENU: remember the speaker on the
   ; player, so PlayerIsInDialogue() can ask that actor whether the menu is
@@ -1636,7 +1646,7 @@ EndFunction
 ;
 ; Two states count as speaking:
 ;   * a tracked line is playing (Variable09 > 0), bounded by the lost-End
-;     deadline in Variable10;
+;     deadline from its start (Variable06);
 ;   * the line's End fragment has JUST run and the engine still counts him as
 ;     talking -- the grace window.  Variable03 holds the real time the End
 ;     fragment finished, and the tail (this actor's measured End overhead) is
@@ -1673,8 +1683,21 @@ Bool Function _OtherLineInProgress() Global
 EndFunction
 
 Bool Function _IsSpeaking(Actor a) Global
-  If a.GetActorValue("Variable09") > 0.0 && Utility.GetCurrentGameTime() < a.GetActorValue("Variable10")
-    Return True
+  ; The lost-End deadline is VERY generous: it only keeps a LOST End (actor
+  ; killed or unloaded mid-line) from stranding the speaker as busy; a late
+  ; End must always hold a re-Say off.  Measured 2026-08-16 under a starved
+  ; VM: End fragments of 1-2s lines ran 11-17s late, a 10s margin expired
+  ; first, and the speaker's own poll re-Said the line ("Yessir" twice).
+  ; A start from an earlier, longer session is in this one's future: expired.
+  Float len = a.GetActorValue("Variable09")
+  If len > 0.0
+    If len < 10.0
+      len = 10.0
+    EndIf
+    Float playing = Utility.GetCurrentRealTime() - a.GetActorValue("Variable06")
+    If playing >= 0.0 && playing < len + SPEAK_DEADLINE_PAD()
+      Return True
+    EndIf
   EndIf
   Float ended = a.GetActorValue("Variable03")
   If ended <= 0.0
@@ -1699,11 +1722,16 @@ EndFunction
 ; The reason the old SAY_TAIL genuinely mattered is a different one: it was on
 ; the CALLER'S TIMER, so a late End let the countdown expire while the line
 ; was still playing and the poll re-Said it (the duplicated "Yessir").  That
-; case is now covered directly by Variable09 + the Variable10 deadline, which
+; case is now covered directly by Variable09 + the lost-End deadline, which
 ; are exact.  So this only has to bridge the frame between LineEnded running
 ; and the engine's own talking flag clearing.
 Float Function SAY_GRACE() Global
   Return 0.05
+EndFunction
+
+; Seconds past a line (at least 10s long) before its lost End stops counting.
+Float Function SPEAK_DEADLINE_PAD() Global
+  Return 30.0
 EndFunction
 
 
@@ -1744,6 +1772,38 @@ Function ResetInterior(Cell akCell, FormList akMovers) Global
     EndIf
   EndWhile
   akCell.Reset()
+EndFunction
+
+; ================================================= talking activators ==
+;
+; FO3/FNV `[talker.]SetTalkingActivatorActor [actor]` -- the talking activator
+; speaks, and is spoken to, as the actor; with no actor, as itself.  Papyrus
+; cannot set Skyrim's talking actor, so the importer gives every actor a
+; talker speaks as a formlist holding that actor's own base (all listed in
+; akLists), and ORs IsInList(<that list>) beside each GetIsID(<actor>) on its
+; lines.  The talker's base leaves every list, then joins the one that holds
+; the actor's base (tes5_import/dialogue/talking_as_falloutnv.py).
+
+Function SetTalkingActivatorActor(ObjectReference akTalker, Actor akActor, FormList akLists) Global
+  If akTalker == None || akLists == None
+    Return
+  EndIf
+  Form talker = akTalker.GetBaseObject()
+  Form actorBase = None
+  If akActor
+    actorBase = akActor.GetActorBase()
+  EndIf
+  Int i = akLists.GetSize()
+  While i > 0
+    i -= 1
+    FormList speaking = akLists.GetAt(i) as FormList
+    If speaking
+      speaking.RemoveAddedForm(talker)
+      If actorBase && speaking.HasForm(actorBase)
+        speaking.AddForm(talker)
+      EndIf
+    EndIf
+  EndWhile
 EndFunction
 
 ; ============================================================= speak-as ==

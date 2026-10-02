@@ -18,7 +18,7 @@ from ..actors.creature_races import TES5_HEALTH_LEVEL_BONUS
 from ..actors.npc_face_mapper import build_face_tail_subs, build_pnam_subs
 from ..actors.outfits import split_inventory
 from ..packages.actor_wiring import (CSTY_DEFAULT, DPLT_NPC_LIST, authored_packages,
-                                     npc_packages)
+                                     default_package_list, npc_packages)
 from ..base.equivalents import map_hair_color
 from ..base.race_factions import race_faction
 from .actor_common import (GOLD001_FID, NAM5_UNKNOWN, SOUND_LEVEL_NORMAL,
@@ -42,6 +42,7 @@ from .common import (
 )
 from .crime import IS_GUARD_FACTION, crime_faction, is_guard_class
 from .spell_tomes import tome_items
+from .actors_falloutnv import npc_health
 from .npc_morrowind import TES5_RACE_BASE_HEALTH
 
 #: TES4 NPC_ ACBS bits that mean the same thing in TES5, Female included.
@@ -84,13 +85,20 @@ def npc_skills_dnam(rec: dict) -> bytes:
             skill_vals[tes5_name] = max(skill_vals.get(tes5_name, 0), val)
     for i, skill_name in enumerate(TES5_SKILL_ORDER):
         dnam[i] = min(skill_vals.get(skill_name, 15), 255)
-    health = get_int(rec, 'DATA.Health', 50)
+    health = source_health(rec)
     struct.pack_into('<H', dnam, 36, max(0, min(health, 65535)))
     magicka = get_int(rec, 'ACBS.SpellPoints', 0)
     struct.pack_into('<H', dnam, 38, max(0, min(magicka, 65535)))
     stamina = get_int(rec, 'ACBS.Fatigue', 100)
     struct.pack_into('<H', dnam, 40, max(0, min(stamina, 65535)))
     return bytes(dnam)
+
+
+def source_health(rec: dict) -> int:
+    """The source actor's hit points: TES4's DATA.Health, or FO3/FNV's computed pool."""
+    if 'DATA.BaseHealth' in rec:
+        return npc_health(rec)
+    return get_int(rec, 'DATA.Health', 50)
 
 
 def _health_and_level(tes4_health: int, tes4_level: int, tes5_flags: int) -> tuple:
@@ -136,7 +144,7 @@ def npc_acbs(rec: dict) -> bytes:
     calc_max = get_int(rec, 'ACBS.CalcMax', 100)
     tes5_acbs_flags = tes4_flags & _NPC_COMPATIBLE_FLAGS
     health_offset, tes5_level = _health_and_level(
-        get_int(rec, 'DATA.Health', 50), get_int(rec, 'ACBS.Level', 1),
+        source_health(rec), get_int(rec, 'ACBS.Level', 1),
         tes5_acbs_flags)
     magicka_offset = max(-32768, min(
         get_int(rec, 'ACBS.SpellPoints', 0) - TES5_RACE_BASE_HEALTH, 32767))
@@ -348,7 +356,7 @@ def convert_NPC_(rec: dict, writer=None) -> bytes:
             'DOFT', build_outfit(writer, (edid or 'NPC') + '_Outfit',
                                   outfit_fids, get_formid(rec, 'FormID')))
 
-    subs += pack_formid_subrecord('DPLT', DPLT_NPC_LIST)
+    subs += pack_formid_subrecord('DPLT', default_package_list(authored_packages(rec), DPLT_NPC_LIST))
     crime = _crime_faction_of(rec)
     if crime:
         subs += pack_formid_subrecord('CRIF', crime)

@@ -71,11 +71,21 @@ import math
 REF_HEADING = {
     1: -math.pi / 2, 2: math.pi / 2, 3: -math.pi / 2, 4: 0.0,  # bed (sleep)
     11: -math.pi / 2, 12: math.pi / 2, 13: 0.0, 14: math.pi,   # chair (sit)
-    15: 0.0,
+    15: 0.0, 22: 0.0,
 }
 
 #: FO3/FNV's stool entry: the seat lies this far ahead of it and to its left, the sitter facing ahead.
 STOOL_REF, STOOL_FORWARD, STOOL_LEFT = 15, 41.0, 20.5
+
+#: FO3/FNV's wall-lean marker ID (GetFurnitureMarkerID 19 picks the WallLean idles): Skyrim's lean, in place.
+LEAN_REF = 19
+#: FO3/FNV's work-station marker ID (bar, rail, blackboard, anvil): Skyrim's counter lean, in place.
+STATION_REF = 22
+#: Vanilla CounterLeanMarker.nif marker z (floor-relative).
+COUNTER_LEAN_HEIGHT = 32.0
+
+#: Skyrim furniture animation types (BSFurnitureMarkerNode and FURN FNPR): sit, sleep, lean.
+ANIM_SIT, ANIM_SLEEP, ANIM_LEAN = 1, 2, 4
 SIT_SIDE_DIST = 51.5    # entry-to-seat travel, side sit entries (11/12)
 SIT_FRONT_DIST = 55.0   # entry-to-seat travel, front/behind sit entries (13/14)
 SIT_HEIGHT = 34.0       # vanilla commonchair01 marker z (floor-relative)
@@ -187,7 +197,7 @@ def cluster_seats(entries, center_fn):
     onto the approach ray.  A sit entry travels a fixed distance instead.
 
     Returns seat dicts in an order the NIF converter and FURN importer both
-    reproduce: {'x','y','z','heading','sleep','entry_flags',
+    reproduce: {'x','y','z','heading','sleep','anim','entry_flags',
     'members': [(tes4_entry_index, entry_flag_bit), ...]}
     """
     if not entries:
@@ -200,6 +210,8 @@ def cluster_seats(entries, center_fn):
                 center = center_fn()
             t = max(0.0, (center[0] - e['p'][0]) * e['d'][0] +
                     (center[1] - e['p'][1]) * e['d'][1])
+        elif e['ref'] in (LEAN_REF, STATION_REF):
+            t = 0.0
         else:
             # Seat: fixed travel distance along the approach direction
             t = SIT_SIDE_DIST if e['ref'] in (11, 12) else SIT_FRONT_DIST
@@ -222,26 +234,44 @@ def cluster_seats(entries, center_fn):
     for cluster in clusters:
         sx = sum(m['seat'][0] for m in cluster) / len(cluster)
         sy = sum(m['seat'][1] for m in cluster) / len(cluster)
-        sleep = any(m['sleep'] for m in cluster)
+        height, anim, counter_lean = _seat_kind(cluster)
         floor_z = min(m['p'][2] for m in cluster)
         # Circular mean of the entry-derived headings (they agree in practice);
         # atan2 already yields (-pi, pi] like vanilla marker headings
         heading = math.atan2(sum(math.sin(m['heading']) for m in cluster),
                              sum(math.cos(m['heading']) for m in cluster))
-        members = [(m['index'], _entry_flag(m, sx, sy, heading)) for m in cluster]
+        members = [(m['index'], ENTRY_BEHIND if counter_lean else _entry_flag(m, sx, sy, heading))
+                   for m in cluster]
         flags = 0
         for _idx, f in members:
             flags |= f
         seats.append({
             'x': sx,
             'y': sy,
-            'z': floor_z + (SLEEP_HEIGHT if sleep else SIT_HEIGHT),
+            'z': floor_z + height,
             'heading': heading,
-            'sleep': sleep,
+            'sleep': anim == ANIM_SLEEP,
+            'anim': anim,
+            'counter_lean': counter_lean,
             'entry_flags': flags,
             'members': members,
         })
     return seats
+
+
+def _seat_kind(cluster) -> tuple:
+    """(height above the floor, Skyrim animation type, counter lean) for one seat's entries.
+
+    See: docs/commentary/asset_convert_falloutnv.md#work-stations
+    """
+    refs = {m['ref'] for m in cluster}
+    if any(m['sleep'] for m in cluster):
+        return SLEEP_HEIGHT, ANIM_SLEEP, False
+    if refs == {LEAN_REF}:
+        return 0.0, ANIM_LEAN, False
+    if refs == {STATION_REF}:
+        return COUNTER_LEAN_HEIGHT, ANIM_SIT, True
+    return SIT_HEIGHT, ANIM_SIT, False
 
 
 def origin_shift(entries):

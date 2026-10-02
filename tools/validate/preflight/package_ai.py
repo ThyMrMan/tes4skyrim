@@ -8,7 +8,9 @@ and quest aliases' ALPC lists):
 * a user naming a package that does not exist;
 * GetIsID conditions that exclude every actor holding the package, marked for
   review since the source package may be just as dead;
-* a destination in a cell with no navmesh, marked for review.
+* a destination in a cell with no navmesh, marked for review;
+* a run-once guard (GetInFaction TES4RunOnce_*) no alias script watches, so
+  the package never ends.
 
 See: docs/commentary/tools_preflight.md#packages
 """
@@ -41,6 +43,12 @@ _USE_AI_PACKAGES = 0x20
 
 #: Samples listed per finding.
 SAMPLES = 5
+
+#: EditorID prefix of the hidden faction marking an actor done with a run-once package.
+RUN_ONCE_PREFIX = 'TES4RunOnce_'
+
+#: TES5 GetInFaction.
+_GET_IN_FACTION = 71
 
 
 def _slots(pack) -> list:
@@ -159,6 +167,29 @@ def navmesh_findings(game: str, index) -> list:
             for cell, packs in sorted(by_cell.items())]
 
 
+def _watched(index, pack: int, faction: int) -> bool:
+    """Whether an alias holds `pack` and its quest's VMAD names both."""
+    need = (struct.pack('<I', pack), struct.pack('<I', faction))
+    return any(any(u32(d) == pack for _n, subs in aliases(q) for d in subs['ALPC'])
+               and all(b in first(q, 'VMAD') for b in need) for q in index.by_type['QUST'])
+
+
+def run_once_findings(game: str, index, held: dict) -> list:
+    """One error per held run-once package whose end no alias script sees, so its faction is never added."""
+    factions = {r.form_id for r in index.by_type['FACT'] if index.edid(r.form_id).startswith(RUN_ONCE_PREFIX)}
+    out = []
+    for pack in (p for p in index.by_type['PACK'] if p.form_id in held):
+        guards = [c[3] for c in map(decode_condition, every(pack, 'CTDA'))
+                  if c[2] == _GET_IN_FACTION and c[3] in factions]
+        if any(not _watched(index, pack.form_id, f) for f in guards):
+            name = index.edid(pack.form_id) or f'{pack.form_id:08X}'
+            out.append(Finding('packages', f'packages|{game}|run-once|{name}', 'error',
+                               f'run-once package {name} is held by an actor, but no alias script watches it, '
+                               'so it never ends and reruns forever', tuple(index.edid(h) or 'an alias' for h in
+                                                                             sorted(held[pack.form_id]))[:SAMPLES]))
+    return out
+
+
 def audit(game: str, index) -> list:
     """The package and AI findings for one game."""
     held, missing = users(index)
@@ -168,4 +199,4 @@ def audit(game: str, index) -> list:
     out += [Finding('packages', f'packages|{game}|missing|{pack:08X}', 'error',
                     f'{index.edid(holder) or hex(holder)} holds package {pack:08X}, which is not in the plugin')
             for holder, pack in missing]
-    return out + navmesh_findings(game, index)
+    return out + navmesh_findings(game, index) + run_once_findings(game, index, held)

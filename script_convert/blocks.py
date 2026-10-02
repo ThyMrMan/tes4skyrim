@@ -7,8 +7,9 @@ add block types Oblivion never emits; those live in `constants_falloutnv`.
 `BLOCK_FILTER_PARAM` names the event parameter an Oblivion block filter
 (`begin OnEquip player`) has to become a guard on, since Papyrus has no filter;
 a block type absent from it has no parameter to filter on and its filter is
-dropped with a TODO. `COMBAT_STATE_GUARDS` carries the blocks that merge into
-the one OnCombatStateChanged event, each with the state it tests.
+dropped with a TODO. `BLOCK_TYPE_GUARDS` narrows an event that fires wider than
+its TES4 block: each block merged into OnCombatStateChanged tests its state, and
+OnTriggerActor admits only actors.
 
 See: docs/commentary/script_convert.md#block-type-mapping
 """
@@ -88,10 +89,11 @@ BLOCK_FILTER_PARAM = {
     **FALLOUT_BLOCK_FILTER_PARAM,
 }
 
-#: TES4 block type -> the Papyrus combat-state test its filter stood for.
-COMBAT_STATE_GUARDS = {'onalarm': 'aeCombatState != 0',
-                       'onstartcombat': 'aeCombatState == 1',
-                       **FALLOUT_COMBAT_STATE_GUARDS}
+#: TES4 block type -> the test narrowing its wider event. See: docs/commentary/script_convert.md#block-type-guards
+BLOCK_TYPE_GUARDS = {'onalarm': 'aeCombatState != 0',
+                     'onstartcombat': 'aeCombatState == 1',
+                     'ontriggeractor': 'akActionRef as Actor',
+                     **FALLOUT_COMBAT_STATE_GUARDS}
 
 
 def block_header(block) -> 'tuple | None':

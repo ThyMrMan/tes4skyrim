@@ -21,7 +21,7 @@ from ..base.race_lookup import tes4_race_edid
 from ..base.conditions import FUNC_GET_IN_FACTION, build_or_chain, needs_origin_gate
 from ..base.text_reader import get_formid_index_offset
 from ..dialogue.morrowind_sidecar import is_tes3_export
-from .actors_falloutnv import aidt_tiers
+from .actors_falloutnv import aggro_radius, aidt_tiers, assistance
 from .common import (
     get_float,
     get_formid,
@@ -233,8 +233,9 @@ def build_aidt(rec: dict) -> bytes:
     Assistance U8, AggroRadiusBehavior U8, unused U8, then Warn / Warn+Attack /
     Attack U32. Morality and Assistance derive from TES4 Responsibility.
 
-    FO3/FNV stores Aggression and Confidence in the TES5 enums already, so it
-    bypasses the scalar mappings entirely.
+    FO3/FNV stores Aggression, Confidence and Assistance in the TES5 enums
+    already, so it bypasses the scalar mappings entirely, and keeps its aggro
+    radius.
 
     See: docs/commentary/tes5_import_actors.md#aggression-tiers
     """
@@ -247,13 +248,18 @@ def build_aidt(rec: dict) -> bytes:
         tes5_aggr = _aggression_tier(rec, get_int(rec, 'AIDT.Aggression'), pers)
         tes5_conf = confidence_tier(rec)
     tes5_moral = 3 if resp >= 80 else (2 if resp >= 50 else (1 if resp >= 30 else 0))
-    tes5_assist = 1 if resp >= 30 else 0
+    if is_fallout_source():
+        tes5_assist = assistance(rec)
+        behavior, radius = aggro_radius(rec)
+    else:
+        tes5_assist = 1 if resp >= 30 else 0
+        behavior, radius = 0, 0
 
     return struct.pack('<BBBBBB BB III',
                        tes5_aggr, tes5_conf, energy,
                        tes5_moral, _MOOD_NEUTRAL, tes5_assist,
-                       0, 0,
-                       0, 0, 0)
+                       behavior, 0,
+                       radius, radius, radius)
 # ---------------------------------------------------------------------------
 #   Vendor Faction System
 # ---------------------------------------------------------------------------

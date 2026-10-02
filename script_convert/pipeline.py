@@ -32,12 +32,15 @@ from script_convert.commands_falloutnv import (quest_objective_indices,
                                                set_quest_objectives)
 from script_convert.package_fragments import package_fragment_name, package_psc
 from script_convert.patrol_scripts import patrol_psc, patrol_script_name
+from script_convert.terminal_plan import item_count, reachable_menus
+from script_convert.terminal_scripts import terminal_psc, terminal_script_name
 from script_convert.poll_interval import quest_script_delays
 from script_convert.quest_fragments import (quest_fragment_psc,
                                             scripted_count, stage_fragments)
 from script_convert.say_durations import scan_voice_durations
 from script_convert.speech_challenges_falloutnv import reroll_line, speech_helper
 from tes5_import.dialogue.speech_chance_falloutnv import NEED_GLOBALS, rerolls
+from script_convert.force_greet_lines import in_menu_only, menu_only_infos
 from script_convert.say_to_done import (fragment_calls, say_to_done_hooks,
                                         say_to_done_topics)
 from script_convert.scro_refs import (preload_scro_refs, resolve_scro_aliases,
@@ -82,7 +85,7 @@ def _new_stats() -> dict:
         'scpt_total': 0, 'scpt_ok': 0, 'scpt_err': 0,
         'info_total': 0, 'info_ok': 0, 'info_err': 0,
         'qust_total': 0, 'qust_ok': 0, 'qust_err': 0,
-        'pack_ok': 0, 'pack_err': 0, 'patrol_ok': 0, 'patrol_err': 0,
+        'pack_ok': 0, 'pack_err': 0, 'patrol_ok': 0, 'patrol_err': 0, 'term_ok': 0, 'term_err': 0,
         'todo_count': 0, 'errors': [],
         # script name (lower) -> OBSE user-function parameter types, in order.
         # Collected AS each script converts, so the cross-script cast pass is
@@ -148,7 +151,7 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
                         quest_delays=None, quest_objectives=None,
                         conversation_chains=None, force_greet_slots=None,
                         info_begin_scripts=False, say_to_done=None,
-                        objective_globals=None, force_flee_slots=None):
+                        objective_globals=None, force_flee_slots=None, menu_only=None):
     """Seed one worker with the parent state that spawning does not carry.
 
     `namespace` is installed FIRST: the generated-script prefix derives from
@@ -175,7 +178,7 @@ def _script_worker_init(xref, output_dir, info_reveals, service_topics,
                        quest_edid_by_fid=quest_edid_by_fid or {},
                        quest_delays=quest_delays or {},
                        info_begin_scripts=info_begin_scripts,
-                       say_to_done=say_to_done or {})
+                       say_to_done=say_to_done or {}, menu_only=menu_only or set())
     if quest_objectives:
         set_quest_objectives(quest_objectives)
     # Class-level, so every ScriptConverter a worker builds sees the measured
@@ -219,6 +222,7 @@ def _script_worker_run(job):
         'qust': (_qust_batch, (ctx['stage_reveals'],)),
         'pack': (_pack_batch, ()),
         'patrol': (_patrol_batch, ()),
+        'term': (_term_batch, ()),
     }[kind]
     batch(records, ctx['output_dir'], ctx['xref'], stats, *extra)
     return stats
@@ -268,6 +272,7 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
     pack_work = [r for r in by_type.get('PACK', ()) if package_sections(r)]
     by_type['REFR'] = load_patrol_points(export_dir) if export_is_fallout(export_dir) else []
     patrol_work = [r for r in by_type['REFR'] if has_patrol_script(r)]
+    term_work = terminal_work(export_dir)
     print(f'  Converting {len(scpt_work)} SCPT / {len(info_work)} INFO / '
           f'{len(qust_work)} QUST scripts...')
     say_durations = scan_voice_durations(export_dir)
@@ -301,10 +306,11 @@ def build_script_context(export_dir: str, output_dir: str) -> dict:
                 build_force_greet_slots(by_type),
                 export_is_fallout(export_dir), say_to_done_hooks(by_type),
                 objective_script_globals(by_type) if export_is_fallout(export_dir) else {},
-                build_force_flee_slots(by_type))
+                build_force_flee_slots(by_type), menu_only_infos(by_type))
     return {'initargs': initargs, 'scpt_work': scpt_work,
             'info_work': info_work, 'qust_work': qust_work,
-            'pack_work': pack_work, 'patrol_work': patrol_work, 'stats': stats}
+            'pack_work': pack_work, 'patrol_work': patrol_work, 'term_work': term_work,
+            'stats': stats}
 
 
 def _write_conversation_driver(export_dir: str, output_dir: str,
@@ -353,7 +359,8 @@ def convert_all_scripts(export_dir: str, output_dir: str, workers: int = None) -
             + [('info', c) for c in _chunk(info_work, 128)]
             + [('qust', c) for c in _chunk(qust_work, 8)]
             + [('pack', c) for c in _chunk(ctx['pack_work'], 48)]
-            + [('patrol', c) for c in _chunk(ctx['patrol_work'], 48)])
+            + [('patrol', c) for c in _chunk(ctx['patrol_work'], 48)]
+            + [('term', c) for c in _chunk(ctx['term_work'], 32)])
     if workers <= 1 or len(jobs) <= 2:
         _script_worker_init(*initargs)
         for job in jobs:
@@ -370,14 +377,15 @@ def convert_all_scripts(export_dir: str, output_dir: str, workers: int = None) -
     _fix_udf_call_arg_types(output_dir, stats['udf_sigs'],
                             stats['udf_callers'])
 
-    total = sum(stats[k] for k in ('scpt_ok', 'info_ok', 'qust_ok', 'pack_ok', 'patrol_ok'))
-    errs = sum(stats[k] for k in ('scpt_err', 'info_err', 'qust_err', 'pack_err', 'patrol_err'))
+    total = sum(stats[k] for k in ('scpt_ok', 'info_ok', 'qust_ok', 'pack_ok', 'patrol_ok', 'term_ok'))
+    errs = sum(stats[k] for k in ('scpt_err', 'info_err', 'qust_err', 'pack_err', 'patrol_err', 'term_err'))
     print('\n  Script conversion complete:')
     print(f'    SCPT: {stats["scpt_ok"]}/{stats["scpt_total"]} converted')
     print(f'    INFO: {stats["info_ok"]}/{stats["info_total"]} fragments')
     print(f'    QUST: {stats["qust_ok"]}/{stats["qust_total"]} stage scripts')
     print(f'    PACK: {stats["pack_ok"]}/{len(ctx["pack_work"])} package fragments')
     print(f'    Patrol markers: {stats["patrol_ok"]}/{len(ctx["patrol_work"])} scripts')
+    print(f'    Terminals: {stats["term_ok"]}/{len(ctx["term_work"])} scripts')
     print(f'    Total: {total} converted, {errs} errors, {stats["todo_count"]} TODOs')
     if stats['errors']:
         # One line per DISTINCT failure, with a count and an example: 2,393
@@ -702,6 +710,8 @@ def _info_psc(rec: dict, xref: CrossRefGraph, reveals: list, service_kind: str,
     begin_lines, body_lines, conv = [], [], None
     if result_script.strip():
         begin_lines, body_lines, conv = _info_bodies(rec, xref, result_script)
+    if rec['FormID'].upper() in _WORKER_CTX.get('menu_only', ()):
+        body_lines = in_menu_only(body_lines)
     seq_gate = sequence_gate(rec, _WORKER_CTX.get('quest_script_vars') or {},
                              _WORKER_CTX.get('quest_edid_by_fid') or {})
     script_name = f'{script_prefix("_TIF__")}{rec["FormID"]}'
@@ -799,6 +809,28 @@ def _patrol_batch(records: list, output_dir: str, xref: CrossRefGraph, stats: di
             stats['errors'].append(f'REFR {rec.get("FormID")}: {e}')
 
 
+def terminal_work(export_dir: str) -> list:
+    """Each FO3/FNV terminal with menu items, as its reachable menus (terminal_plan.reachable_menus)."""
+    if not export_is_fallout(export_dir):
+        return []
+    terms = {r['FormID'].upper(): r for r in load_records(export_dir, ('TERM',))['TERM']}
+    return [reachable_menus(r, terms) for r in terms.values() if item_count(r)]
+
+
+def _term_batch(work: list, output_dir: str, xref: CrossRefGraph, stats: dict):
+    """Write the TM_ script of every terminal with menu items.
+
+    See: docs/commentary/script_convert.md#terminals
+    """
+    for menus in work:
+        try:
+            write_psc(output_dir, terminal_script_name(menus[0]['FormID']), terminal_psc(menus, xref))
+            stats['term_ok'] += 1
+        except Exception as e:
+            stats['term_err'] += 1
+            stats['errors'].append(f'TERM {menus[0].get("FormID")}: {e}')
+
+
 def _qust_batch(records: list, output_dir: str, xref: CrossRefGraph,
                 stats: dict, stage_reveals: dict = None):
     """Write one `_QF_` script per QUST that has stage fragments.
@@ -835,29 +867,14 @@ def build_vmad_quest_fragments(quest_edid: str, stage_fragments: list[tuple[int,
                                attached_script: tuple = None,
                                alias_scripts: list = None,
                                quest_fid: int = 0) -> bytes:
-    """Build VMAD binary for a QUST record with stage script fragments and/or
-    an attached quest script.
+    """VMAD for a QUST: its QF_ stage fragments, its converted quest script, its alias scripts.
 
-    Args:
-        quest_edid: Quest EditorID
-        stage_fragments: list of (stage_index, log_index) tuples; may be empty
-            when only an attached script is present (vanilla then writes the
-            fragments section with count=0 and an EMPTY file name — e.g.
-            MS12PostQuest / WIThief01 in Skyrim.esm).
-        property_values: optional dict {property_name: formid} for the QF
-            fragment script's properties
-        attached_script: optional (script_name, {prop: formid}) for the
-            converted TES4 quest script (SCRI) to attach alongside
-        alias_scripts: optional [(alias_id, [(script_name, {prop: formid})])]
-            binding scripts to this quest's reference aliases (how vanilla
-            hosts player-side logic — JailQuestPlayerScript on JailQuest's
-            alias 15, TutorialPlayerScript on TutorialEnchanting's alias 5).
-        quest_fid: this quest's own output FormID.  The alias entry's
-            ScriptPropertyObject names the QUEST, not the alias target —
-            verified against Skyrim.esm, where every alias group's formID is
-            the owning QUST's.
-
-    Returns VMAD binary data.
+    `stage_fragments` is [(stage, log index)], empty for a script-only quest;
+    `property_values` binds the QF_ script; `attached_script` is (name,
+    {prop: FormID}); `alias_scripts` is [(alias id, [(name, props)])];
+    `quest_fid` is the quest's own output FormID, which each alias entry names.
+    See: docs/commentary/tes5_import_dialogue.md#voice-files-lip-sync-audio
+    See: docs/commentary/script_convert.md#player-base-script-needs-quest-alias
     """
     script_name = papyrus_script_name(quest_edid, script_prefix('_QF_'))
     buf = bytearray()
@@ -921,13 +938,8 @@ def build_vmad_quest_fragments(quest_edid: str, stage_fragments: list[tuple[int,
         buf += struct.pack('<hh', 5, 2)          # version=5, objectFormat=2
         buf += struct.pack('<h', len(scripts))
         for sname, props in scripts:
-            buf += _pack_wstring(sname)
-            buf += struct.pack('<B', 0)          # flags=0
-            buf += struct.pack('<H', len(props))
-            for pname, fid in props.items():
-                buf += _pack_wstring(pname)
-                buf += struct.pack('<BB', 1, 1)  # type=Object, status=Edited
-                buf += struct.pack('<HhI', 0, -1, fid)
+            buf += _script_entry(sname, {k: v for k, v in props.items() if isinstance(v, int)},
+                                 {k: v for k, v in props.items() if not isinstance(v, int)})
 
     return bytes(buf)
 

@@ -906,10 +906,10 @@ def read_getisid_fids(rec: dict, offset: 'int | None' = None,
             and (not positive_only or _asserts_membership(op, comp))}
 
 
-def required_speaker_ids(rec: dict) -> 'set | None':
-    """Raw FormIDs the record's all-GetIsID OR chains leave able to speak, or None when anyone may."""
+def required_speaker_ids(rec: dict, on_target: bool = False) -> 'set | None':
+    """Raw FormIDs the record's all-GetIsID OR chains leave able to speak (or, on_target, be spoken to); None: any."""
     chains = [{t[4] for t in clause} for clause in _or_clauses(_condition_tests(rec))
-              if all(t[0] == FUNC_GET_IS_ID and not t[3] and _asserts_membership(t[1], t[2])
+              if all(t[0] == FUNC_GET_IS_ID and bool(t[3]) == on_target and _asserts_membership(t[1], t[2])
                      for t in clause)]
     return set.intersection(*chains) if chains else None
 

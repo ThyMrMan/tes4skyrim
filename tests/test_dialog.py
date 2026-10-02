@@ -39,7 +39,7 @@ from tes5_import.base.conditions import (
 )
 from tes5_import.base.owned_records import _source_counts_whole_days
 from tes5_import.dialogue.converter import DIAL_TYPE_COMBAT, DIAL_TYPE_CONVERSATION, DIAL_TYPE_DETECTION, DIAL_TYPE_MISC, DIAL_TYPE_PERSUASION, DIAL_TYPE_SERVICE, DIAL_TYPE_TOPIC, _EDID_SUBTYPE, classify_topic, convert_DIAL, convert_INFO, make_dlbr, make_dlvw, should_skip_dial
-from tes5_import.dialogue.groups import build_dialog_groups, greets_with_choices
+from tes5_import.dialogue.groups import build_dialog_groups
 from tes5_import.dialogue.say_topics import ENGINE_TARGET, build_say_topic_dispositions
 from tes5_import.dialogue.topics_falloutnv import shown_text
 from tes5_import.dialogue.quest import (convert_QUST,
@@ -1182,6 +1182,39 @@ class TestAuthoredObjectives:
         dnam = _find_subrecord(convert_QUST(self._rec()), b'DNAM')
         assert struct.unpack_from('<I', dnam, 8)[0] == 8
 
+    def test_package_alias_follows_targets_and_carries_stage_script(self):
+        """A package-only ref takes the next alias id after the targets, and its alias gets the re-check script.
+
+        See: docs/commentary/script_convert.md#setstage-re-evaluates-alias-packages
+        """
+        out = convert_QUST(self._rec(), pack_plan=_OnePackagePlan())
+        assert [struct.unpack('<I', a)[0] for a in _find_all_subrecords(out, b'ALST')] == [0, 1, 2]
+        assert struct.unpack('<I', _find_subrecord(out, b'ALPC'))[0] == _OnePackagePlan.PACK
+        vmad = _find_subrecord(out, b'VMAD')
+        assert b'TES4_StagePackageAlias' in vmad
+        assert struct.pack('<hHhIhhh', 1, 0, 2, 0x000842DD, 5, 2, 1) in vmad
+        order = _sub_order(out)
+        assert order.index('EDID') < order.index('VMAD') < order.index('FULL' if 'FULL' in order else 'DNAM')
+
+    def test_quest_without_packages_gets_no_vmad(self):
+        """No fragments, script or package alias: no VMAD at all."""
+        assert _find_subrecord(convert_QUST(self._rec()), b'VMAD') is None
+
+
+class _OnePackagePlan:
+    """A PackagePlan stand-in owning one package on one ref no objective targets."""
+
+    REF, PACK = 0x000A0001, 0x000B0002
+
+    def assign_aliases(self, qfid, existing):
+        """Add REF after the existing aliases."""
+        existing[self.REF] = max(existing.values()) + 1
+        return [(self.REF, existing[self.REF])]
+
+    def packages_for_alias(self, qfid, ref_fid):
+        """PACK for REF, nothing for the objective targets."""
+        return [self.PACK] if ref_fid == self.REF else []
+
 
 class TestFalloutConditions:
     """A 28-byte CTDA is Fallout's: function remapped, Run On carried.
@@ -1293,10 +1326,10 @@ class TestFalloutConditions:
         assert convert_ctda(raw, drop_run_on_target=True) is None
 
     def test_actor_values_use_fallouts_table(self):
-        """FNV Speech, Barter and Repair keep their meaning; Karma, Guns and Variable01 drop."""
-        for dropped in (41, 62):
+        """FNV Speech, Barter and Repair keep their meaning; Guns and Variable03 drop."""
+        for dropped in (41, 64):
             assert convert_ctda(_tes4_ctda(func=14, p1=dropped) + b'\0' * 4, offset=1) is None
-        for fnv_av, tes5_av in ((43, 17), (32, 17), (39, 10), (0, 0)):
+        for fnv_av, tes5_av in ((43, 17), (32, 17), (39, 10), (0, 0), (62, 68), (63, 69), (66, 72)):
             raw = _tes4_ctda(func=14, p1=fnv_av) + b'\0' * 4
             assert struct.unpack_from('<I', convert_ctda(raw, offset=1), 12)[0] == tes5_av
         assert convert_ctda(_tes4_ctda(func=14, p1=23) + b'\0' * 4, offset=1) is None
@@ -1325,9 +1358,9 @@ class TestFalloutActorValues:
         """Speech, Barter, Lockpick and Health read their Skyrim values."""
         assert _av_param(convert_ctda(_av_ctda(14, fallout_av))) == skyrim_av
 
-    @pytest.mark.parametrize('fallout_av', [41, 34, 38, 45, 37, 18, 66])
+    @pytest.mark.parametrize('fallout_av', [41, 34, 38, 45, 37, 18, 64, 67])
     def test_fork_dropped_values_fail_open(self, fallout_av):
-        """Guns, Energy Weapons, Melee, Unarmed, Medicine, Damage Resistance, Variable05."""
+        """Guns, Energy Weapons, Melee, Unarmed, Medicine, Damage Resistance, Variable03, 06."""
         assert convert_ctda(_av_ctda(14, fallout_av)) is None
 
     @pytest.mark.parametrize('fallout_av', [23, 8, 9, 40, 29])
@@ -1460,7 +1493,10 @@ class TestFalloutFollowUps:
         assert levels[topic] == 0
 
     def test_greeting_with_follow_up_opens_as_a_blocking_topic(self):
-        """A quest's GREETING that continues unasked is a Blocking CUST topic, not Hello."""
+        """A GREETING line that continues unasked is copied into a Blocking CUST topic; originals are held.
+
+        See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
+        """
         def info(fid, parent, **extra):
             """One condition-less INFO of quest 000A0001."""
             return dict({'FormID': fid, 'ParentDIAL': parent, 'QSTI.Quest': '000A0001',
@@ -1477,10 +1513,12 @@ class TestFalloutFollowUps:
                             info('000C0002', '000B0002')]}
         writer = _FakeWriter()
         build_dialog_groups(by_type, writer, npc_to_vtyp={})
-        greeting = next(rec for sig, fid, rec in _walk_records(writer.groups['DIAL'])
-                        if sig == 'DIAL' and _find_subrecord(rec, b'EDID').startswith(b'GREETING'))
-        assert _find_subrecord(greeting, b'SNAM') == b'CUST'
-        branch = struct.unpack('<I', _find_subrecord(greeting, b'BNAM'))[0]
+        greetings = {_find_subrecord(rec, b'EDID').rstrip(b'\x00').endswith(b'_Lead'): rec
+                     for sig, fid, rec in _walk_records(writer.groups['DIAL'])
+                     if sig == 'DIAL' and _find_subrecord(rec, b'EDID').startswith(b'GREETING')}
+        assert _find_subrecord(greetings[False], b'SNAM') == b'IDAT'
+        assert _find_subrecord(greetings[True], b'SNAM') == b'CUST'
+        branch = struct.unpack('<I', _find_subrecord(greetings[True], b'BNAM'))[0]
         kinds = {fid: struct.unpack('<I', _find_subrecord(r, b'DNAM'))[0]
                  for _s, fid, r in _walk_records(writer.groups['DLBR'])}
         assert kinds[branch] == 2
@@ -2969,16 +3007,3 @@ def test_fallout_greetings_use_their_own_lockout():
     finally:
         world_falloutnv._IS_FALLOUT_SOURCE.clear()
     assert resets == [0, 65535]
-
-
-def test_a_greeting_that_offers_replies_opens_as_blocking():
-    """Amata's greeting links to reply topics outside the menu, so its group is Blocking.
-
-    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
-    """
-    greeting = {'FormID': '000319BD', 'ChoiceCount': '1', 'Choice[0]': '000784A3'}
-    group = {'edid': 'GREETING', 'infos': [greeting]}
-    ctx = {'bark_dial_fids': {0xC8}, 'menu_topic_fids': set()}
-    assert greets_with_choices(group, ctx)
-    assert not greets_with_choices(group, dict(ctx, menu_topic_fids={0x784A3}))
-    assert not greets_with_choices(dict(group, edid='HELLO'), ctx)

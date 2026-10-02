@@ -39,6 +39,7 @@ constexpr std::uint8_t kPHZD = 0x46;   // last of the reference types
 constexpr std::uint8_t kINFO = 0x4C;
 constexpr std::uint8_t kQUST = 0x4D;
 constexpr std::uint8_t kPACK = 0x4F;
+constexpr std::uint8_t kPROJ = 0x32;
 constexpr std::uint32_t kPlayerRef = 0x14;
 
 FormLookupFn g_lookup = nullptr;
@@ -241,6 +242,9 @@ void Diagnose(Out& o) {
 //   TESContainerChangedEvent +00 from id, +04 to id, +08 item id, +0C i32 count
 //   TESActorLocationChangeEvent +00 actor, +08 old BGSLocation*, +10 new
 //   TESLockChangedEvent      +00 ref
+//   TESHitEvent              +00 target ref, +08 attacker ref, +10 source id
+//                            (weapon or spell), +14 PROJ id, +18 flag bits
+//                            (power, sneak, bash, blocked)
 
 const char* const kBeginEnd[] = {"begin", "end"};
 const char* const kPackagePhase[] = {"start", "change", "end"};
@@ -328,6 +332,21 @@ void DLocation(Out& o) {
 
 void DLock(Out& o) { PutRef(o, "target", Ptr(o, 0x00)); }
 
+// Only hits the player gives or takes: an NPC fight would otherwise log each blow.
+void DHit(Out& o) {
+    const std::uint8_t* target = Ptr(o, 0x00);
+    const std::uint8_t* by = Ptr(o, 0x08);
+    if (!IsPlayer(target) && !IsPlayer(by)) { o.skip = true; return; }
+    PutRef(o, "target", target);
+    PutRef(o, "by", by);
+    PutFormId(o, "source", U32(o, 0x10), kAny);
+    PutFormId(o, "projectile", U32(o, 0x14), kPROJ);
+    const std::uint8_t flags = o.ev[0x18];
+    Put(o, ",\"power\":%s,\"sneak\":%s,\"bash\":%s,\"blocked\":%s",
+        flags & 1 ? "true" : "false", flags & 2 ? "true" : "false",
+        flags & 4 ? "true" : "false", flags & 8 ? "true" : "false");
+}
+
 void DNone(Out&) {}
 
 using Decoder = void (*)(Out&);
@@ -356,6 +375,7 @@ constexpr Kind kKinds[] = {
     {"TESContainerChangedEvent",    "container",     0x18, DContainer},
     {"TESActorLocationChangeEvent", "location",      0x18, DLocation},
     {"TESLockChangedEvent",         "lock_changed",  0x08, DLock},
+    {"TESHitEvent",                 "hit",           0x1C, DHit},
     {"TESLoadGameEvent",            "load_game",     0x00, DNone},
 };
 constexpr std::size_t kKindCount = sizeof(kKinds) / sizeof(kKinds[0]);

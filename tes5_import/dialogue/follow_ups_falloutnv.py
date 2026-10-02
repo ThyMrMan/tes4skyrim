@@ -57,14 +57,6 @@ def plan_follow_ups(infos: list, writer, skipped_topics: set) -> int:
     return len(_PLAN)
 
 
-def opens_with_follow_up(infos: list) -> bool:
-    """Whether a quest's GREETING lines continue unasked, so open as Blocking topic.
-
-    See: docs/commentary/tes5_import_dialogue.md#fallout-follow-ups
-    """
-    return any(get_formid(r, 'FormID') in FOLLOW_UP_TOPICS for r in infos)
-
-
 def blocking_branch(writer, key, edid: str, quest: int, topic: int) -> tuple:
     """(DLBR FormID, DLBR bytes) of a Blocking branch starting at `topic`."""
     branch = writer.derive_formid('BLOCKING_DLBR', key)

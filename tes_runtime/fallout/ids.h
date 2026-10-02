@@ -68,6 +68,18 @@ constexpr std::uint64_t kProcessEquipped = 39806;
 constexpr std::uint64_t kCharacterAnimSinkVtable = 207890;
 constexpr std::uint64_t kPlayerAnimSinkVtable = 208044;
 
+// PlayerCharacter's main vtable (1.6.1170 0x18ab9c0). Slot 0xa0 is the aim
+// routine TESObjectWEAP::Fire calls with the firing node (actor, node,
+// float* pitch, float* heading, NiPoint3* origin): 0x766130 (id 41259) uses the
+// look angles while the camera is in its first-person state (current state
+// +0x28 == the state at +0xb8) and the node's rotation otherwise.
+constexpr std::uint64_t kPlayerVtable = 208040;
+constexpr std::size_t kVtAimAngles = 0x500 / 8;
+
+// BSPointerHandle& Projectile::Launch(handle* out, LaunchData&) (1.6.1170
+// 0x7e46c0): every projectile launch, a gun's from TESObjectWEAP::Fire.
+constexpr std::uint64_t kProjectileLaunch = 44108;
+
 // PlayerCharacter* singleton (0x2fbbb58).
 constexpr std::uint64_t kPlayerSingleton = 403521;
 
@@ -137,7 +149,7 @@ constexpr std::uint64_t kGfxSetString = 51740;
 // Limb severing (docs/commentary/asset_convert_falloutnv.md#dismemberment)
 // ---------------------------------------------------------------------------
 
-// void Actor::ApplyHit(Actor*, HitData*) (0x65d8c0): every melee and
+// void Actor::ApplyHit(Actor*, HitData*) (1.6.1170 0x6b7bc0): every melee and
 // projectile hit lands here (8 callers, all patched).
 constexpr std::uint64_t kApplyHit = 38586;
 

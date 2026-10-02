@@ -36,6 +36,12 @@ PACKAGE_SECTIONS = ('OnBegin', 'OnEnd', 'OnChange')
 #: CTDA function index of GetIsID, the same in every game.
 GET_IS_ID = 72
 
+#: CTDA run-on values: the speaker, and whom the line is said to.
+SUBJECT, TARGET = 0, 1
+
+#: The player's FormIDs (reference and base), the same in every game.
+PLAYER = (0x14, 0x07)
+
 #: Export files of placements, geometry and dialogue, which never attach a script.
 _NO_SCRIPT_FILES = frozenset({'REFR', 'ACHR', 'ACRE', 'LAND', 'NAVM', 'NAVI', 'CELL', 'PGRE',
                               'SCPT', 'INFO', 'DIAL'})
@@ -75,6 +81,7 @@ class SourceInfo:
     conditions: list
     choices: list
     link_from: list
+    flags: int = 0
 
 
 def strip_comment(line: str) -> str:
@@ -118,11 +125,11 @@ def decode_condition(data: bytes) -> tuple:
     return ctype, comp, func, param, struct.unpack_from('<I', data, 20)[0]
 
 
-def _requires_id(condition: tuple) -> bool:
-    """Whether a condition is `GetIsID X == 1` (or `!= 0`) on the subject."""
+def _requires_id(condition: tuple, side: int = SUBJECT) -> bool:
+    """Whether a condition is `GetIsID X == 1` (or `!= 0`) run on `side`."""
     ctype, comp, func, _param, run_on = condition
-    return func == GET_IS_ID and run_on == 0 and ((ctype >> 5 == 0 and comp == 1.0)
-                                                   or (ctype >> 5 == 1 and comp == 0.0))
+    return func == GET_IS_ID and run_on == side and ((ctype >> 5 == 0 and comp == 1.0)
+                                                      or (ctype >> 5 == 1 and comp == 0.0))
 
 
 def or_groups(conditions: list) -> list:
@@ -136,14 +143,20 @@ def or_groups(conditions: list) -> list:
     return groups + ([current] if current else [])
 
 
-def required_speakers(conditions: list):
-    """Bases the GetIsID chains allow to speak, or None when anyone may.
+def required_speakers(conditions: list, side: int = SUBJECT):
+    """Bases the GetIsID chains on `side` allow, or None for anyone.
 
     See: docs/commentary/tools_preflight.md#source-setters
     """
     chains = [{c[3] for c in group} for group in or_groups(conditions)
-              if all(_requires_id(c) for c in group)]
+              if all(_requires_id(c, side) for c in group)]
     return sorted(set.intersection(*chains)) if chains else None
+
+
+def addressed_elsewhere(conditions: list) -> list:
+    """The actors a line must be said to when none is the player, else []."""
+    listeners = required_speakers(conditions, TARGET) or []
+    return [] if any(fid & 0xFFFFFF in PLAYER for fid in listeners) else listeners
 
 
 def speakable(conditions: list, present: set) -> bool:
@@ -184,6 +197,7 @@ class SourceGame:
         self.used_scripts = set()
         self.actor_names = {}
         self.stages = {}
+        self.fallout = False
         self._read(export_dir)
 
     def _add(self, kind: str, owner: str, part: str, text: str) -> None:
@@ -208,6 +222,7 @@ class SourceGame:
             if int(rec['FormID'], 16) in named:
                 self.used_scripts.add(get_str(rec, 'EditorID').lower())
         for rec in _records(export_dir, 'DIAL'):
+            self.fallout |= 'DATA.Flags' in rec
             self.dials[int(rec['FormID'], 16)] = (get_str(rec, 'EditorID'),
                                                   get_int(rec, 'DATA.Type'),
                                                   get_int(rec, 'DATA.Flags'))
@@ -239,7 +254,7 @@ class SourceGame:
                  if rec.get(f'Condition[{i}].Raw')]
         self.infos[fid] = SourceInfo(fid, int(rec.get('ParentDIAL', '0'), 16),
                                      int(rec.get('QSTI.Quest', '0') or '0', 16), conds,
-                                     _fids(rec, 'Choice'), _fids(rec, 'LinkFrom'))
+                                     _fids(rec, 'Choice'), _fids(rec, 'LinkFrom'), get_int(rec, 'DATA.Flags'))
         self.external_topics.update(_fids(rec, 'AddTopic'))
 
     def _topics_named_by_scripts(self) -> None:

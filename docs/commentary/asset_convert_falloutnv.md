@@ -304,6 +304,22 @@ per-triangle normal, so step 0 is structurally inert and the render mesh is
 the ONLY signal. Re-scored on 44 architecture meshes: **815 inverted -> 0**,
 no residual on any mesh.
 
+### <a id="upside-down-slabs"></a>Upside-down slabs keep their underside (built 2026-10-01, untested in game)
+
+**Code:** `collision_winding.two_sided_floors`, called after the repair for
+FO3/FNV sources.
+
+A thin collision slab (top and bottom faces) whose render mesh shows only the
+top has no render twin for the bottom, and the floor rule
+([round 4d](asset_convert_collision.md#round-4d-a-face-under-a-floor-faces-up))
+turns that face up. FO3/FNV collide both sides, so the GECK placed such
+pieces upside down freely: 10 of the 48 `MegatonRampStraightSml` placements in
+Megaton are turned about 180 degrees on X, and the player fell through one
+(2026-10-01 play-test, base `00014AD6`), standing on the bottom face, which
+now pointed down. Each face only the floor rule decided gets a reversed copy
+(same material), so it collides from both sides as the source did; faces with
+a render twin, or decided by the nearest skin, stay one-sided.
+
 ### <a id="static-collection-parts"></a>Static-collection parts
 
 An SCOL hangs one fixed body per part off `HavokN` child nodes carrying
@@ -349,6 +365,46 @@ the stool centers clustered from the table's `Stool01:0` shape: (−75.3,
 beside the stool. The sitter faces the way it walked in, heading offset 0: the
 gamblers approach toward the table, and the Oblivion default (+π, the ref-14
 turn) would seat them facing away from it.
+
+## <a id="wall-lean"></a>Wall-lean markers (furniture ref 19, built 2026-09-30, untested in game)
+
+**Code:** `asset_convert/nif/furniture_markers.py` (`LEAN_REF`), its `anim`
+seat field, written by `nif_converter._convert_furniture_markers` and
+`items.convert_FURN` (`FNPR`).
+
+FO3/FNV number their furniture markers their own way; the idles they pick
+say so (`GetFurnitureMarkerID`, function 160): 1 to 6 beds, 11 to 14 chair
+sides, 15 stool, 16 pod, 17 floor sit, 18 restrained sit, 19 wall lean
+(`WallLean` and its entry and exit idles), 20 child bar, 22 work stations
+(blackboard, anvil, microscope, bar). Oblivion's NIFs use only 1 to 4 and 11
+to 14, so no game test is needed. Ref 19 was read as a chair entry: a seat
+55 units ahead of `wallmarker.nif`'s entry, at chair height, so CG03's Butch
+sat inside the wall (2026-09-30 play-test). Its seat is now Skyrim's lean
+(animation type 4 in the marker node and `FNPR`, as vanilla's
+`WallLeanMarker`, whose one marker sits at the model origin facing ahead, as
+FO3's entry does), placed on the entry at floor height. Ref 19 appears in
+`wallmarker.nif` and `benchsuburban02clean.nif` in FO3, and in
+`wallmarker.nif` and two Pitt welding markers in FNV. Refs 17, 18, 20 and 22
+still convert as seats.
+
+## <a id="work-stations"></a>Work-station markers (furniture ref 22, built 2026-10-01, untested in game)
+
+**Code:** `asset_convert/nif/furniture_markers.py` (`STATION_REF`, `_seat_kind`),
+`tes5_import/record_types/items.py` (`COUNTER_LEAN_KEYWORDS`).
+
+Ref 22 is FO3/FNV's work station: the actor walks onto the entry and plays
+the station's idle standing there, facing ahead (FO3: `CounterLean` and
+`BarKeep` on `barkeep.nif`, blackboard, microscope, anvil, push-ups, 15 FURN;
+FNV: 30, among them Benny's `VTopsBennyLeanOnRailMarker` and the casino
+dealers). It converted as a chair seat 55 units ahead at chair height, so
+Colin Moriarty sat on nothing by the saloon balcony rail (2026-10-01
+play-test). Its seat is now Skyrim's counter lean, as vanilla
+`CounterLeanMarker` builds it: on the entry, 32 units above the floor
+(that marker's z), facing the walk-in direction, entered from behind, animation
+type sit, and the FURN carries `FurnitureSpecial`, `FurnitureCounterLeanMarker`
+and `RaceToScale` (vanilla's three keywords). The counter lean is right for the
+bar and rail stations and a stand-in for the others, which Skyrim has no idle
+for.
 
 ## <a id="gun-graph"></a>Guns are hand type 13, not crossbows
 

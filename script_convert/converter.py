@@ -1157,13 +1157,33 @@ class ScriptConverter:
         See: docs/commentary/tes5_import_dialogue.md#speaker-activator-construction
         """
         parsed = _speak_as_tokens(pparts, fname_low) if ref_name else None
-        if not parsed or not self._is_speak_as_identity(*parsed):
+        if parsed is None and ref_name:
+            parsed = self._talker_says(ref_name, pparts, fname_low)
+        elif parsed and not self._is_speak_as_identity(*parsed):
+            parsed = None
+        if not parsed:
             return ''
         topic, voice = parsed
         scene = safe_property_name(
             f'TES4Scene_{ref_name.lower()}_{voice.lower()}_{topic.lower()}')
         self.sc.property_refs[scene] = 'Scene'
         return scene
+
+    def _talker_says(self, ref_name: str, pparts: list, fname_low: str):
+        """(topic, talking activator EditorID) when a placed FO3/FNV TACT says a topic in its own voice, else None.
+
+        Mirrors tes5_import/dialogue/speak_as.py `scan_talker_calls`.
+        See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+        """
+        tokens = [t for part in pparts for t in str(part).split()][fname_low == 'sayto':]
+        xref = self.xref
+        if not tokens or not xref or not all(t.lstrip('-').replace('.', '').isdigit() for t in tokens[1:]):
+            return None
+        base = xref.record_base.get(xref.edid_to_formid.get(ref_name.lower(), ''), '')
+        topic_fid = xref.edid_to_formid.get(tokens[0].lower(), '')
+        if xref.record_type.get(base, '') != 'TACT' or xref.record_type.get(topic_fid, '') != 'DIAL':
+            return None
+        return tokens[0], xref.formid_to_edid.get(base, '')
 
     def _is_speak_as_identity(self, topic: str, voice: str) -> bool:
         """Only an actor BASE is a speak-as identity, and only a real DIAL a topic."""

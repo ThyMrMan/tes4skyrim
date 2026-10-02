@@ -25,6 +25,9 @@ PKID_CREATURE_MASTER = 0x0010F2A5   # PACK DefaultMasterPackageCreature
 DPLT_CREATURE_LIST = 0x0010F2A6     # FLST DefaultMasterPackageListCreature
 PKID_NPC_SANDBOX = 0x000BFB6B       # PACK DefaultSandboxCurrentLocation1024
 DPLT_NPC_LIST = 0x00021E81          # FLST DefaultMasterPackageList
+
+#: Skyrim.esm FLST DefaultHoldPositionCurrentLoc64List: DefaultHoldPositionCurrentLoc64 alone.
+DPLT_HOLD_LIST = 0x000A6853
 CSTY_DEFAULT = 0x0000003D           # CSTY DefaultCombatstyle
 CSTY_ANIMAL = 0x00057BE8            # CSTY csWolf (vanilla wolf/dog ZNAM)
 CLAS_CREATURE_PREDATOR = 0x000131E6  # CLAS EncClassAnimalPredator (wolf...)
@@ -107,6 +110,28 @@ def authored_packages(rec: dict) -> list:
     """The actor's TES4 AIPackage list, in authored order."""
     return [get_formid(rec, f'AIPackage[{i}]')
             for i in range(get_int(rec, 'AIPackageCount'))]
+
+
+def package_speakers(by_type: dict) -> dict:
+    """{package FormID: {actor base FormID}} over the plugin's NPC_ and CREA AIPackage lists."""
+    out = {}
+    for sig in ('NPC_', 'CREA'):
+        for rec in by_type.get(sig, []):
+            for pack in authored_packages(rec):
+                out.setdefault(pack, set()).add(get_formid(rec, 'FormID'))
+    return out
+
+
+def default_package_list(pack_fids, standing_list: int) -> int:
+    """DPLT: hold in place when every authored package is quest-owned, else `standing_list`.
+
+    Oblivion leaves an actor with no valid package standing where it is.
+    See: docs/commentary/tes5_import_package.md#quest-only-actors-hold-in-place
+    """
+    fids = [f for f in pack_fids if f]
+    if fids and all(f in _QUEST_PACKAGES for f in fids):
+        return DPLT_HOLD_LIST
+    return standing_list
 
 
 def npc_packages(pack_fids) -> list:

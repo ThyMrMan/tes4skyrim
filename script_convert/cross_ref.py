@@ -14,6 +14,7 @@ from script_convert.command_rows import (
 )
 from tes5_import.base.mesh_bounds import get_mesh_physics_flags
 from tes5_import.base.text_reader import parse_export_file
+from tes5_import.record_types.world_falloutnv import FALLOUT_ONLY_SIGS
 from asset_convert.game_paths import current_namespace
 from core.worker_budget import worker_count
 from core.worldspace_names import converted_worldspace_edid, renames_for
@@ -526,6 +527,13 @@ class CrossRefGraph:
                 index.setdefault(scri_fid, []).append(rec_fid)
             self._attached_index = index
         return index.get(script_formid, [])
+
+    def is_fallout(self) -> bool:
+        """Whether the scanned plugin is FO3/FNV: it holds a record type only they have; cached."""
+        found = getattr(self, '_is_fallout', None)
+        if found is None:
+            found = self._is_fallout = not set(FALLOUT_ONLY_SIGS).isdisjoint(self.record_type.values())
+        return found
 
     def attached_signatures(self, script_formid: str) -> set:
         """Record signatures of every record the script is attached to."""

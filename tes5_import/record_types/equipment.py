@@ -45,7 +45,7 @@ from .projectile_falloutnv import (ammo_projectile, gun_sheathe_sounds,
                                    gun_sound_subs)
 from .common import (
     VENDOR_KYWD,
-    _common_header_subs,
+    common_header_subs,
     _convert_biped_flags,
     prefix_path,
     get_float,
@@ -438,7 +438,7 @@ def convert_WEAP(rec: dict, writer=None) -> bytes:
     TES5 order: EDID OBND FULL MODL EITM EAMT ETYP BIDS BAMT INAM WNAM SNAM XNAM
     NAM7 TNAM UNAM NAM9 NAM8 DATA DNAM CRDT VNAM
     """
-    subs = _common_header_subs(rec, obnd_sig='WEAP')
+    subs = common_header_subs(rec, obnd_sig='WEAP')
     model = get_str(rec, 'Model.MODL')
     if model:
         subs += pack_string_subrecord('MODL', prefix_path(model))
@@ -522,7 +522,7 @@ def convert_ARMO(rec: dict, is_clothing: bool = False, writer=None) -> bytes:
 
     When writer is provided, generates a companion ARMA record and references it.
     """
-    subs = _common_header_subs(rec, obnd_sig='ARMO')
+    subs = common_header_subs(rec, obnd_sig='ARMO')
 
     # EITM — Object Effect (enchantment) — NOT ENAM
     enam = get_formid(rec, 'ENAM')
@@ -776,7 +776,7 @@ def _build_arrow_proj(edid: str, model_path: str, speed: float, proj_fid: int) -
 
 
 def convert_AMMO(rec: dict, writer=None) -> bytes:
-    subs = _common_header_subs(rec, obnd_sig='AMMO')
+    subs = common_header_subs(rec, obnd_sig='AMMO')
     model = get_str(rec, 'Model.MODL')
     if model:
         subs += pack_string_subrecord('MODL', prefix_path(model))
@@ -894,8 +894,7 @@ def convert_BOOK(rec: dict, writer=None) -> bytes:
         return pack_record('SCRL', get_formid(rec, 'FormID'),
                            get_int(rec, 'RecordFlags'), subs)
 
-    # TES5 BOOK field order: EDID OBND FULL MODL DESC DATA INAM CNAM
-    subs = _common_header_subs(rec, obnd_sig='BOOK')
+    subs = common_header_subs(rec, obnd_sig='BOOK')
     model = get_str(rec, 'Model.MODL')
     if model:
         subs += pack_string_subrecord('MODL', prefix_path(model))
@@ -1043,7 +1042,7 @@ def _spell_subrecords(rec: dict, edid: str, writer, delivery: int = None) -> byt
 
 
 def convert_ALCH(rec: dict, writer=None) -> bytes:
-    subs = _common_header_subs(rec, obnd_sig='ALCH')
+    subs = common_header_subs(rec, obnd_sig='ALCH')
 
     tes4_flags = get_int(rec, 'ENIT.Flags')
     full = get_str(rec, 'FULL', '').lower()
@@ -1080,7 +1079,7 @@ def convert_ALCH(rec: dict, writer=None) -> bytes:
 
 
 def convert_INGR(rec: dict, writer=None) -> bytes:
-    subs = _common_header_subs(rec, obnd_sig='INGR')
+    subs = common_header_subs(rec, obnd_sig='INGR')
 
     # KSIZ/KWDA — vendor keyword (TES4 food is sold by ingredient vendors)
     subs += pack_keywords([VENDOR_KYWD['Ingredient']])
@@ -1116,7 +1115,7 @@ def _build_scrl(rec: dict, effect_src: dict, cost: int = 0,
     an enchanted book, whose effects live on the ENCH its ENAM names: SCRL
     carries its effects directly, and one without any is a dead item.
     """
-    subs = _common_header_subs(rec, obnd_sig='SCRL')
+    subs = common_header_subs(rec, obnd_sig='SCRL')
 
     # KSIZ/KWDA — vendor keyword
     subs += pack_keywords([VENDOR_KYWD['Scroll']])
@@ -1159,7 +1158,7 @@ def convert_SGST(rec: dict, writer=None) -> bytes:
 
 def convert_APPA(rec: dict) -> bytes:
     """Apparatus → MISC (no apparatus in TES5)."""
-    subs = _common_header_subs(rec, obnd_sig='MISC')
+    subs = common_header_subs(rec, obnd_sig='MISC')
     model = get_str(rec, 'Model.MODL')
     if model:
         subs += pack_string_subrecord('MODL', prefix_path(model))

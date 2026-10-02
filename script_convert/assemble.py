@@ -13,7 +13,7 @@ later phase's state.
 import re
 from dataclasses import replace
 
-from script_convert.blocks import (BLOCK_MAP, COMBAT_STATE_GUARDS,
+from script_convert.blocks import (BLOCK_MAP, BLOCK_TYPE_GUARDS,
                                    block_filter_guard, block_header)
 from script_convert.constants import (
     LAST_ACTIVATOR_VAR, MENU_ID_NAMES, MESSAGE_BOX_MENU_ID, UDF_CALLER_PARAM, UDF_RESULT_VAR,
@@ -67,12 +67,23 @@ def build(conv, name: str, source: str, extends: str, editor_id: str) -> str:
 # Loading: symbols and facts
 # ---------------------------------------------------------------------------
 
+def _hosted_off_actors(conv, editor_id: str) -> bool:
+    """Whether the script rides on any known non-actor record, where `extends Actor` could never bind.
+
+    Only a script whose hosts are unknown may still become Actor by its bare calls (a FO3 talking
+    activator's bare `Look Player` made the MQ09 intercom script, shared with a creature, unbindable).
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+    """
+    xref = conv.xref
+    fid = xref.edid_to_formid.get(editor_id.lower(), '') if xref else ''
+    sigs = (xref.attached_signatures(fid) if fid else set()) - {''}
+    return bool(sigs - {'NPC_', 'CREA', 'ACHR', 'ACRE'})
+
+
 def _prepare(conv, name: str, source: str, extends: str, editor_id: str):
-    """Parse the script and load the context: symbols, then facts."""
+    """Parse the script and load the context: symbols, then facts; a bare Actor-only call makes an Actor script."""
     conv.sc.edid = editor_id or name
-    # A script calling Actor-only functions on a bare Self is an ACTOR script,
-    # whatever the record said.
-    if extends == 'ObjectReference':
+    if extends == 'ObjectReference' and not _hosted_off_actors(conv, editor_id or name):
         extends = conv._infer_extends(source, extends)
     conv._script_extends = extends
 
@@ -374,12 +385,13 @@ def properties(conv, tree) -> list:
 def quest_restart(conv, tree, extends: str, name: str) -> list:
     """`TES4Start(quest)` and `TES4SetStage(quest, stage)`, keeping TES4 variables.
 
-    Skyrim's `Start()` on a stopped quest re-initialises its scripts, and so
-    does a `SetStage` that starts it; TES4 kept every quest variable across
-    both.  Global, so the saved values live in the caller's frame rather than
-    the instance Start replaces.
+    Skyrim's `Start()` on a stopped quest re-initialises its scripts, as does
+    a `SetStage` that starts it; TES4 kept every quest variable across both.
+    Global, so the saved values live in the caller's frame.  The stage then
+    re-checks the alias packages.
     See: docs/commentary/script_convert.md#stopquest-converts-stop-run-bit
     See: docs/commentary/script_convert.md#setstage-start-keeps-variables
+    See: docs/commentary/script_convert.md#setstage-re-evaluates-alias-packages
     """
     if extends != 'Quest':
         return []
@@ -394,7 +406,9 @@ def quest_restart(conv, tree, extends: str, name: str) -> list:
             '  If !akQuest.IsRunning()',
             '    TES4Start(akQuest)',
             '  EndIf',
-            '  Return akQuest.SetStage(aiStage)']
+            '  Bool done = akQuest.SetStage(aiStage)',
+            '  TES4Polyfill.StageSet(akQuest)',
+            '  Return done']
     return out + ['EndFunction']
 
 
@@ -1185,7 +1199,7 @@ def _guarded(conv, block, body: list) -> list:
     """
     btype = block.btype.lower()
     guard = block_filter_guard(conv, btype, block.filter or '')
-    state = COMBAT_STATE_GUARDS.get(btype)
+    state = BLOCK_TYPE_GUARDS.get(btype)
     if state and guard is not None:
         guard = f'{state} && {guard}' if guard else state
 

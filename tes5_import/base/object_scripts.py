@@ -36,7 +36,7 @@ from .text_reader import (get_formid_index_offset,
                           remap_formid, unescape_value)
 from .writer import (pack_record, pack_string_subrecord, pack_subrecord,
                      pack_uint32_subrecord)
-from .constants import ENGINE_GLOBAL_FORMIDS
+from .constants import ENGINE_GLOBAL_FORMIDS, FALLOUT_BASE_TYPES
 from .equivalents import (DEFAULT_RACE, RACE_MAP,
                                TES4_ITEM_FORMID_TO_SKYRIM,
                                TES4_RACE_FID_TO_EDID)
@@ -61,7 +61,7 @@ _PLAYER_BASE_FID = 0x07
 SCRIPTABLE_TYPES = {
     'ACTI', 'FLOR', 'CONT', 'DOOR', 'FURN', 'MISC', 'KEYM', 'LIGH',
     'STAT', 'BOOK', 'WEAP', 'ARMO', 'CLOT', 'AMMO', 'INGR', 'ALCH',
-    'APPA', 'SLGM', 'SGST', 'SBSP', 'NPC_', 'CREA',
+    'APPA', 'SLGM', 'SGST', 'SBSP', 'NPC_', 'CREA', 'TACT', 'TERM',
 }
 
 # Output (TES5) signatures whose xEdit record definition actually lists a VMAD
@@ -381,6 +381,11 @@ def build_magic_effect_script_plan(by_type: dict, xref, fid_to_edid: dict,
     return len(_MAGIC_EFFECT_VMAD)
 
 
+def holds_vmad(sig: str, type_map: dict) -> bool:
+    """Whether the Skyrim type `sig` converts to can hold a VMAD."""
+    return (type_map.get(sig) or FALLOUT_BASE_TYPES.get(sig, sig)) in VMAD_SUPPORTED_OUTPUT_TYPES
+
+
 def build_object_script_plan(by_type: dict, xref, fid_to_edid: dict,
                              master_export: dict = None) -> int:
     """Compute and cache the VMAD for every object record with an attached SCPT.
@@ -412,11 +417,7 @@ def build_object_script_plan(by_type: dict, xref, fid_to_edid: dict,
 
     count = 0
     for sig in SCRIPTABLE_TYPES:
-        # Skip types whose Skyrim output record has no VMAD field in its def;
-        # binding a script there only produces an "unexpected subrecord" error
-        # (ALCH, SLGM, STAT, AMMO, and SGST→SCRL / SBSP→STAT map here).
-        out_sig = TYPE_MAP.get(sig, sig)
-        if out_sig not in VMAD_SUPPORTED_OUTPUT_TYPES:
+        if not holds_vmad(sig, TYPE_MAP):
             continue
         for rec in by_type.get(sig, []):
             scri = rec.get('SCRI', '')

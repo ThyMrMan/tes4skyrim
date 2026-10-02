@@ -15,6 +15,9 @@ See: docs/commentary/tes5_import_quest.md#quest-conversion
 import re
 import struct
 
+from script_convert.constants import STAGE_PACKAGE_ALIAS_SCRIPT
+from ..packages.run_once import alias_run_once
+from script_convert.pipeline import build_vmad_quest_fragments
 from ..base.constants import ENGINE_GLOBAL_FORMIDS
 from ..base.conditions import (CTDA_OR, CTDA_RUN_ON_TARGET,
                                 convert_ctda,
@@ -22,6 +25,7 @@ from ..base.conditions import (CTDA_OR, CTDA_RUN_ON_TARGET,
                                 convert_script_var_ctda)
 from .objective_text import short_objective
 from .quest_falloutnv import authored_objectives, has_authored_objectives
+from ..record_types.world_falloutnv import is_fallout_source
 from ..base.text_reader import get_formid_index_offset, remap_formid
 from ..record_types.common import (
     get_formid,
@@ -168,7 +172,13 @@ def quest_stage_fragments(rec: dict) -> list:
 
 def _quest_has_journal(rec: dict) -> bool:
     """True if any stage carries journal log text (the quest is a real,
-    player-visible quest rather than a dialogue/control quest)."""
+    player-visible quest rather than a dialogue/control quest).
+
+    FO3/FNV never showed stage log text, only objectives.
+    See: docs/commentary/tes5_import_quest.md#fallout-stage-log-text
+    """
+    if is_fallout_source():
+        return False
     stage_count = get_int(rec, 'StageCount')
     for i in range(stage_count):
         log_count = get_int(rec, f'Stage[{i}].LogCount')
@@ -286,10 +296,13 @@ def has_quest_state_condition(rec: dict) -> bool:
             return True
 
 
-def quest_state_ctdas(rec: dict, offset: int, script_vars: dict = None) -> list:
+def quest_state_ctdas(rec: dict, offset: int, script_vars: dict = None,
+                      own_stages: tuple = ()) -> list:
     """Converted [(32-byte CTDA, cis2-or-None)] for just the TIMING
     conditions on `rec` -- the gates a promoted choice target must
-    inherit. [] when the revealer has none.
+    inherit. [] when the revealer has none. A stage gate that `own_stages`
+    ((source quest FormID, stage) the revealer's own script sets) makes
+    false is left out, or the choices would close as they open.
 
     See: docs/commentary/tes5_import_quest.md#timing-ctdas-a-promoted-target-inherits
     """
@@ -309,6 +322,8 @@ def quest_state_ctdas(rec: dict, offset: int, script_vars: dict = None) -> list:
         if len(raw) < 10:
             continue
         func = struct.unpack_from('<H', raw, 8)[0]
+        if any(_stage_gate_value(raw, stage, q) is False for q, stage in own_stages):
+            continue
         if func in _VAR_STATE_FUNCS:
             pair = convert_script_var_ctda(raw, script_vars or {}, offset)
             if pair is not None:
@@ -650,7 +665,7 @@ def _stage_log_entry(rec: dict, i: int, j: int, text: str,
         subs += pack_subrecord('CTDA', ctda)
         if cis2:
             subs += pack_string_subrecord('CIS2', cis2)
-    if text:
+    if text and not is_fallout_source():
         subs += pack_string_subrecord('CNAM', text)
     return subs
 
@@ -809,46 +824,55 @@ def convert_QUST(rec: dict, fid_to_edid: dict = None,
     Order: EDID [VMAD] FULL DNAM NEXT [stages] [objectives] ANAM [aliases].
     unlock_plan/unlock_globals bind the AddTopic unlock GLOB properties for
     stage result scripts that reveal topics; script_vars names the quest
-    variables authored objective targets are gated on.
+    variables authored objective targets are gated on. Objectives convert
+    first, so authored targets take their alias ids before packages do.
 
     See: docs/commentary/tes5_import_quest.md#quest-conversion
     """
-    subs = b''
     edid = get_str(rec, 'EditorID')
-    if edid:
-        subs += pack_string_subrecord('EDID', edid)
+    qfid = get_formid(rec, 'FormID')
+    alias_by_fid, targets = quest_targets(rec)
+    objectives = (authored_objectives(rec, alias_by_fid, script_vars or {},
+                                      get_formid_index_offset())
+                  if has_authored_objectives(rec) or is_fallout_source()
+                  else quest_objectives(rec, targets, script_vars))
+    alias_packages = _quest_alias_packages(pack_plan, qfid, alias_by_fid)
 
-    stage_frags = quest_stage_fragments(rec)
-    from ..base.object_scripts import get_quest_script
-    attached = get_quest_script(get_formid(rec, 'FormID'))
-    if (stage_frags or attached) and edid:
-        from script_convert.pipeline import build_vmad_quest_fragments
-        prop_vals = _quest_vmad_properties(rec, edid, fid_to_edid,
-                                           well_known_props, unlock_plan,
-                                           unlock_globals, xref)
-        subs += pack_subrecord('VMAD', build_vmad_quest_fragments(
-            edid, stage_frags, property_values=prop_vals or None,
-            attached_script=attached))
-
+    subs = pack_string_subrecord('EDID', edid) if edid else b''
+    subs += _quest_vmad(rec, edid, alias_packages, (fid_to_edid, well_known_props, unlock_plan,
+                                                    unlock_globals, xref))
     full = get_str(rec, 'FULL')
     if full:
         subs += pack_string_subrecord('FULL', full)
     subs += pack_subrecord('DNAM', _quest_dnam(rec))
     subs += pack_subrecord('NEXT', b'')
-
-    stage_count = get_int(rec, 'StageCount')
-    subs += _quest_stages(rec, stage_count, script_vars)
-    alias_by_fid, targets = quest_targets(rec)
-    subs += (authored_objectives(rec, alias_by_fid, script_vars or {},
-                                 get_formid_index_offset())
-             if has_authored_objectives(rec)
-             else quest_objectives(rec, targets, script_vars))
-
-    qfid = get_formid(rec, 'FormID')
-    alias_packages = _quest_alias_packages(pack_plan, qfid, alias_by_fid)
+    subs += _quest_stages(rec, get_int(rec, 'StageCount'), script_vars)
+    subs += objectives
     subs += pack_uint32_subrecord('ANAM', len(alias_by_fid))
     subs += quest_aliases(alias_by_fid, alias_packages, fid_to_edid)
     return pack_record('QUST', qfid, get_int(rec, 'RecordFlags'), subs)
+
+
+def _quest_vmad(rec: dict, edid: str, alias_packages: dict, prop_args: tuple) -> bytes:
+    """The VMAD subrecord: stage fragments, attached quest script, package-alias scripts; b'' if none.
+
+    `prop_args` is `_quest_vmad_properties`'s (fid_to_edid, well_known_props,
+    unlock_plan, unlock_globals, xref). Imports object_scripts here: it reaches
+    this module through overrides.builder.
+    See: docs/commentary/script_convert.md#setstage-re-evaluates-alias-packages
+    """
+    from ..base.object_scripts import get_quest_script
+    qfid = get_formid(rec, 'FormID')
+    stage_frags = quest_stage_fragments(rec)
+    attached = get_quest_script(qfid)
+    if not ((stage_frags or attached or alias_packages) and edid):
+        return b''
+    prop_vals = _quest_vmad_properties(rec, edid, *prop_args)
+    alias_scripts = [(alias_id, [(STAGE_PACKAGE_ALIAS_SCRIPT, alias_run_once(alias_packages[alias_id]))])
+                     for alias_id in sorted(alias_packages)]
+    return pack_subrecord('VMAD', build_vmad_quest_fragments(
+        edid, stage_frags, property_values=prop_vals or None, attached_script=attached,
+        alias_scripts=alias_scripts, quest_fid=qfid))
 
 
 def _alias_name(ref_fid: int, alias_id: int, fid_to_edid: dict) -> str:

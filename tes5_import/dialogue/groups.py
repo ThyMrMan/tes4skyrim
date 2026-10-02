@@ -15,6 +15,8 @@ from .quest import (bark_choice_gate_bytes, compute_quest_priorities,
                     has_quest_state_condition, quest_state_ctdas)
 from ..base.tes5_reader import subrecords
 from ..base.writer import pack_group
+from ..packages.force_greet_gates import stages_set
+from .say_once import plan_reply_trees, tree_gate
 from .arrest import force_greet_topic
 from .barks_morrowind import bark_voice_types
 from ..record_types.common import (get_formid, get_int, get_str,
@@ -46,15 +48,18 @@ from .converter import (DIAL_TYPE_CONVERSATION, SERVICE_MENU_SCRIPTS,
     is_npc_to_npc_conversation, make_conversation_quest,
     make_generic_quest, register_conversation_chains,
     SCENE_TOPIC, classify_topic, collect_tclt_target_fids,
-    convert_DIAL, convert_INFO, info_tclt, make_dlbr, make_dlvw, service_menu_kind,
+    convert_DIAL, convert_INFO, make_dlbr, make_dlvw, service_menu_kind,
     should_skip_dial, voice_file_prefix,
     GREET_TOPIC_BY_QUEST, EMPTY_DIAL_FIDS, lip_texts, startable_quests)
 from .say_topics import (FORCE_GREET_SLOTS, SAY_TOPIC_DISPOSITIONS,
                          build_say_topic_dispositions)
 from .speak_as import SCENE_QUEST_EDID, scene_quest_fid, speaker_subrecords
 from .topics_falloutnv import has_topic_flags, is_top_level
-from .follow_ups_falloutnv import (FOLLOW_UP_TOPICS, blocking_branch, build_follow_up_topics,
-                                   capture_follow_up, opens_with_follow_up, plan_follow_ups)
+from .follow_ups_falloutnv import (FOLLOW_UP_TOPICS, build_follow_up_topics, capture_follow_up,
+                                   plan_follow_ups)
+from .greeting_choices import IN_DIALOGUE_MENU, scene_held, shared_greetings
+from .talking_as_falloutnv import talking_voices
+from .conversation_scenes_falloutnv import build_conversation_scenes, capture_line
 from .speech_challenges_falloutnv import (failure_copies, labelled, plan_speech_challenges,
                                           speech_props, success_gate)
 
@@ -154,14 +159,16 @@ def _branch_is_linked(dial_rec, dial_fid, tclt_targets, bark_choice_targets,
 
     A reply (a TCLT target; in FO3/FNV, a topic without Top-level) or a
     StartConversation force-greet topic never AddTopic'd stays off the menu;
-    a reply reached from a bark/greeting choice does not.  Script-driven
-    Conversation topics, and TES4 topics nothing ever adds, are forced Normal.
+    an Oblivion reply reached from a bark/greeting choice does not (FO3/FNV say
+    whether a topic is top-level).  Script-driven Conversation topics, and TES4
+    topics nothing ever adds, are forced Normal.
 
     See: docs/commentary/tes5_import_dialogue.md#branches-views-topic-ownership
     See: docs/commentary/tes5_import_dialogue.md#fallout-topic-links
     """
     fid24 = dial_fid & 0xFFFFFF
-    if has_topic_flags(dial_rec):
+    flagged = has_topic_flags(dial_rec)
+    if flagged:
         never_added = fid24 not in unlock_plan.get('added', ())
         reply = not is_top_level(dial_rec)
     else:
@@ -169,7 +176,7 @@ def _branch_is_linked(dial_rec, dial_fid, tclt_targets, bark_choice_targets,
                        and fid24 not in unlock_plan.get('script_added', ()))
         reply = dial_fid in tclt_targets
     forced = get_str(dial_rec, 'EditorID', '').lower() in FORCE_GREET_SLOTS
-    return ((never_added and (forced or (reply and dial_fid not in bark_choice_targets)))
+    return ((never_added and (forced or (reply and (flagged or dial_fid not in bark_choice_targets))))
             or _is_script_topic(dial_rec, dial_fid)
             or (not has_topic_flags(dial_rec) and fid24 in unlock_plan.get('unreachable', ())))
 
@@ -247,7 +254,20 @@ def _fill_say_dispositions(by_type: dict) -> None:
           f"target-conditions, {kinds['target']} engine-fired drop identity only)")
 
 
-def _scan_bark_choice_links(dials, infos, offset, script_vars):
+_SETSTAGE = re.compile(r'\bsetstage\s+"?([A-Za-z_]\w*)"?\s+(\d+)', re.IGNORECASE)
+
+
+def own_stages(info_rec, quest_fids: dict) -> tuple:
+    """(source quest FormID, stage) for each `setstage` in the INFO's own result scripts."""
+    found = []
+    for key, text in info_rec.items():
+        if key.startswith('ResultScript') and text:
+            found += [(quest_fids[e.lower()], int(n)) for e, n in _SETSTAGE.findall(text)
+                      if e.lower() in quest_fids]
+    return tuple(found)
+
+
+def _scan_bark_choice_links(dials, infos, offset, script_vars, quest_fids=None):
     """Bark topics and the conversation topics their choices reveal.
 
     Returns (bark_dial_fids, bark_choice_targets, bark_choice_gate).  A target
@@ -278,7 +298,8 @@ def _scan_bark_choice_links(dials, infos, offset, script_vars):
         if not is_bark_info:
             conv_choice_targets.update(targets_here)
             continue
-        gate = quest_state_ctdas(info_rec, offset, script_vars)
+        gate = quest_state_ctdas(info_rec, offset, script_vars,
+                                 own_stages(info_rec, quest_fids or {}))
         for cfid in targets_here:
             bark_choice_gate[cfid].append(gate)
 
@@ -447,6 +468,8 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
     quest_edid_by_fid, quest_fid_by_edid, quest_dialog_ctdas = \
         _quest_lookup_tables(by_type, dials, fid_to_edid, generic_quest_fid,
                              offset, script_vars)
+    print(f"    Say Once lines kept until their replies' stage: "
+          f"{plan_reply_trees(by_type.get('INFO', []), dials, quest_fid_by_edid)}")
 
     # VTYP FormID -> EditorID, so an NPC-specific line can record the folder its
     # speaker's voice type resolves to (voice files are relocated there).
@@ -493,8 +516,10 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
     # drop needs it before the first should_skip_dial call.)
 
     tclt_targets = collect_tclt_target_fids(by_type)
+    quest_fids = {get_str(q, 'EditorID').lower(): int(q['FormID'], 16)
+                  for q in by_type.get('QUST', []) if get_str(q, 'EditorID')}
     bark_dial_fids, bark_choice_targets, bark_choice_gate = \
-        _scan_bark_choice_links(dials, infos, offset, script_vars)
+        _scan_bark_choice_links(dials, infos, offset, script_vars, quest_fids)
     unlock_plan = unlock_plan or {'gated': {}, 'info_reveals': {},
                                   'stage_reveals': {}}
     unlock_globals = unlock_globals or {}
@@ -540,7 +565,7 @@ def build_dialog_groups(by_type: dict, writer, npc_to_vtyp: dict,
         bark_generic_quests, bark_ctx)
     all_dial_content += bark_content
     follow_up_content, follow_up_branches = build_follow_up_topics(writer, unlock_globals)
-    all_dial_content += follow_up_content
+    all_dial_content += follow_up_content + build_conversation_scenes(writer)
     all_dlbr += follow_up_branches + b''.join(bark_ctx.get('blocking_branches', ()))
 
     # --- NPC-conversation driver quest (all topic FormIDs now known) ---
@@ -674,7 +699,8 @@ def _record_voice_entry(info_rec, owner_qfid, ctx) -> None:
 
     The prefix is built from the OWNING quest's EditorID; an NPC-specific line
     also names the voice-type folders its speakers resolve to, because
-    Oblivion filed some recordings under the wrong race directory.
+    Oblivion filed some recordings under the wrong race directory, then the
+    folders of the talking activators that speak as them.
 
     See: docs/commentary/tes5_import_dialogue.md#voice-files-lip-sync-audio
     """
@@ -689,11 +715,13 @@ def _record_voice_entry(info_rec, owner_qfid, ctx) -> None:
             lip_texts[(info_fid & 0xFFFFFF, rnum)] = rtext
     own_npcs = read_getisid_fids(info_rec, offset=ctx['offset'],
                                  positive_only=True)
-    vt_edids = sorted({
-        ctx['vtyp_edid_by_fid'].get(ctx['npc_to_vtyp'][n], '')
-        for n in own_npcs if n in ctx['npc_to_vtyp']} - {''})
-    if vt_edids:
-        prefix = prefix + '\t' + ','.join(vt_edids)
+    voices = {ctx['npc_to_vtyp'][n] for n in own_npcs if n in ctx['npc_to_vtyp']}
+    vt_edids, lent = ([ctx['vtyp_edid_by_fid'].get(v, '') for v in sorted(vs)]
+                      for vs in (voices, talking_voices(own_npcs) - voices))
+    if any(vt_edids) or any(lent):
+        prefix = prefix + '\t' + ','.join(sorted(set(vt_edids) - {''}))
+    if any(lent):
+        prefix = prefix + '\t' + ','.join(sorted(set(lent) - {''}))
     ctx['voice_map'][info_fid & 0xFFFFFF] = prefix
 
 
@@ -894,6 +922,7 @@ def _convert_topic_infos(child_infos, owner_qfid, ctx):
             info_rec = labelled(info_rec, ctx.get('prompt', ''))
             info_bytes = _convert_info(info_rec, owner_qfid, ctx)
             capture_follow_up(get_formid(info_rec, 'FormID'), owner_qfid, info_bytes)
+            capture_line(get_formid(info_rec, 'FormID'), info_bytes)
             failures, failed = failure_copies(
                 info_rec, info_bytes, lambda rec: _convert_info(rec, owner_qfid, ctx))
             topic_children += info_bytes + failures
@@ -920,12 +949,12 @@ def _convert_info(info_rec, owner_qfid, ctx) -> bytes:
     injected = _build_injected_ctdas(
         info_rec, ctx['is_bark'], ctx['npc_to_vtyp'],
         ctx['topic_vtyps'], ctx['topic_npc_fids'],
-        ctx['service_gate_bytes'] + quest_gate_bytes + quest_cond_bytes
+        ctx.get('menu_gate_bytes', b'') + ctx['service_gate_bytes'] + quest_gate_bytes + quest_cond_bytes
         + bc_gate,
         ctx['unlock_gate_bytes'], ctx['offset'], ctx['stats'],
         sibling_factions=ctx.get('sibling_factions'),
         sibling_npcs=ctx.get('sibling_npcs'),
-        shared_state_bytes=ctx.get('shared_state_bytes', b'')) + success_gate(info_rec)
+        shared_state_bytes=ctx.get('shared_state_bytes', b'')) + success_gate(info_rec) + tree_gate(info_rec)
     return convert_INFO(
         info_rec, injected_ctdas=injected,
         fid_to_edid=ctx['fid_to_edid'],
@@ -937,7 +966,8 @@ def _convert_info(info_rec, owner_qfid, ctx) -> bytes:
         menu_topic_fids=ctx.get('menu_topic_fids', ()),
         script_vars=ctx.get('script_vars'),
         speaker=speaker_subrecords(info_rec, ctx['offset']),
-        follow_up=FOLLOW_UP_TOPICS.get(get_formid(info_rec, 'FormID'), 0))
+        follow_up=FOLLOW_UP_TOPICS.get(get_formid(info_rec, 'FormID'), 0),
+        own_stages=stages_set(info_rec, ctx.get('quest_fid_by_edid')))
 
 
 def _reveal_props(info_rec, ctx) -> dict:
@@ -1101,6 +1131,7 @@ def _bark_group_ctx(ctx, g, edid: str) -> dict:
                      bark_choice_gate_bytes=b'', service_kind='', edid=edid,
                      orig_quest_fid=None, sibling_factions=set(),
                      sibling_npcs=set())
+    group_ctx['menu_gate_bytes'] = IN_DIALOGUE_MENU if (g['edid'] or '').upper() == 'GREETING' else b''
     group_ctx['topic_vtyps'] = _topic_voice_types(
         g['infos'], ctx['npc_to_vtyp'], ctx['offset'])
     raw_q = get_formid(g['infos'][0], 'QSTI.Quest')
@@ -1113,23 +1144,13 @@ def _bark_group_ctx(ctx, g, edid: str) -> dict:
     return group_ctx
 
 
-def greets_with_choices(g, ctx) -> bool:
-    """Whether a GREETING group has a line whose reply links survive, so opens as Blocking.
-
-    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
-    """
-    if (g['edid'] or '').upper() != 'GREETING':
-        return False
-    return any(info_tclt(r, ctx.get('bark_dial_fids'), ctx.get('menu_topic_fids', ()))
-               for r in g['infos'])
-
-
 def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
-    """One bark group's DIAL and INFOs, plus a GREETING's arrest force-greet.
+    """One bark group's DIAL and INFOs, plus a GREETING's leading lines and arrest force-greet.
 
-    PNAM stays at the vanilla 50.0.
+    PNAM stays at the vanilla 50.0.  A force greet opens the leading lines' Blocking topic.
     See: docs/commentary/tes5_import_dialogue.md#bark-pnam-stays-default
     See: docs/commentary/tes5_import_dialogue.md#arrest-force-greet
+    See: docs/commentary/tes5_import_dialogue.md#greeting-choices-block
     """
     owner_qfid, subtype = key
     dial_fid, edid = _bark_topic_ids(writer, key, g, claimed, ctx)
@@ -1137,18 +1158,24 @@ def _emit_bark_group(writer, key, g, claimed: set, ctx) -> bytes:
         g['infos'], owner_qfid, _bark_group_ctx(ctx, g, edid))
     if not count:
         return b''
-    shape, branch = (g['cat'], subtype, g['snam']), 0
-    if opens_with_follow_up(g['infos']) or greets_with_choices(g, ctx):
-        shape = (0, 0, b'CUST')
-        branch, dlbr = blocking_branch(writer, key, edid, owner_qfid, dial_fid)
+    greeting = (g['edid'] or '').upper() == 'GREETING'
+    shared = shared_greetings(writer, key, g, (dial_fid, edid), children, ctx) if greeting else None
+    held = None if greeting else scene_held(writer, key, g, (dial_fid, edid), children)
+    if held:
+        content, ctx['bark_topic_fids'][key] = held
+    elif shared:
+        content, dlbr, greet_fid = shared
+        ctx['bark_topic_fids'][key] = greet_fid
         ctx.setdefault('blocking_branches', []).append(dlbr)
-    content = convert_DIAL(
-        g['src'], info_count=count, dlbr_fid=branch, quest_fid=owner_qfid,
-        category=shape[0], subtype=shape[1], snam=shape[2],
-        edid_override=edid, formid_override=dial_fid)
-    content += pack_group(7, struct.pack('<I', dial_fid), children)
+        if GREET_TOPIC_BY_QUEST.get(owner_qfid) == dial_fid:
+            GREET_TOPIC_BY_QUEST[owner_qfid] = greet_fid
+    else:
+        content = convert_DIAL(
+            g['src'], info_count=count, dlbr_fid=0, quest_fid=owner_qfid, category=g['cat'],
+            subtype=subtype, snam=g['snam'], edid_override=edid, formid_override=dial_fid)
+        content += pack_group(7, struct.pack('<I', dial_fid), children)
     ctx['stats']['bark_topics'] = ctx['stats'].get('bark_topics', 0) + 1
-    if (g['edid'] or '').upper() == 'GREETING':
+    if greeting:
         content += force_greet_topic(
             writer, g['src'], owner_qfid,
             [(get_formid(r, 'FormID'), r) for r in g['infos']], children)
@@ -1327,7 +1354,7 @@ def _build_injected_ctdas(info_rec, is_bark, npc_to_vtyp, topic_vtyps,
             or _tests_voice_type(quest_gate_bytes)):
         vtyps = set()
     elif own_npcs or bark_voice_types(info_rec):
-        vtyps = ({npc_to_vtyp[n] for n in own_npcs if n in npc_to_vtyp}
+        vtyps = ({npc_to_vtyp[n] for n in own_npcs if n in npc_to_vtyp} | talking_voices(own_npcs)
                  or bark_voice_types(info_rec))
     else:
         # Generic INFO: inherit the topic's voice types (greetings included).

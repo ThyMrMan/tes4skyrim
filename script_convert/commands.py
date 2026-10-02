@@ -37,6 +37,7 @@ from script_convert.constants import typed_already
 from script_convert.constants_falloutnv import (FALLOUT_COMMAND_ALIASES,
                                                 FALLOUT_UNMAPPED_ACTOR_VALUES)
 from tes5_import.dialogue.say_topics import PLAYER_TOKENS
+from script_convert.constants import TALKING_LISTS_PROPERTY
 from tes5_import.actors.confidence import (
     FACTION_EDID as CONFIDENCE_FACTION, FLEE_SPELL_EDID as CONFIDENCE_FLEE_SPELL,
     MARGIN_FACTION_EDID as FLEE_MARGIN_FACTION, SCALE_EDID as FLEE_HEALTH_SCALE)
@@ -126,9 +127,11 @@ def stage(ctx, call) -> str:
 
     TES4 spells the quest as the first argument and the stage as the second;
     Papyrus makes the quest the receiver. SetStage on a quest with a script is
-    its `TES4SetStage`, which keeps the variables the implied start would reset.
+    its `TES4SetStage`, which keeps the variables a start resets; without
+    one, `TES4Polyfill.SetStage`. Both re-check the alias packages.
     See: docs/commentary/script_convert.md#quest-property-never-downgrades
     See: docs/commentary/script_convert.md#setstage-start-keeps-variables
+    See: docs/commentary/script_convert.md#setstage-re-evaluates-alias-packages
     """
     parts = ctx.arg_srcs()
     quest_src = parts[0].strip() if parts else (call.ref or '')
@@ -142,7 +145,7 @@ def stage(ctx, call) -> str:
         script = ctx.xref.get_quest_script_type(quest_src) if ctx.xref else 'Quest'
         if script != 'Quest':
             return f'{script}.TES4SetStage({prop} as {script}, {stage_no})'
-        return f'{prop}.SetStage({stage_no})'
+        return f'TES4Polyfill.SetStage({prop}, {stage_no})'
     # GetStageDone asks whether a specific stage has run; GetStage reads the
     # current stage number, and TES4 writes it with no stage operand.
     if len(parts) > 1:
@@ -313,6 +316,20 @@ def say(ctx, call) -> str:
         topic = 'None'
     wait = ', True' if ctx._say_may_block() else ''
     return f'TES4Polyfill.SpeakAs({topic}, {scene}{wait})'
+
+
+@command('settalkingactivatoractor')
+def set_talking_activator_actor(ctx, call) -> str:
+    """FO3/FNV SetTalkingActivatorActor -- the talker speaks as the actor, or as itself with no actor.
+
+    Papyrus cannot set Skyrim's talking actor, so the polyfill moves the
+    talker's base into the actor's talking-as list, which that actor's lines ask.
+    See: docs/commentary/tes5_import_dialogue.md#fallout-talking-activators
+    """
+    talker = ctx._resolve_objref_ref(call.ref, call.extends)
+    actor = _as_actor(ctx, call.arg(0)) if len(call) else 'None'
+    ctx.sc.property_refs[TALKING_LISTS_PROPERTY] = 'FormList'
+    return f'TES4Polyfill.SetTalkingActivatorActor({talker}, {actor}, {TALKING_LISTS_PROPERTY})'
 
 
 @command('startconversation')
@@ -1196,6 +1213,8 @@ def activate(ctx, call) -> str:
     target = f'{ref}.' if ref else ''
     if run_flag == '1':
         return f'{target}Activate({activator})'
+    if ctx.xref and ctx.xref.is_fallout() and (ref or call.extends in ('ObjectReference', 'Actor')):
+        return f'TES4_TwoStateActivator.DefaultActivate({ref or "Self"}, {activator})'
     return f'{target}Activate({activator}, true)'
 
 
@@ -1707,21 +1726,47 @@ def set_game_setting(ctx, call) -> str:
 # Player controls
 # ---------------------------------------------------------------------------
 
+def _control_flag(call, i: int) -> str:
+    """Argument `i` as a Papyrus Bool: false when absent, a 0/1 literal as false/true."""
+    if i >= len(call):
+        return 'false'
+    src = call.arg(i).strip()
+    if src in ('0', '1'):
+        return 'true' if src == '1' else 'false'
+    return f'({src}) != 0'
+
+
+def _flagged_controls(call) -> str:
+    """Skyrim's player-control arguments for FO3/FNV's flags (movement, Pip-Boy, fighting, POV, looking, rollover, sneaking).
+
+    A flag left out is untouched, as is a Skyrim `false`; movement and rollover
+    text both stop activation, and the Pip-Boy is the menus and journal.
+    See: docs/commentary/script_convert.md#player-control-flags
+    """
+    mov, pip, fight, pov, look, roll, sneak = (_control_flag(call, i) for i in range(7))
+    literal = {mov, roll} <= {'true', 'false'}
+    activate = (str('true' in (mov, roll)).lower() if literal
+                else roll if mov == 'false' else mov if roll == 'false' else f'{mov} || {roll}')
+    return ', '.join((mov, fight, pov, look, sneak, pip, activate, pip))
+
+
 @command('disableplayercontrols', 'enableplayercontrols')
 def player_controls(ctx, call) -> str:
-    """Toggle the player's controls, MIRRORING the state into a global.
+    """Toggle the player's controls, mirroring the movement state into `TES4ControlsDisabled`.
 
-    Skyrim has both writers as natives but NO getter, so TES4's
-    GetPlayerControlsDisabled is read back from `TES4ControlsDisabled` (the
-    importer authors the record).  Every writer is shadowed, not just those in
-    a script that also reads: in MG18 -- the only reader in the plugin -- the
-    writers live in two SEPARATE magic-effect scripts, so a same-script gate
-    would shadow nothing at all.
+    Skyrim has no getter, so GetPlayerControlsDisabled reads that global back;
+    every writer is mirrored, since MG18's reader and writers sit in separate
+    scripts. FO3/FNV flag arguments pick the controls; one that leaves
+    movement alone leaves the global alone.
+    See: docs/commentary/script_convert.md#player-control-flags
     """
     disabling = call.name == 'disableplayercontrols'
     verb = 'Disable' if disabling else 'Enable'
+    args = _flagged_controls(call) if len(call) else ''
+    if args and not args.startswith('true'):
+        return f'Game.{verb}PlayerControls({args})'
     ctx.sc.property_refs['TES4ControlsDisabled'] = 'GlobalVariable'
-    return (f'Game.{verb}PlayerControls()\n'
+    return (f'Game.{verb}PlayerControls({args})\n'
             f'TES4ControlsDisabled.SetValue({1 if disabling else 0})')
 
 #: FO3/FNV spellings of shared handlers, bound once every handler is registered.
