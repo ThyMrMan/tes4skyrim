@@ -49,7 +49,7 @@ IMPLICIT_NAMES = frozenset({
     'weather',
     'akspeakerref', 'akactionref', 'aktarget', 'akcaster', 'akaggressor',
     'akkiller', 'akactor', 'akitem', 'aksource', 'akrefself',
-    'tes4polyfill', 'form', 'true', 'false', 'none',
+    'tes4polyfill', 'tes4_twostateactivator', 'form', 'true', 'false', 'none',
 })
 
 

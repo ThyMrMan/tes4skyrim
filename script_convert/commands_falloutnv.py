@@ -178,7 +178,33 @@ def weapon_anim_type(ctx, call) -> str:
     return '(' + ' + '.join(terms) + ')'
 
 
+def _open_state_target(ctx, call) -> str:
+    """The receiver of an open-state command, `Self` when bare."""
+    return ctx._convert_ref(call.ref, call.extends, as_receiver=True) if call.ref else 'Self'
+
+
+def get_open_state(ctx, call):
+    """FO3/FNV GetOpenState, two-state activators included; declines elsewhere.
+
+    See: docs/commentary/script_convert.md#two-state-activators
+    """
+    if not (ctx.xref and ctx.xref.is_fallout()):
+        return None
+    return f'TES4_TwoStateActivator.OpenState({_open_state_target(ctx, call)})'
+
+
+def set_open_state(ctx, call):
+    """FO3/FNV SetOpenState, two-state activators included; declines elsewhere."""
+    if not (ctx.xref and ctx.xref.is_fallout()):
+        return None
+    arg = call.arg(0)
+    state = {'0': 'false', '1': 'true'}.get(arg.strip(), f'({arg} != 0)')
+    return f'TES4_TwoStateActivator.SetOpenState({_open_state_target(ctx, call)}, {state})'
+
+
 FALLOUT_HANDLERS = {'getfactionrelation': faction_relation,
+                    'getopenstate': get_open_state,
+                    'setopenstate': set_open_state,
                     'getweaponanimtype': weapon_anim_type,
                     'showmessage': show_message,
                     **{name: quest_native for name in _QUEST_NATIVES}}

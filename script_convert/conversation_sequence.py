@@ -32,9 +32,9 @@ _STATE_WRITE_RE = re.compile(
     r'^\s*(?P<lhs>\w[\w.]*)\s*=\s*'
     r'(?:[-+]?[\d.]+|(?P<base>\w[\w.]*)\s*[-+]\s*[\d.]+)\s*(;.*)?$')
 
-#: A top-level `<quest>.SetStage(<literal>)` or its TES4SetStage form, the advance that must survive.
+#: A top-level `TES4Polyfill.SetStage(<quest>, <literal>)` or TES4SetStage form, the advance that must survive.
 _STAGE_ADVANCE_RE = re.compile(
-    r'^(\s*)(?P<call>(?:(?P<quest>[A-Za-z_]\w*)\.SetStage\('
+    r'^(\s*)(?P<call>(?:TES4Polyfill\.SetStage\((?P<quest>[A-Za-z_]\w*), '
     r'|\w+\.TES4SetStage\((?P<wrapped>[A-Za-z_]\w*) as \w+, )(?P<stage>\d+)\))'
     r'\s*(?P<comment>;.*)?$', re.IGNORECASE)
 
@@ -44,7 +44,7 @@ _HANDOFF_WRITE_RE = re.compile(
     r'(?:-?[\d.]+|[A-Za-z_]\w*)\s*(;.*)?$', re.IGNORECASE)
 
 
-def _equality_gate(raw: str):
+def equality_gate(raw: str):
     """(quest_fid24, var_index, int_value) for a `GetQuestVariable == N` CTDA.
 
     None unless the condition is that function, compares for EQUALITY, and
@@ -77,7 +77,7 @@ def seq_counter_condition(rec: dict, script_vars: dict, names: dict):
         raw = rec.get(f'Condition[{i}].Raw')
         if raw is None:
             return None
-        hit = _equality_gate(raw)
+        hit = equality_gate(raw)
         if hit is None:
             continue
         quest_fid, var_idx, value = hit

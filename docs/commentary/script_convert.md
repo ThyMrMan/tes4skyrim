@@ -491,6 +491,17 @@ Genuinely incomparable (bound as Faction/GlobalVariable, say) returns None: an
 unguarded body is WRONG for every event the filter excluded, so the caller keeps
 the body but does not execute it.
 
+<a id="block-type-guards"></a>
+**Some block types need a guard with no filter at all** (`BLOCK_TYPE_GUARDS`),
+because their Papyrus event fires more widely than the TES4 block did. The
+blocks merged into `OnCombatStateChanged` each test their state. `OnTriggerActor`
+fires in TES4 only for actors, but Skyrim's `OnTrigger`/`OnTriggerEnter` fire for
+any object in the volume, so its body runs only when `akActionRef as Actor`.
+Without it, Nehrim's nightmare cave-in (`TrigZoneACTOR01SCRIPT`,
+`SchattenrufTrigZoneGeroellSoundACTOR01SCRIPT`) dropped its rocks and dust the
+moment the cell loaded, set off by loose clutter settling at the zones' edges,
+before Celebro walked into them.
+
 <a id="onhitwith-ammo"></a>
 **`OnHitWith <ammo>` is read off the shooter, not `akSource`.** For an arrow,
 Skyrim's `OnHit` passes the BOW as `akSource` (CK wiki: "the Weapon, Spell,
@@ -2926,6 +2937,57 @@ tick. It never made the Gatekeeper invincible, never put him in
 `TES4_<Script>.TES4SetStage(<quest> as TES4_<Script>, N)`. That Global sits beside
 `TES4Start`, routes a stopped quest through `TES4Start`, then calls `SetStage`.
 `conversation_sequence` recognizes both call shapes.
+
+## SetStage re-evaluates alias packages
+<a id="setstage-re-evaluates-alias-packages"></a>
+
+**Code:** `TES4Polyfill.StageSet`, `static_scripts/TES4_StagePackageAlias.psc`,
+`_quest_vmad` in `tes5_import/dialogue/quest.py`
+
+Oblivion picked up a package gated on a quest stage on its own once the stage
+was set. Skyrim re-checks an actor's packages only on `EvaluatePackage` (vanilla
+stage fragments call it on the aliases they change), a forced alias fill, or a
+package ending. Nehrim's nightmare shows the gap: `MQ01CelebroDeadScript01` sets
+MQ00 20, which turns on Celebro's walk to the troll (`MQ00Cel02ZumTroll`, `GetStage
+MQ00 == 20`), and enables the troll 2.5 s later. In game the stage landed at
+23.5 s and the walk only started at 26.7 s, when the combat pool's `ForceRefTo`
+re-checked him, so the troll caught him standing at his start.
+
+Every converted `SetStage` now ends in `TES4Polyfill.StageSet` (inside
+`TES4SetStage`, or `TES4Polyfill.SetStage` for a quest with no script), which
+sends the SKSE mod event `TES4StageSet<quest FormID>`. The importer attaches
+`TES4_StagePackageAlias` to every alias that carries the quest's packages; it
+registers for its own quest's event and calls `EvaluatePackage` on its actor.
+Walking the aliases in the caller instead would block it: `Quest.GetAlias` and
+`EvaluatePackage` are delayed natives (absent from the CK wiki's non-delayed
+list, as are SKSE's `GetNthAlias`), about a frame each, the same stall the
+combat queue removed from the Nehrim mine exit. Each alias runs on its own
+thread, and the caller pays one `SendModEvent`.
+
+**The re-check waits out any open conversation (confirmed in game 2026-09-30).**
+Oblivion and FO3 paused the world during dialogue, so no package moved until the
+talk closed; an immediate `EvaluatePackage` breaks that two ways. In FO3's CG02,
+Butch's cake greeting set stage 30, and 8 ms later the re-check switched him from
+`CG02ButchFindPlayer` to his sit package: he left mid-talk on a Goodbye and the
+8 sweetroll choices never showed. Waiting on his own `IsInDialogueWithPlayer`
+was not enough: Old Lady Palmer's Goodbye line sets stage 20, and Butch's force
+greet began 190 ms later as her menu closed. His Say Once greeting was spent
+outside the menu, so the menu opened on his plain Hello. Amata's follow-up grab
+failed the same way 16 ms after Butch's line set 30. The handler now loops
+`Utility.Wait(0.5)` while its actor `IsInDialogueWithPlayer()` or SKSE's
+`UI.IsMenuOpen("Dialogue Menu")`, as vanilla waits on a speaker
+(`DLC2DialogueRRQuestScript`, `DLC1SurgeryScript`, `MQ202EsbernsDoorScript`),
+then evaluates. With it, Butch's grab played through its choices and the quest
+reached the intercom (stage 35). An authored `evp` in a stage script still runs
+at once. Without SKSE the menu test fails and only the actor's own dialogue is
+waited on.
+
+Evaluating the moment the menu reported closed was still a race: in one of two
+runs Palmer's Goodbye set stage 20, the menu read closed at once, Butch's
+force greet started 50 ms later and his line was spent outside the menu again;
+in the other the greet started 650 ms after and played through. The re-check
+now evaluates only after two quiet polls in a row (about a second with no
+conversation open), whether or not one was open when the stage landed.
 
 ## ResetInterior sends moved-in references home (2026-09-24, confirmed in game)
 <a id="resetinterior-sends-moved-refs-home"></a>
@@ -6408,3 +6470,154 @@ let a later SetStage overwrite the specific type.
 The FNV objective rows first carried `types={0: 'Quest'}`, which registers the
 type unconditionally: 345 FalloutNV scripts then failed with "field or
 property X not found" on quest-variable reads (`VMS16.nGangerDeathCount`).
+
+## FO3/FNV player-control flags (2026-09-30, untested in game)
+<a id="player-control-flags"></a>
+
+**Code:** `commands.py` `player_controls`, `_flagged_controls`
+
+FO3/FNV `DisablePlayerControls` / `EnablePlayerControls` take seven optional
+0/1 flags (GECK wiki): movement, Pip-Boy, fighting, POV, looking, rollover
+text, sneaking. With none, every control but looking goes; with some, the
+ones left out are untouched (`DisablePlayerControls 0 0 1 0 0` stops only the
+weapon). The converter dropped the flags, so FO3 CG03 stage 40's
+`DisablePlayerControls 0 0 1` ("no more fighting") froze the player in the
+G.O.A.T. classroom. Skyrim's natives take matching Bools, where `false`
+leaves a control alone (CK wiki: "Disable just camera switching"). The flags
+map to (movement, fighting, cam switch, looking, sneaking, menu, activate,
+journal tabs) = (movement, fighting, POV, looking, sneaking, Pip-Boy,
+movement or rollover, Pip-Boy). A call that leaves movement alone does not
+touch `TES4ControlsDisabled`. Oblivion's calls take no flags and are unchanged.
+
+## <a id="terminals"></a>FO3/FNV terminals (2026-09-30, untested in game)
+
+**Code:**
+- `script_convert/terminal_plan.py`: the page plan, shared by both sides;
+- `script_convert/terminal_scripts.py`: the TM_ script;
+- `script_convert/static_scripts/TES4_Terminal.psc`: the runtime;
+- `tes5_import/record_types/terminal_falloutnv.py`: messages and the VMAD;
+- the export is in `tes4_export/record_types/terminal_falloutnv.py`
+  ([export](tes4_export_falloutnv.md#terminals)).
+
+A Fallout terminal is a menu of items. Each item can:
+- run a result script;
+- display a note, and add it to the Pip-Boy (flag Add Note);
+- show result text;
+- open another TERM as a sub-menu.
+
+Conditions hide items. Skyrim has no terminal, so each TERM becomes:
+- **Message pages.** A menu of up to nine items is one message-box MESG
+  (`TES4Term_<EDID>_<first item>`). Each item is a button carrying its item's
+  converted conditions. The last button leaves: Exit on the first page of a
+  terminal no other TERM opens, Back everywhere else. `Message.Show` returns
+  only buttons 0 to 9 (CK wiki, Show - Message), so a longer menu splits into
+  pages of eight with a More button. Result text is a message of its own
+  (`TES4TermResult_<EDID>_<item>`), with the plain OK button. Text is cut at
+  1,000 characters, since a message box past 1,023 crashes the game (CK
+  wiki, Message).
+- **A TM_ script on its ACTI** (`FALLOUT3_TM__<FormID>`), appended to any
+  object script the ACTI already carries. It extends `TES4_Terminal` and
+  answers `TES4Pick(page, button)`. For the picked item it:
+  - runs the item's converted result script, as a fragment on the terminal
+    reference;
+  - opens its note;
+  - shows its result message;
+  - returns its sub-menu's first page, or -2 to show the page again.
+
+  More returns the next page, and the leave button returns -1.
+  `TES4_Terminal.TES4Run` recurses into a page and returns when the player
+  leaves it, so Back from a sub-menu lands on its parent, as Tab did.
+  Showing the page again re-evaluates its buttons' conditions, which covers
+  Force Redraw.
+
+Behaviors:
+- **Notes.** A displayed note is the note's BOOK (notes are items), placed at
+  the player and activated, so the Book Menu shows its full text; no message
+  length limit applies. `Utility.Wait` returns only after the menu closes. If
+  the player didn't take the book, it is deleted.
+- **Locks.** A TERM without DNAM flag 0x02 (Unlocked) starts locked. Holding
+  the password note (PNAM) opens it. So does Lockpicking of at least 25 per
+  step of hacking difficulty (Very Easy 0 to Very Hard 100). Requires Key (5)
+  opens only with the password. Skyrim has no hacking game, and the Fallout
+  character rules keep Science inside their own plugin's script, so
+  Lockpicking stands in. A reference stays unlocked once opened.
+- **Activation.** A terminal whose object script has no OnActivate opens on
+  activation. One with an OnActivate block is blocked
+  (`BlockActivation`), and its script decides. In a FO3/FNV script, every
+  `Activate` that asks for default processing converts to
+  `TES4_TwoStateActivator.DefaultActivate(<target>, <activator>)`
+  ([two-state activators](#two-state-activators)), which opens a terminal's
+  menu. Two examples:
+  - CG04's Vault 101 door terminal shows "no power" until stage 120;
+  - Mabel's robot terminal opens only during MQ04 35 and 40.
+
+- **Allocated last.** The pages and result messages are written in the
+  import's late bindings (`pipeline_finalize._patch_late_bindings`), after
+  every other generated record. The script is then appended to the written
+  ACTI (`writer.patch_records`). Hashed FormIDs resolve collisions first come,
+  first served. When the messages were allocated during the prescan, two of
+  them took the FormIDs of two existing dialogue branches (FO3
+  `TES4_DialogLugNut03_Branch` and `TES4_MS14HereToKillYou_Branch`), which
+  then moved: save-breaking drift.
+- **Terminal object scripts.** TERM was missing from `SCRIPTABLE_TYPES`, so
+  before 2026-09-30 no terminal carried its converted object script. That
+  meant CG04's "no power" gate on the Vault 101 door terminal never ran.
+
+Scale: Fallout 3 has 378 terminals, and the build writes scripts for the 350
+with items; New Vegas has 344, with 292 scripted.
+
+Not done yet:
+- conditions a Fallout item runs on the terminal itself (run on Subject) are
+  evaluated on the message's subject;
+- no terminal's sub-menu from a master is followed (a DLC's TERM opening a
+  base-game one);
+- the looping sound (SNAM) and the server type are not used.
+
+## <a id="two-state-activators"></a>FO3/FNV two-state activators (2026-09-30, untested in game)
+
+**Code:**
+- `script_convert/static_scripts/TES4_TwoStateActivator.psc`;
+- `tes5_import/record_types/two_state_falloutnv.py` (attaching it);
+- the `activate`, `getopenstate` and `setopenstate` handlers
+  (`commands.py`, `commands_falloutnv.py`).
+
+In Fallout, an activator whose model has `Open` and `Close` sequences
+behaves like a door. Its default activation toggles it, and
+`GetOpenState`/`SetOpenState` read and set it. The GECK wiki says an
+activator has no default activation, but the data says otherwise: CG04's
+Vault 101 control pod opens the vault gear door (`VaultGearDoor`, an ACTI) only
+with `doorRef.activate doorRef`, a default activation. Another CG04 script
+tests `CG04VaultGearDoorREF.GetOpenState == 1`. Skyrim gives an activator
+neither. Vanilla keeps the state in a script of its own
+(`default2stateActivator` and its children override `SetOpen`), and native
+`SetOpen` and `GetOpenState` drive doors. So the converted gear door never
+moved (2026-09-30 play-test: the control pod did nothing and the player had
+to clip through).
+
+- **The script.** `TES4_TwoStateActivator` goes on every FO3/FNV ACTI whose
+  exported NIF names both sequences, appended to any object script it carries:
+  86 in Fallout 3 (gear doors, wall switches, radios, the protectron pod) and
+  47 in New Vegas. It keeps the state (closed at load) and plays `Open` or
+  `Close` with `PlayAnimation`, as `playgroup` does for animated objects. An
+  unblocked activation toggles it.
+- **The calls.** In a FO3/FNV script (the cross-reference graph holds a
+  Fallout-only record type), the following go through its globals, which fall
+  back to the native call on anything else:
+  - `Activate` asking for default processing becomes `DefaultActivate`, which
+    also opens a terminal's menu ([terminals](#terminals));
+  - `GetOpenState` becomes `OpenState`;
+  - `SetOpenState` becomes `SetOpenState`.
+
+  Oblivion's conversion is unchanged.
+
+Not done yet: a two-state activator is closed when its cell loads, so one
+Fallout starts open (a radio playing at load) starts closed.
+<a id="open-by-default"></a>**A placed-open activator starts open** (built
+2026-10-01, untested in game). The script started every activator closed,
+but a FO3/FNV reference can be placed open (`ONAM` Open By Default: 36
+activator references in Fallout3.esm, 48 in FalloutNV.esm). Moriarty's
+saloon radio is one, and Gob's radio scene waits for `GetOpenState == 1` on
+it, so it never ran (2026-10-01 play-test). Such a reference now carries its
+own `TES4_TwoStateActivator` entry setting `TES4OpenByDefault`, which the
+script reads the first time its state is asked for.
+
