@@ -2,6 +2,8 @@
 
 #include <windows.h>
 
+#include <cmath>
+#include <cstdio>
 #include <cstring>
 #include <memory>
 #include <string>
@@ -14,6 +16,7 @@
 #include "hook.h"
 #include "hud.h"
 #include "parts.h"
+#include "shot_trace.h"
 #include "ids.h"
 #include "log.h"
 #include "paths.h"
@@ -41,6 +44,13 @@ constexpr unsigned long kEquipSettleMs = 1500;    // one swap per actor per inte
 constexpr int kEventNotifyContinue = 0;
 constexpr std::size_t kActorFlags = 0xc8;         // ActorState flags; attack state in bits 28-31
 constexpr int kDefaultZoomKey = 0x02;             // VK_RBUTTON
+constexpr std::size_t kRefAngleX = 0x48;          // OBJ_REFR angle.x: the look pitch, radians
+constexpr float kDegreesPerRadian = 57.29578f;
+constexpr unsigned long long kSamePressMs = 50;   // one click reached PerformAction twice in the same ms
+constexpr std::size_t kCameraRoot = 0x20;         // TESCamera::cameraRoot (NiNode*)
+constexpr std::size_t kCameraState = 0x28;        // TESCamera::currentState
+constexpr std::size_t kFirstPersonState = 0xb8;   // the state 0x766130 compares it with
+constexpr std::size_t kWorldRotate = 0x7c;        // NiAVObject world rotation, row-major
 
 using FireFn = void (*)(void* weapon, void* shooter, void* ammo, void* poison, void* node);
 using EquippedFn = void* (*)(void* process, bool left);
@@ -51,6 +61,7 @@ using CountFn = int (*)(void* vm, std::uint32_t stack, void* ref, void* form);
 using ActionFn = std::int64_t (*)(void* a, void* action, std::int64_t c, std::int64_t d);
 using ObjectByNameFn = void* (*)(void* root, void** name, bool recurse);
 using FiringNodeFn = void* (*)(void* process, void** holder);
+using AimAnglesFn = void (*)(void* actor, void* node, float* pitch, float* heading, float* origin);
 
 // A resolved gun: the rounds it loads, its no-ammo sound, its sight FOV,
 // its magazine size.
@@ -75,6 +86,10 @@ CountFn        g_count = nullptr;
 ActionFn       g_origAction = nullptr;
 ObjectByNameFn g_objectByName = nullptr;
 FiringNodeFn   g_origFiringNode = nullptr;
+void**         g_playerCamera = nullptr;
+AimAnglesFn    g_origPlayerAim = nullptr;
+void*          g_shooter = nullptr;                 // the actor inside our Fire call
+std::unordered_map<void*, unsigned long long> g_lastPress;
 ProcessEventFn g_origProcessEvent[2] = {nullptr, nullptr};
 void**         g_player = nullptr;
 std::unique_ptr<FixedString> g_shotTag, g_drawTag, g_equipTag, g_soundPlay, g_reloadEvent,
@@ -182,8 +197,16 @@ bool OnShot(void* actor) {
         DryFire(actor, *gun);
         return true;
     }
+    TraceStep(actor, "Fire called");
+    g_shooter = actor;
     g_fire(weapon, actor, round, nullptr, nullptr);
-    if (!Throttled()) Log("fire: %p fired %p", actor, weapon);
+    g_shooter = nullptr;
+    if (IsPlayer(actor)) {
+        Log("fire: player fired %08X, pitch %.1f deg", At<std::uint32_t>(weapon, kFormID),
+            At<float>(actor, kRefAngleX) * kDegreesPerRadian);
+    } else if (!Throttled()) {
+        Log("fire: %p fired %p", actor, weapon);
+    }
     SetShots(actor, *gun, g_shots[actor] + 1);
     return true;
 }
@@ -196,8 +219,20 @@ void Press(void* actor, const Gun& gun) {
         DryFire(actor, gun);
         return;
     }
+    TraceStep(actor, "press: TES4GunFire sent");
     SendToGraph(actor, *g_fireEvent);
     if (IsPlayer(actor)) ZoomNoteFiring(true);
+}
+
+// True for a second attack press from `actor` within kSamePressMs: one click
+// can reach PerformAction twice in the same millisecond, and each press
+// queued its own attack, so the gun fired again 178 ms later.
+bool RepeatedPress(void* actor) {
+    const unsigned long long now = GetTickCount64();
+    auto it = g_lastPress.find(actor);
+    const bool repeat = it != g_lastPress.end() && now - it->second < kSamePressMs;
+    if (!repeat) g_lastPress[actor] = now;
+    return repeat;
 }
 
 int AttackState(void* actor) {
@@ -216,12 +251,21 @@ std::int64_t ActionHook(void* a, void* action, std::int64_t c, std::int64_t d) {
     void* weapon = nullptr;
     const Gun* gun = actor ? GunOf(actor, &weapon) : nullptr;
     if (!gun || !name) return g_origAction(a, action, c, d);
-    if (IsPlayer(actor)) Log("trace: action %s attackState %d", name, AttackState(actor));
+    if (IsPlayer(actor)) {
+        char step[128];
+        std::snprintf(step, sizeof(step), "action %s, attackState %d", name, AttackState(actor));
+        TraceStep(actor, step);
+    }
     if (std::strcmp(name, kFireAction) == 0) {
+        if (RepeatedPress(actor)) {
+            TraceStep(actor, "press dropped: the same click again");
+            return 0;
+        }
         Press(actor, *gun);
         return 0;
     }
     if (std::strcmp(name, kFireReleaseAction) == 0) {
+        TraceStep(actor, "release: TES4GunFireRelease sent");
         SendToGraph(actor, *g_fireRelease);
         return 0;
     }
@@ -229,13 +273,6 @@ std::int64_t ActionHook(void* a, void* action, std::int64_t c, std::int64_t d) {
         if (std::strcmp(name, dropped) == 0) return 0;
     }
     return g_origAction(a, action, c, d);
-}
-
-// Every graph event of the player while a gun is in hand.
-void NoteTag(void* actor, void* tag) {
-    void* weapon = nullptr;
-    if (!IsPlayer(actor) || !GunOf(actor, &weapon)) return;
-    Log("trace: event '%s' attackState %d", static_cast<const char*>(tag), AttackState(actor));
 }
 
 // The equipped ammo hangs off the actor's QUIVER node; a gun has no
@@ -293,12 +330,29 @@ void* FiringNodeHook(void* process, void** holder) {
     return barrel ? barrel : node;
 }
 
+// In first person the player's round starts at the camera and flies along its
+// forward axis, so it lands on the crosshair: from the barrel, 40 units ahead
+// and about 10 off the line of sight, a parallel round passed beside small
+// targets (radroaches). Third person is left to the engine.
+void PlayerAimHook(void* actor, void* node, float* pitch, float* heading, float* origin) {
+    g_origPlayerAim(actor, node, pitch, heading, origin);
+    void* camera = g_playerCamera ? *g_playerCamera : nullptr;
+    if (actor != g_shooter || !camera || !pitch || !heading || !origin) return;
+    if (At<void*>(camera, kCameraState) != At<void*>(camera, kFirstPersonState)) return;
+    void* root = At<void*>(camera, kCameraRoot);
+    if (!root) return;
+    const float* m = &At<float>(root, kWorldRotate);
+    *pitch = -std::asin(m[7]);
+    *heading = std::atan2(m[1], m[4]);
+    std::memcpy(origin, &At<float>(root, kWorldTranslate), 3 * sizeof(float));
+}
+
 int ProcessEventHook(int which, void* sink, void* evn, void* src) {
     if (evn && sink) {
         void* tag = At<void*>(evn, kEventTag);
         void* actor = static_cast<char*>(sink) - kAnimSinkOffset;
         void* weapon = nullptr;
-        if (tag) NoteTag(actor, tag);
+        if (tag && GunOf(actor, &weapon)) TraceAnimEvent(actor, static_cast<const char*>(tag), src);
         if (tag && GunOf(actor, &weapon)) PlayPartSequence(actor, tag);
         if (tag == g_shotTag->ptr && OnShot(actor)) return kEventNotifyContinue;
         if (tag == g_drawTag->ptr) OnDraw(actor);
@@ -325,6 +379,14 @@ bool PatchSlot(int which, std::uint64_t id, const char* name, void* replacement)
     g_origProcessEvent[which] =
         reinterpret_cast<ProcessEventFn>(PatchVtableSlot(vt, 1, replacement, name));
     return g_origProcessEvent[which] != nullptr;
+}
+
+bool PatchPlayerAim() {
+    auto* vt = reinterpret_cast<void**>(Resolve("PlayerCharacter vtable", ids::kPlayerVtable, nullptr));
+    if (!vt) return false;
+    g_origPlayerAim = reinterpret_cast<AimAnglesFn>(PatchVtableSlot(
+        vt, ids::kVtAimAngles, reinterpret_cast<void*>(&PlayerAimHook), "PlayerCharacter aim"));
+    return g_origPlayerAim != nullptr;
 }
 
 void* PlayerWithGun() {
@@ -412,6 +474,7 @@ bool InstallFire() {
     const std::uintptr_t byName = Resolve("NiAVObject::GetObjectByName", ids::kObjectByName, nullptr);
     const std::uintptr_t firingNode = Resolve("CrossbowFiringNode", ids::kCrossbowFiringNode, nullptr);
     g_player = reinterpret_cast<void**>(Resolve("PlayerCharacter singleton", ids::kPlayerSingleton, nullptr));
+    g_playerCamera = reinterpret_cast<void**>(Resolve("PlayerCamera singleton", ids::kPlayerCamera, nullptr));
     if (!fire || !equipped || !equip || !count || !action || !byName || !g_player || !InstallZoom()) {
         Log("fire: an address is unresolved; guns will not fire");
         return false;
@@ -441,6 +504,8 @@ bool InstallFire() {
     }
     if (PatchAllCalls(action, reinterpret_cast<void*>(&ActionHook), "PerformAction") <= 0) return false;
     g_projectileNode.reset(new FixedString("ProjectileNode"));
+    if (!InstallShotTrace(g_player, g_playerCamera)) Log("fire: shot trace not installed");
+    if (!PatchPlayerAim()) Log("fire: first-person aim not patched; rounds start at the barrel");
     g_origFiringNode = reinterpret_cast<FiringNodeFn>(firingNode);
     if (!firingNode ||
         PatchAllCalls(firingNode, reinterpret_cast<void*>(&FiringNodeHook), "CrossbowFiringNode") <= 0) {

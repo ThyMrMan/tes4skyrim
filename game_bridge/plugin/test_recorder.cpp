@@ -49,6 +49,7 @@ struct ExpectVt {
 const ExpectVt kExpected1170[] = {
     {"TESActivateEvent",        0x1912600, 0x9c3740},
     {"TESCellFullyLoadedEvent", 0x1912678, 0x9c3f50},
+    {"TESHitEvent",             0x1912768, 0x9c54b0},
     {"TESLoadGameEvent",        0x1912798, 0x9c5670},
     {"TESPackageEvent",         0x1912858, 0x9c6430},
     {"TESQuestStageEvent",      0x19128a0, 0x9c6b70},
@@ -105,9 +106,11 @@ FakeForm g_quest(0x0F00104C, 0x4D);
 FakeForm g_info(0x0F1057E8, 0x4C);
 FakeForm g_npc(0x0F00ABCD, 0x2B);
 FakeForm g_doc(0x0F001234, 0x3E);
+FakeForm g_player(0x14, 0x3E);
+FakeForm g_proj(0x0F02CD5F, 0x32);
 
 void* FakeLookup(std::uint32_t id) {
-    for (FakeForm* f : {&g_quest, &g_info, &g_npc, &g_doc}) {
+    for (FakeForm* f : {&g_quest, &g_info, &g_npc, &g_doc, &g_player, &g_proj}) {
         std::uint32_t fid;
         std::memcpy(&fid, f->bytes + 0x14, 4);
         if (fid == id) return f;
@@ -175,6 +178,21 @@ void TestDecoders() {
     s = Decode("container", container, &kept);
     Check(kept && s.find("\"to\":\"00000014\"") != std::string::npos,
           "player container changes are kept", s);
+
+    alignas(8) std::uint8_t hit[0x1C] = {};
+    PutPtr(hit + 0x00, &g_doc);
+    PutPtr(hit + 0x08, &g_doc);
+    Decode("hit", hit, &kept);
+    Check(!kept, "hits not involving the player are dropped");
+    PutPtr(hit + 0x08, &g_player);
+    Put32(hit + 0x14, 0x0F02CD5F);
+    hit[0x18] = 2;
+    s = Decode("hit", hit, &kept);
+    Check(kept && s == ",\"target\":\"0F001234\",\"target_base\":\"0F00ABCD\","
+                       "\"by\":\"00000014\",\"source\":\"00000000\","
+                       "\"projectile\":\"0F02CD5F\",\"power\":false,\"sneak\":true,"
+                       "\"bash\":false,\"blocked\":false",
+          "player hits decode target, attacker, projectile, flags", s);
 }
 
 }  // namespace

@@ -10,8 +10,8 @@
 // docs/commentary/asset_convert_falloutnv.md#dismemberment):
 //
 //   * every melee and projectile hit is applied by one routine (id 38586,
-//     Actor* + HitData*); a hit that takes health from above zero to zero
-//     or below is fatal. The HitData's impact point sits at +0x00 (game
+//     Actor* + HitData*), hooked by hits.cpp; a hit that takes health from
+//     above zero to zero or below is fatal and reaches SetFatalHitHandler. The HitData's impact point sits at +0x00 (game
 //     units, zero for melee), the hit direction at +0x0c, the aggressor
 //     handle at +0x18
 //   * the target's body part data comes from id 37181, its FormID at +0x14
@@ -39,8 +39,8 @@
 
 namespace tesruntime {
 
-// Resolves every address, loads the sidecars and patches the hit and 3D-load
-// call sites. False (with the reason logged) leaves the game untouched.
+// Resolves every address, loads the sidecars, registers the fatal-hit handler
+// and patches the 3D-load call sites. False (with the reason logged) leaves the game untouched.
 bool InstallSevering();
 
 // After DataLoaded: resolves every sidecar record and limb to its form.

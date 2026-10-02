@@ -318,3 +318,111 @@ saved values return on release. The bow-zoom perk entry route
 zooms only through the engine's bow state, which a gun never enters.
 
 Not done: spread and VATS.
+
+## <a id="hit-log"></a>The hit log
+
+A gun that fires but does no damage could be a shot that never lands, a hit
+the engine weighs at zero, or a hit the target shrugs off. `hits.cpp` hooks
+the one routine every melee and projectile hit goes through
+(`Actor::ApplyHit`, id 38586, 1.6.1170 0x6b7bc0) and writes one line to
+`FalloutRuntime.log` per hit the player gives or takes:
+
+    hit: <target> by <attacker> weapon <WEAP> total T physical P limb L blocked B health H0 -> H1
+
+The `HitData` fields are the ones the routine itself reads: the attacker
+handle at +0x18 (resolved with id 17201), the weapon at +0x30, and floats
+at +0x50 to +0x5c. No line means no hit. `total 0` means the damage
+calculation dropped it. A real total with unchanged health points at the
+target. The flight recorder's `hit` event (TESHitEvent) gives the same hits
+with their projectile, for matching against the recorder's other events.
+
+The hook was first written for limb severing, which is dormant. The hit log
+now owns it, and severing registers through `SetFatalHitHandler` when
+enabled. It is installed only when gun routing is, so other games are not
+touched.
+
+<a id="shot-pitch"></a>**Each player shot logs its pitch.** In the 2026-10-01
+play-test every 10mm round hit hallway geometry at about gun height (a wall
+vent 108 units up, the same hall pieces over and over) while the player shot
+at radroaches on the floor, so the rounds looked level. `fire: player fired
+<WEAP>, pitch N deg` records the player's look pitch (`OBJ_REFR` angle.x,
++0x48) at each shot, to show whether the engine had a downward aim when
+`Fire` asked for one.
+
+## <a id="shot-aim"></a>Aim and origin overrides: tried and removed (2026-10-01)
+
+Three builds overrode what `TESObjectWEAP::Fire` gives a gun's round, each
+from second-resolution logs, and each failed in game:
+
+- the look angles in place of the firing node's (slot 0xa0 of the actor
+  vtables, Character id 19851, PlayerCharacter id 41259): close and
+  downward shots still hit walls;
+- the head bone as the origin: radroaches at the feet still missed in third
+  person;
+- the camera as the origin with its forward axis: no round hit Officer
+  Kendall at all.
+
+The overrides are gone; what Fire actually does is now measured first
+([shot trace](#shot-trace)). None of the three could have worked: every FO3
+round was a tracer, and a tracer hits no actor
+([no tracers](tes4_export_falloutnv.md#no-tracers)).
+
+<a id="shot-origin"></a>**What the disassembly shows about Fire's aim.** Fire
+asks the shooter's slot 0xa0 for angles from the firing node: Character's
+converts the node's world rotation (`-asin(m21)`, `atan2(m01, m11)`);
+PlayerCharacter's uses its own look pitch (angle.x minus a bow offset) and
+heading in one camera state and the node's rotation in the other. Fire then
+re-aims at a target point when one exists: a combat controller's aim point
+for an actor in combat, or a target reference with ballistic lead from the
+projectile's speed and gravity, and adds a spread term to the heading just
+before `Projectile::Launch`.
+
+<a id="shot-trace"></a>**The shot trace.** `shot_trace.cpp` logs, for the
+player only and stamped with local time to the millisecond (the flight
+recorder's clock), every animation event while a gun is held and the graph
+that raised it, each FalloutRuntime step (the action, the press it sends,
+each `Fire` call), the final launch data at `Projectile::Launch` (id 44108:
+origin, pitch, heading, desired target) next to the camera's and the
+player's position and angles, and where each round stopped, polling its
+reference every 16 ms. Lines start with `shot`.
+
+<a id="one-shot-per-pull"></a>**One shot per pull: one press per click.** The
+2026-10-01 tests fired most FO3 10mm pulls twice, the second round about 178 ms
+after the first. The [shot trace](#shot-trace) showed the cause: one click
+reached `PerformAction` as `ActionRightAttack` twice in the same millisecond,
+each press sent `TES4GunFire`, and the second was taken as a re-attack once
+the first attack's window opened. A second attack press from the same actor
+within 50 ms is now dropped (`press dropped: the same click again` in the
+trace).
+
+Three earlier guesses were wrong: a 20 ms same-frame window on the shot
+event, dropping a copy from the other camera's graph, and the pitch blend's
+clips each raising the trigger. The last change stays, since it keeps the
+attack-window events single too: only one clip of each pitch blend (the level
+one, else down, else up) carries the triggers, and the blend sets
+`FLAG_DONT_DEACTIVATE_CHILDREN_WITH_ZERO_WEIGHTS` (8) so that clip runs at any
+pitch. The shipped `1hm_behavior.hkx` (decompiled) carries one `arrowRelease`
+per attack blend, and the gun clips carry no annotation of their own.
+
+<a id="first-person-aim"></a>**First person shoots down the crosshair** (built
+2026-10-01, untested in game). With the round leaving the barrel 40 units ahead
+of the camera and about 10 units off the line of sight, a first-person shot
+flew parallel to the view and passed beside radroach-sized targets; aiming
+down the sights, which lines the barrel up with the view, made them hit. The
+trace showed first-person launches 1.0 degree under the camera pitch, the
+look-pitch branch of PlayerCharacter's aim routine (0x766130, id 41259),
+which takes it while the camera's current state (+0x28) is the state at
++0xb8. In that state FalloutRuntime's hook on slot 0xa0 of PlayerCharacter's
+vtable (id 208040) now gives the player's own gun shot the camera's position
+as origin and its forward axis as pitch and heading (`-asin(m21)`,
+`atan2(m01, m11)` of the camera node's world rotation). An earlier camera
+origin seemed to fail, but every round then still passed through actors,
+because each FO3 round was a tracer ([no tracers](tes4_export_falloutnv.md#no-tracers)).
+
+<a id="third-person-aim"></a>**Third-person aim is the barrel pose.** In the
+same trace, first-person launches matched the camera within about a degree
+(origin 40 units ahead of it). In third person the launch pitch stayed
+between -2.7 and 4.3 degrees while the camera looked 13-55 degrees down, and
+the heading was up to 15 degrees off: PlayerCharacter's aim routine uses the
+firing node's rotation outside first person, and the gun's attack pose does
+not follow the camera. Not fixed yet.

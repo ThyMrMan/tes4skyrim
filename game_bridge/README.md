@@ -258,6 +258,7 @@ Older runs rotate to `.1` and `.2`. Each line is one event:
 | `cell_loaded` | `cell` |
 | `death`, `combat`, `equip`, `lock_changed` | the actors, items and refs involved |
 | `container`, `location` | the player's only |
+| `hit` | `target`, `by`, `source` (weapon or spell), `projectile`, `power`/`sneak`/`bash`/`blocked`: hits the player gives or takes. Damage is not in the event; see FalloutRuntime's [hit log](../docs/commentary/tes_runtime_guns.md#hit-log) |
 | `load_game`, `loading`, `loaded`, `saved`, `new_game` | session boundaries, with the save name |
 | `papyrus` | Papyrus errors and warnings with their stack frames (at most 100 lines a second) |
 

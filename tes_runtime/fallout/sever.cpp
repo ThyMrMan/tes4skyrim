@@ -12,6 +12,7 @@
 
 #include "addresses.h"
 #include "engine.h"
+#include "hits.h"
 #include "hook.h"
 #include "ids.h"
 #include "json.h"
@@ -50,7 +51,6 @@ constexpr int kImpulseRetryFrames = 30;
 constexpr std::uint32_t kSaveRecord = 'SEVR';
 constexpr std::uint32_t kSaveVersion = 1;
 
-using ApplyHitFn = void (*)(void* actor, void* hitData);
 using ReapplyFn = void (*)(void* actor);
 using BodyPartDataFn = void* (*)(void* actor);
 using RttiCastFn = void* (*)(void* rtti, void* object);
@@ -80,7 +80,6 @@ struct PendingRecord {
 };
 
 struct Engine {
-    ApplyHitFn   originalApplyHit = nullptr;
     ReapplyFn    originalReapply = nullptr;
     BodyPartDataFn bodyPartData = nullptr;
     RttiCastFn   rttiCast = nullptr;
@@ -290,13 +289,8 @@ void OnFatalHit(void* hitData, void* actor) {
     Sever(actor, root, *best, &At<float>(hitData, kHitDirection));
 }
 
-// Replacement for the hit-apply routine every melee and projectile hit
-// reaches: a hit that takes the actor from alive to dead is fatal.
-void ApplyHitHook(void* actor, void* hitData) {
-    const bool actorLike = actor && At<std::uint8_t>(actor, kFormType) == kFormTypeActor;
-    const float before = actorLike ? Health(actor) : 0.0f;
-    g_engine.originalApplyHit(actor, hitData);
-    if (!actorLike || before <= 0.0f || Health(actor) > 0.0f) return;
+// The hit log's fatal-hit callback (hits.cpp owns the ApplyHit hook).
+void OnFatalHitLocked(void* hitData, void* actor) {
     std::lock_guard<std::mutex> lk(g_mutex);
     OnFatalHit(hitData, actor);
 }
@@ -338,16 +332,14 @@ bool InstallSevering() {
         Log("sever: nothing to sever; hooks not installed");
         return false;
     }
-    const std::uintptr_t applyHit = Resolve("Actor::ApplyHit", ids::kApplyHit, nullptr);
     const std::uintptr_t reapply = Resolve("ReapplyDismemberment", ids::kReapplyDismember, nullptr);
     const std::uintptr_t bpd = Resolve("Actor::GetBodyPartData", ids::kActorBodyPartData, nullptr);
     const std::uintptr_t cast = Resolve("NiRTTI cast", ids::kRttiCast, nullptr);
     const std::uintptr_t rtti = Resolve("BSDismemberSkinInstance RTTI", ids::kDismemberSkinRtti, nullptr);
-    if (!applyHit || !reapply || !bpd || !cast || !rtti) {
+    if (!reapply || !bpd || !cast || !rtti) {
         Log("sever: an address is unresolved; limb severing disabled");
         return false;
     }
-    g_engine.originalApplyHit = reinterpret_cast<ApplyHitFn>(applyHit);
     g_engine.originalReapply = reinterpret_cast<ReapplyFn>(reapply);
     g_engine.bodyPartData = reinterpret_cast<BodyPartDataFn>(bpd);
     g_engine.rttiCast = reinterpret_cast<RttiCastFn>(cast);
@@ -360,9 +352,8 @@ bool InstallSevering() {
         Resolve("ObjectReference.ApplyHavokImpulse", ids::kApplyHavokImpulse, nullptr));
     g_engine.lookupByHandle = reinterpret_cast<LookupByHandleFn>(
         Resolve("LookupReferenceByHandle", ids::kLookupByHandle, nullptr));
-    const int a = PatchAllCalls(applyHit, reinterpret_cast<void*>(&ApplyHitHook), "ApplyHit");
-    const int b = PatchAllCalls(reapply, reinterpret_cast<void*>(&ReapplyHook), "ReapplyDismember");
-    return a > 0 && b > 0;
+    SetFatalHitHandler(&OnFatalHitLocked);
+    return PatchAllCalls(reapply, reinterpret_cast<void*>(&ReapplyHook), "ReapplyDismember") > 0;
 }
 
 void ResolveSeverForms() {
