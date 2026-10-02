@@ -13,6 +13,7 @@ the fork's docs live in `docs/fork/` and upstream's plans stay in
 | [character.md](character.md) | Attributes, skills, leveling, perks, standings and the stats menu, for all four games |
 | [standalone_play.md](standalone_play.md) | Setup, MO2 integration, per-world profiles, launcher, world picker |
 | [performance.md](performance.md) | Rules for new systems, Papyrus runtime cost, FO3/FNV occlusion |
+| [kill_cams.md](kill_cams.md) | Kill cams and killmoves on converted weapons, per game |
 | [bink_movies.md](bink_movies.md) | Source-game Bink 1 movies (parked) |
 | [research/](research/) | Findings and notes that are not plans: [character findings](research/character_findings.md), [graphics options](research/graphics_options.md) |
 | [done/](done/) | Plans that are built, kept as their design record: [preflight audits](done/preflight_audits.md) |
@@ -62,6 +63,9 @@ Carried over from the character plan's own status notes of 2026-09-28.
     emulators;
   - audit 6 doesn't check that quest actors have a package bringing them to
     their scenes.
+- **[Kill cams and killmoves](kill_cams.md):** not started. Killmoves misfire
+  on converted weapons (FO3/FNV's baton plays a sword killmove). Options
+  recorded; first step is the census of the vanilla killmove conditions.
 
 ## <a id="performance"></a>Performance
 

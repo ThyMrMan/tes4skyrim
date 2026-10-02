@@ -348,8 +348,16 @@ open:
 - Medicine: it drives nothing until healing items are built (decision 7);
 - Heal Rate and Damage Resistance: each is on a different scale in the two
   games;
-- `Variable01`-`10`: the dialogue helpers keep line timing in `Variable05`-`09`
-  ([Papyrus cost](performance.md#papyrus)).
+- `Variable03`, `04` and `06`-`10`: the dialogue helpers keep line timing in
+  them on every speaker ([Papyrus cost](performance.md#papyrus)).
+
+`Variable01`, `02` and `05` are kept (built 2026-10-01). The helpers write
+them only on the player, while every FO3/FNV condition on them runs on the
+NPC. Dropping a package's only condition makes the package always pass:
+`CG04MackToAmata` (Mack: travel to Amata while `Variable01 == 1`) ran from
+the start of Escape!, so Officer Mack walked to the player's apartment and
+never stood in the Overseer's office (2026-10-01 play-test). The three kept
+values cover 202 of FO3's 211 conditions on these values and 43 of FNV's 48.
 
 Scripts follow the same rule: a converted `GetAV Blade` reads One-Handed, not
 upstream's `TES4Polyfill.HigherActorValue`. Upstream's condition split
@@ -405,6 +413,15 @@ Fallout 3 has the same rows with Throwing in place of Survival, governed as
 
 The effects column summarizes how the games play; each formula must be read
 from `Fallout3.exe` before it is built, as piece E's were.
+
+<a id="gun-skill-floor"></a>**Gun skill keeps FO3's floor.** In FO3 a low
+skill makes a gun miss more and hit softer, never useless. The game settings
+give damage x (`fDamageSkillBase` 0.5 + `fDamageSkillMult` 0.5 x skill/100), so
+an untrained character still does half damage, and spread grows through the
+`fGunSpread*` settings instead of the hit vanishing. When FalloutRuntime
+supplies the Guns and Energy Weapons effects, it must keep that 0.5 damage
+floor and the source spread curve. Today neither is built: Skyrim's own
+Archery scaling applies, and its shots have no spread.
 
 ### <a id="mw"></a>Morrowind (27)
 
