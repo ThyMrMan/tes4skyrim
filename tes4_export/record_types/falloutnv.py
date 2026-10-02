@@ -16,6 +16,7 @@ from ..tes4_reader import (Record, get_all_subrecords,
 from .character_falloutnv import CHARACTER_EXPORTERS, emit_class_deltas
 from .package_falloutnv import emit_package_deltas, emit_patrol_data
 from .quest_falloutnv import emit_quest_deltas
+from .terminal_falloutnv import emit_terminal
 from .common import (emit_float, emit_formid, emit_model, emit_raw_hex,
                      emit_script, emit_string, emit_u8, emit_u16, emit_u32)
 
@@ -106,9 +107,24 @@ def _emit_refr_deltas(lines: list, rec: Record):
 
 
 def _emit_actor_ref_deltas(lines: list, rec: Record):
-    """A placed actor's or object's linked reference and patrol-point data."""
+    """A placed reference's linked ref, activate parents and patrol data."""
     _emit_linked_ref(lines, rec)
+    _emit_activate_parents(lines, rec)
     emit_patrol_data(lines, rec)
+
+
+def _emit_activate_parents(lines: list, rec: Record):
+    """XAPD and each XAPR: the references whose activation also activates this one, and after what delay.
+
+    See: docs/commentary/tes4_export_falloutnv.md#activate-parents
+    """
+    xapd = get_subrecord(rec, "XAPD")
+    if xapd and xapd.data:
+        lines.append(f"XAPD.ParentActivateOnly={xapd.data[0]}")
+    for i, sub in enumerate(get_all_subrecords(rec, "XAPR")):
+        if len(sub.data) >= 8:
+            ref, delay = struct.unpack_from("<If", sub.data, 0)
+            lines += [f"XAPR[{i}].Ref={get_formid_str(ref)}", f"XAPR[{i}].Delay={delay}"]
 
 
 def _emit_linked_ref(lines: list, rec: Record):
@@ -324,7 +340,7 @@ _FALLOUT_ACBS_SIZE = 24
 #: Template Flags bit 6, 'Model/Animation' (wbDefinitionsCommon.pas:7715).
 TEMPLATE_USE_MODEL = 1 << 6
 
-#: FO3/FNV creature DATA attribute order; TES4's CREA DATA has none of these.
+#: FO3/FNV actor DATA attribute order; TES4's CREA DATA has none of these.
 _CREA_ATTRIBUTES = ("Strength", "Perception", "Endurance", "Charisma",
                     "Intelligence", "Agility", "Luck")
 
@@ -417,10 +433,22 @@ def _emit_crea_deltas(lines: list, rec: Record):
 
 
 def _emit_npc_deltas(lines: list, rec: Record):
-    """FO3/FNV NPC_: the same shifted ACBS, AIDT and template pointer as CREA."""
+    """FO3/FNV NPC_: the shifted ACBS, AIDT and template pointer, and an 11-byte DATA.
+
+    DATA is Base Health (int32) then the seven S.P.E.C.I.A.L. bytes; TES4's
+    NPC_ DATA is skills, so the shared exporter emits none of it.
+    See: docs/commentary/tes4_export_falloutnv.md#npc-base-health
+    """
     _emit_actor_acbs(lines, rec)
     _emit_actor_aidt(lines, rec)
     _emit_actor_template(lines, rec)
+    data = get_subrecord(rec, "DATA")
+    if not data or len(data.data) < 11:
+        return
+    d = data.data
+    lines.append(f"DATA.BaseHealth={struct.unpack_from('<i', d, 0)[0]}")
+    for i, name in enumerate(_CREA_ATTRIBUTES):
+        lines.append(f"DATA.{name}={d[4 + i]}")
 
 
 #: MGEF FormID -> EditorID, rebuilt per source file by export_falloutnv.
@@ -544,8 +572,8 @@ def export_STATIC_BASE(rec: Record) -> list:
 def export_ACTIVATOR_BASE(rec: Record) -> list:
     """A named, scriptable FO3/FNV base object, converted as a Skyrim ACTI.
 
-    TERM and TACT are activators in all but signature: each carries a model,
-    a display name and a script.
+    TERM and TACT build on it: each carries a model, a display name and a
+    script, plus fields of its own.
 
     See: docs/commentary/tes4_export_falloutnv.md#fallout-only-base-objects
     """
@@ -555,6 +583,24 @@ def export_ACTIVATOR_BASE(rec: Record) -> list:
     emit_model(lines, "Model", rec)
     emit_script(lines, rec)
     _emit_obnd(lines, rec)
+    return lines
+
+
+def export_TERMINAL(rec: Record) -> list:
+    """A TERM: the activator fields plus its welcome text, lock and menu items."""
+    lines = export_ACTIVATOR_BASE(rec)
+    emit_terminal(lines, rec)
+    return lines
+
+
+def export_TALKING_ACTIVATOR(rec: Record) -> list:
+    """A TACT: the activator fields plus its looping sound, voice type and (FNV) radio template.
+
+    See: docs/commentary/tes4_export_falloutnv.md#talking-activators
+    """
+    lines = export_ACTIVATOR_BASE(rec)
+    for sig in ('SNAM', 'VNAM', 'INAM'):
+        emit_formid(lines, sig, get_subrecord(rec, sig))
     return lines
 
 
@@ -828,8 +874,8 @@ FALLOUT_BASE_EXPORTERS = {
     "PWAT": export_STATIC_BASE,
     "IDLM": export_STATIC_BASE,
     "ASPC": export_STATIC_BASE,
-    "TERM": export_ACTIVATOR_BASE,
+    "TERM": export_TERMINAL,
     "NOTE": export_NOTE,
-    "TACT": export_ACTIVATOR_BASE,
+    "TACT": export_TALKING_ACTIVATOR,
     **CHARACTER_EXPORTERS,
 }

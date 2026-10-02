@@ -22,6 +22,9 @@ _PATROL_SECTION = {'XPPA': 'Patrol'}
 #: A section's FormID subrecords -> field name; SCRO is numbered in order instead.
 _FORMID_FIELDS = {'INAM': 'Idle', 'TNAM': 'Topic', 'SCRO': ''}
 
+#: Location types whose value is a FormID: near reference, in cell, object ID.
+_REFERENCE_LOCATIONS = (0, 1, 4)
+
 #: PKDD Dialogue Type values (Conversation 0, Say To 1).
 _DIALOGUE_TYPES = {0: 'Conversation', 1: 'SayTo'}
 
@@ -63,6 +66,13 @@ def _second_target_lines(data: bytes) -> list:
     return [f'PTD2.Type={ttype}', f'PTD2.Target={value}', f'PTD2.Count={count}']
 
 
+def _trigger_location_lines(data: bytes) -> list:
+    """PLD2, a Dialogue package Trigger Location, laid out as PLDT."""
+    ltype, value, radius = struct.unpack_from('<iIi', data, 0)
+    shown = get_formid_str(value) if ltype in _REFERENCE_LOCATIONS else str(value)
+    return [f'PLD2.Type={ltype}', f'PLD2.Location={shown}', f'PLD2.Radius={radius}']
+
+
 def emit_patrol_data(lines: list, rec: Record) -> None:
     """A patrol point's idle time, then its idle, embedded script and topic.
 
@@ -77,8 +87,8 @@ def emit_patrol_data(lines: list, rec: Record) -> None:
 
 
 def emit_package_deltas(lines: list, rec: Record) -> None:
-    """FO3/FNV PACK: the section scripts, the patrol, weapon and second-target
-    data, then PKDD's topic and dialogue type."""
+    """FO3/FNV PACK: the section scripts, the patrol, weapon, trigger-location
+    and second-target data, then PKDD's topic and dialogue type."""
     lines += _section_lines(rec)
     pkpt = get_subrecord(rec, 'PKPT')
     if pkpt and pkpt.data:
@@ -86,6 +96,9 @@ def emit_package_deltas(lines: list, rec: Record) -> None:
     pkw3 = get_subrecord(rec, 'PKW3')
     if pkw3 and len(pkw3.data) >= 20:
         lines += _use_weapon_lines(pkw3.data)
+    pld2 = get_subrecord(rec, 'PLD2')
+    if pld2 and len(pld2.data) >= 12:
+        lines += _trigger_location_lines(pld2.data)
     ptd2 = get_subrecord(rec, 'PTD2')
     if ptd2 and len(ptd2.data) >= 12:
         lines += _second_target_lines(ptd2.data)
