@@ -710,6 +710,49 @@ before/after were not comparable between runs — the "before" itself drifted
 815 -> 728 -> 630. The standable-cell raycast in `walk2.py` shares no code
 with the repair and is the metric that matched the user's in-game report.
 
+### <a id="the-render-oracles-grid"></a>The nearest rule's grid: the same verdicts, a fraction of the work
+
+`_nearest_says_inverted` scanned every render face for every collision face
+without a render twin, and ran the projected-overlap and vertex-set tests on
+each one that passed the alignment and slab checks. Almost none could
+matter: on `nv_noso_ranchhouse03.nif` only 50,378 of 1,383,880 tests (3.6%)
+were on a face close enough to win.
+
+`RenderOracle` builds the render side once per call, on first use (a mesh
+that never reaches the render repair builds nothing): the faces, the twin
+index, and a grid of the faces' centres with the median face width as cell
+edge. The nearest rule is handed only the faces whose centre lies within
+`(_MAX_MATCH_WIDTHS * width * (1 + _CONSENSUS_MARGIN) + 1e-9) / 3` of its
+own, in the original face order.
+
+**Why the verdicts cannot change.** A face's vertex-set distance is at least
+three times the distance between the two centres: the corner distances sum
+to at least the length of the summed corner offsets, which is three times
+the centre offset. A face further than the bound above therefore has a
+vertex-set distance beyond `_MAX_MATCH_WIDTHS * width` and beyond the
+consensus limit of any nearest candidate within that cap. So it can neither
+be the nearest nor take part in the agreement check. If the true nearest is
+beyond the cap, the result is None either way. `_REACH_SLACK` widens the
+reach by a millionth so float rounding never drops a face. A query spanning
+more cells than are occupied reads every cell. The cell size and slack only
+decide how much work is skipped, never a verdict.
+
+**Measured on this code** by recording every `repair_inverted_floors` call
+made rebuilding the mesh collision of sampled NIFs (architecture and
+dungeons, `_rebuild_mesh_collision`), then replaying each call through the
+old and new module on the same machine:
+
+| Sample | Calls | Results differing | CPU old -> new |
+|---|---|---|---|
+| FalloutNV.esm, 400 NIFs | 453 | 0 | 84.5 s -> 15.0 s (5.6x) |
+| Oblivion.esm, 400 NIFs, render repair forced on (`TESCONV_COLLISION_WINDING_FIX=1`) | 469 | 0 | 501.2 s -> 46.9 s (10.7x) |
+
+Not run: Morrowind and Morroblivion meshes (no export of them was
+available), which are where the render repair is on by default. The
+regression test `tests/test_collision_winding_oracle.py` checks the grid
+against a full scan on random collision/render pairs, including a query
+wider than every occupied cell.
+
 ### <a id="welding-is-per-group"></a>Welding is scoped PER GROUP
 
 The packed triangle list stores each triangle's corners independently, so
